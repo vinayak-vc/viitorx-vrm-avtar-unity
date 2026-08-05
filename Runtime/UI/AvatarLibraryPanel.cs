@@ -180,11 +180,35 @@ namespace VirtualMirror.UI {
             }
         }
 
+        private bool EnsureSession() {
+            if (avatarSession != null) {
+                return true;
+            }
+            UnityEngine.Object[] objects = UnityEngine.Object.FindObjectsByType(typeof(MonoBehaviour), FindObjectsSortMode.None);
+            int index = 0;
+            while (index < objects.Length) {
+                MonoBehaviour mono = objects[index] as MonoBehaviour;
+                index = index + 1;
+                if (mono != null && mono.GetType().Name == "AppBootstrap") {
+                    System.Reflection.PropertyInfo prop = mono.GetType().GetProperty("AvatarSession");
+                    if (prop != null) {
+                        IAvatarSession session = prop.GetValue(mono) as IAvatarSession;
+                        if (session != null) {
+                            avatarSession = session;
+                            avatarSession.AvatarChanged += HandleAvatarChanged;
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         private void OnLoadClicked() {
             if (isLoading) {
                 return;
             }
-            if (avatarSession == null) {
+            if (!EnsureSession()) {
                 SetStatus("Avatar session is not ready yet.");
                 return;
             }
@@ -197,9 +221,13 @@ namespace VirtualMirror.UI {
         }
 
         private async void RunLoad(string path) {
+            if (!EnsureSession()) {
+                SetStatus("Avatar session is not ready yet.");
+                return;
+            }
             isLoading = true;
             SetInteractable(false);
-            SetStatus("Loading: " + path);
+            SetStatus("Loading: " + System.IO.Path.GetFileName(path));
             try {
                 AvatarLoadResult result = await avatarSession.LoadFromPathAsync(path, true);
                 if (result.IsSuccess) {

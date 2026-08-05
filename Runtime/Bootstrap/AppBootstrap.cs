@@ -102,7 +102,10 @@ namespace VirtualMirror.App {
         }
 
         private void Start() {
-            if (loadMirrorSceneOnStart) {
+            Scene mirrorScene = SceneManager.GetSceneByName(mirrorSceneName);
+            if (mirrorScene.isLoaded && avatarSession == null) {
+                SetupAvatarSession(mirrorScene);
+            } else if (loadMirrorSceneOnStart && !mirrorScene.isLoaded) {
                 LoadMirrorScene();
             }
         }
