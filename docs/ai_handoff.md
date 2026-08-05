@@ -99,10 +99,17 @@ Plugin at `Assets/MediaPipeUnity` (homuler). `MediaPipePoseProvider` (`Runtime/T
 - `IAvatarSession.AvatarChanged` event fires on every successful load (manual + auto). `AvatarLibraryPanel` hides `PathInputField`/`LoadButton`/`StatusText` on it; **Tab** toggles them back.
 - `MirrorCameraController` (`VirtualMirror.Rendering`, component on Main Camera in Mirror.unity) frames the avatar to renderer bounds on `AvatarChanged`. Verified: UI hidden after load, camera repositioned `(0,1,-10)→(0,0.76,-4.59)` for the chibi. Note: it fits *full* bounds, so a wide-dress avatar sits back — bias/padding is tunable in `MirrorCameraController` (`paddingFactor`, `lookHeightFraction`).
 
+## AnimationRigging IK Driver (done, verified)
+
+- `IIkSolver` interface (`VirtualMirror.Core`): `Bind`, `Apply`, `Unbind`, `IsBound`.
+- `AnimationRiggingIkDriver` (`VirtualMirror.IK` asmdef): builds `Rig` + `RigBuilder` with `TwoBoneIKConstraint` for LeftArm, RightArm, LeftLeg, RightLeg. Checks bone transforms before component attachment, and maintains `animator.enabled = true` to allow PlayableGraph evaluation.
+- `Glog` lifecycle fix in `MediaPipePoseProvider.cs`: paired `Glog.Initialize` on start with `Glog.Shutdown` in `Dispose()` guarded by `globalInitialized` flag, preventing double-initialization process crashes across domain reloads.
+- Verified in play mode: 0 console errors, clean execution.
+
 ## Next recommended task
 
-1. **`AnimationRiggingIkDriver`** — hand/foot IK targets for planted/reach accuracy (ADR-002).
-2. **ConfidenceGate with hysteresis + stale-hold** (SDS-025 §4/§7); current gate is a plain per-segment threshold.
+1. **Full-body webcam input & mirror calibration** — test on normal height avatar with live webcam stream.
+2. **EditMode unit tests** — test Y-flip, mirror conversion, landmark bounds, and filter smoothing.
 3. **Camera framing** (`MirrorCameraController` — frame the avatar; matters more for small avatars), **built-in avatars**, **file browser**, **URP renderer asset**.
 4. Swap video → webcam: `AppBootstrap.useVideoSource=false`, then finalize `poseFlipX`.
 

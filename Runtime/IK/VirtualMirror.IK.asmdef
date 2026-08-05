@@ -1,0 +1,17 @@
+{
+    "name": "VirtualMirror.IK",
+    "rootNamespace": "VirtualMirror.IK",
+    "references": [
+        "VirtualMirror.Core",
+        "Unity.Animation.Rigging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

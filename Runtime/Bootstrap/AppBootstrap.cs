@@ -7,6 +7,7 @@ using UnityEngine.SceneManagement;
 using VirtualMirror.Avatar.Vrm;
 using VirtualMirror.Camera;
 using VirtualMirror.Core;
+using VirtualMirror.IK;
 using VirtualMirror.IO;
 using VirtualMirror.Rendering;
 using VirtualMirror.Retargeting;
@@ -43,6 +44,7 @@ namespace VirtualMirror.App {
         [SerializeField] private bool poseFlipY = true;
         [SerializeField] private bool poseFlipZ = true;
         [SerializeField] private float retargetMinConfidence = 0.5f;
+        [SerializeField] private bool useIkDriver = true;
 
         private ServiceRegistry services;
         private LogService logService;
@@ -52,6 +54,7 @@ namespace VirtualMirror.App {
         private IBodyTrackingProvider bodyProvider;
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
+        private IIkSolver ikSolver;
         private Animator boundAnimator;
         private MirrorCameraController cameraController;
 
@@ -118,6 +121,10 @@ namespace VirtualMirror.App {
             }
             if (animator != boundAnimator) {
                 retargeter.Bind(animator);
+                if (ikSolver != null) {
+                    Transform avatarRoot = avatarSession.Current.Root != null ? avatarSession.Current.Root.transform : null;
+                    ikSolver.Bind(animator, avatarRoot);
+                }
                 boundAnimator = animator;
             }
             PoseFrame frame;
@@ -126,9 +133,15 @@ namespace VirtualMirror.App {
             }
             PoseFrame filtered = jointFilter.Filter(frame, deltaSeconds);
             retargeter.Apply(filtered, retargetMinConfidence);
+            if (ikSolver != null && ikSolver.IsBound) {
+                ikSolver.Apply(filtered, retargetMinConfidence);
+            }
         }
 
         private void OnApplicationQuit() {
+            if (ikSolver != null) {
+                ikSolver.Dispose();
+            }
             if (bodyProvider != null) {
                 bodyProvider.Dispose();
             }
@@ -178,6 +191,9 @@ namespace VirtualMirror.App {
         private void StartTracking() {
             jointFilter = new JointFilterPipeline(filterMinCutoff, filterBeta, filterDerivativeCutoff);
             retargeter = new HumanoidPoseRetargeter();
+            if (useIkDriver) {
+                ikSolver = new AnimationRiggingIkDriver();
+            }
             if (useMediaPipeTracking) {
                 string modelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", poseModelFileName);
                 PoseSpaceConverter converter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);

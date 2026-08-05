@@ -175,6 +175,14 @@ namespace VirtualMirror.Tracking.MediaPipe {
                 texturePool.Dispose();
                 texturePool = null;
             }
+            if (globalInitialized) {
+                try {
+                    Mediapipe.Glog.Shutdown();
+                } catch (Exception exception) {
+                    logService.LogException(exception, "Failed to shutdown MediaPipe Glog");
+                }
+                globalInitialized = false;
+            }
         }
 
         private void ProcessFrameOnWorker(Mediapipe.Image image, TextureFrame textureFrame, long currentTimestamp) {

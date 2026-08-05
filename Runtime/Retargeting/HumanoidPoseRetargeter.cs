@@ -80,7 +80,6 @@ namespace VirtualMirror.Retargeting {
             if (boundSegments.Count == 0 && !hipsBound) {
                 return;
             }
-            animator.enabled = false;
             bound = true;
         }
 

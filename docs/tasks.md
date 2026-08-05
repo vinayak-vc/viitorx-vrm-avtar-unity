@@ -58,7 +58,7 @@ New assemblies: `VirtualMirror.Avatar` (Core + `VRM10` + `UniGLTF`), `VirtualMir
 - [ ] `ConfidenceGate` with hysteresis (SDS-025 §4) + outlier reject + stale-hold; current gate is a simple per-segment threshold  
 - [x] **`MirrorCameraController`** (`VirtualMirror.Rendering`) — frames the avatar to renderer bounds (fits any height; solves the tiny-chibi problem). Called on `IAvatarSession.AvatarChanged`  
 - [x] **Hide load UI on avatar load** — `AvatarSessionController` fires `AvatarChanged` (manual + auto); `AvatarLibraryPanel` hides input/button/status on it; **Tab** toggles it back  
-- [ ] `AnimationRiggingIkDriver` (hand/foot IK targets) — ADR-002  
+- [x] `AnimationRiggingIkDriver` (hand/foot IK targets) — ADR-002; implements `IIkSolver` using `TwoBoneIKConstraint` for arms & legs, `RigBuilder`, and `Rig`. Play-tested & verified  
 - [ ] Finalize mirror (`poseFlipX`) + judge retarget quality on a normal avatar + full-body input once webcam is live  
 - [x] **Perf:** MediaPipe CPU inference offloaded to background thread (`ThreadPool`) with frame-dropping and double-buffering. Main thread remains completely unblocked during tracking. Play-tested & verified  
 - [ ] EditMode tests: Y-flip/mirror, no-NaN on missing landmark, One-Euro lag  
