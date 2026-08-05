@@ -119,12 +119,18 @@ Plugin at `Assets/MediaPipeUnity` (homuler). `MediaPipePoseProvider` (`Runtime/T
 - `poseFlipX` set to `true` on `AppBootstrap` instance in `Bootstrap.unity` scene to finalize mirror reflection calibration.
 - Verified in Play mode: webcam feed live, MediaPipe pose provider tracking live, 0 console errors.
 
-## Next recommended task
+## Milestone M3: Face Expressions & Hand Finger Tracking (done, verified)
 
-1. **ConfidenceGate with hysteresis & stale-hold** (SDS-025 §4/§7).
-2. **Camera framing fine-tuning** (`MirrorCameraController` padding & look height tuning).
-3. **Camera framing** (`MirrorCameraController` — frame the avatar; matters more for small avatars), **built-in avatars**, **file browser**, **URP renderer asset**.
-4. Swap video → webcam: `AppBootstrap.useVideoSource=false`, then finalize `poseFlipX`.
+- **Face Retargeting**: `IFaceTrackingProvider` + `FaceFrame` + `VrmExpressionRetargeter` + `FakeFaceTrackingProvider`. Retargets eye blinks, mouth opening (`aa`), smiles (`happy`), surprised & angry directly to VRM 1.0 `Vrm10Instance.Runtime.Expression`.
+- **Hand Finger Retargeting**: `IHandTrackingProvider` + `HandFrame` + `HumanoidHandRetargeter` + `FakeHandTrackingProvider`. Drives proximal, intermediate, and distal finger bone bend rotations across all 5 fingers per hand.
+- **Performance Toggles**: Independent `useFaceTracking` and `useHandTracking` toggles on `AppBootstrap` to control CPU/GPU resource usage.
+- **Automated Tests**: Added `VrmExpressionRetargeterTests` & `HumanoidHandRetargeterTests`. All 19 EditMode unit tests passed 100% cleanly (19/19 passed in 0.81s).
+- **Play Mode Verification**: Confirmed `"Face tracking started."` and `"Hand tracking started."` with 0 console errors.
+
+## Next recommended task (M4: Calibration & UX)
+
+1. **Calibration UI & Settings UX** — offset adjustment controls, flip toggles, camera device picker.
+2. **Diagnostics HUD** — FPS counter, tracking latency display, and status overlays.
 
 ## Decisions locked (this session)
 

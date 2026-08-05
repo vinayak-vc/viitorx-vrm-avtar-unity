@@ -2,7 +2,8 @@
     "name": "VirtualMirror.Retargeting",
     "rootNamespace": "VirtualMirror.Retargeting",
     "references": [
-        "VirtualMirror.Core"
+        "VirtualMirror.Core",
+        "VRM10"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

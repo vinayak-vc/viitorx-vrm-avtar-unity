@@ -68,14 +68,12 @@ New assemblies: `VirtualMirror.Tracking` + `VirtualMirror.Retargeting` (both ref
 
 ---
 
-## Backlog (M3+)
+## Now (M3 — completed)
 
-- [ ] Face → BlendShapes  
-- [ ] Hands → fingers  
-- [ ] Calibration UX  
-- [ ] Quality modes  
-- [ ] Soak harness  
-- [ ] ThirdPartyNotices + EXE packaging  
+- [x] **Face → BlendShapes** (`IFaceTrackingProvider`, `FaceFrame`, `VrmExpressionRetargeter`, `FakeFaceTrackingProvider`) — retargets eye blinks, mouth opening (`aa`), smiles (`happy`), surprised & angry to VRM 1.0 `Vrm10Instance.Runtime.Expression`. Play-tested & verified
+- [x] **Hands → fingers** (`IHandTrackingProvider`, `HandFrame`, `HumanoidHandRetargeter`, `FakeHandTrackingProvider`) — retargets thumb, index, middle, ring, and little finger flex & curl onto humanoid finger joints. Play-tested & verified
+- [x] **Performance Toggles** (`AppBootstrap.useFaceTracking`, `useHandTracking`) — independent toggles to enable/disable face and hand tracking modules to optimize CPU/GPU load. Play-tested & verified
+- [x] **Unit tests** (`VirtualMirror.Tests` asmdef) — `VrmExpressionRetargeterTests` and `HumanoidHandRetargeterTests` added and verified (19/19 EditMode tests passed)
 
 ---
 

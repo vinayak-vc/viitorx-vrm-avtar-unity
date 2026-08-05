@@ -11,7 +11,8 @@
         "VirtualMirror.Tracking",
         "VirtualMirror.Retargeting",
         "VirtualMirror.IK",
-        "VirtualMirror.Rendering"
+        "VirtualMirror.Rendering",
+        "VRM10"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -4,6 +4,8 @@ using System.IO;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
+using UniVRM10;
+
 using VirtualMirror.Avatar.Vrm;
 using VirtualMirror.Camera;
 using VirtualMirror.Core;
@@ -45,6 +47,8 @@ namespace VirtualMirror.App {
         [SerializeField] private bool poseFlipZ = true;
         [SerializeField] private float retargetMinConfidence = 0.5f;
         [SerializeField] private bool useIkDriver = true;
+        [SerializeField] private bool useFaceTracking = true;
+        [SerializeField] private bool useHandTracking = true;
 
         private ServiceRegistry services;
         private LogService logService;
@@ -55,6 +59,10 @@ namespace VirtualMirror.App {
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
         private IIkSolver ikSolver;
+        private IFaceTrackingProvider faceProvider;
+        private VrmExpressionRetargeter expressionRetargeter;
+        private IHandTrackingProvider handProvider;
+        private HumanoidHandRetargeter handRetargeter;
         private Animator boundAnimator;
         private MirrorCameraController cameraController;
 
@@ -128,17 +136,47 @@ namespace VirtualMirror.App {
                 boundAnimator = animator;
             }
             PoseFrame frame;
-            if (!bodyProvider.TryGetLatestFrame(out frame)) {
-                return;
+            if (bodyProvider.TryGetLatestFrame(out frame)) {
+                PoseFrame filtered = jointFilter.Filter(frame, deltaSeconds);
+                retargeter.Apply(filtered, retargetMinConfidence);
+                if (ikSolver != null && ikSolver.IsBound) {
+                    ikSolver.Apply(filtered, retargetMinConfidence);
+                }
             }
-            PoseFrame filtered = jointFilter.Filter(frame, deltaSeconds);
-            retargeter.Apply(filtered, retargetMinConfidence);
-            if (ikSolver != null && ikSolver.IsBound) {
-                ikSolver.Apply(filtered, retargetMinConfidence);
+
+            if (useFaceTracking && faceProvider != null && expressionRetargeter != null) {
+                faceProvider.Tick(deltaSeconds);
+                if (avatarSession != null && avatarSession.Current != null && avatarSession.Current.Root != null) {
+                    UniVRM10.Vrm10Instance vrmInstance = avatarSession.Current.Root.GetComponent<UniVRM10.Vrm10Instance>();
+                    if (vrmInstance != null && !expressionRetargeter.IsBound) {
+                        expressionRetargeter.Bind(vrmInstance);
+                    }
+                }
+                FaceFrame faceFrame;
+                if (faceProvider.TryGetFrame(out faceFrame)) {
+                    expressionRetargeter.Apply(faceFrame);
+                }
+            }
+
+            if (useHandTracking && handProvider != null && handRetargeter != null) {
+                handProvider.Tick(deltaSeconds);
+                if (!handRetargeter.IsBound) {
+                    handRetargeter.Bind(animator);
+                }
+                HandFrame handFrame;
+                if (handProvider.TryGetFrame(out handFrame)) {
+                    handRetargeter.Apply(handFrame);
+                }
             }
         }
 
         private void OnApplicationQuit() {
+            if (faceProvider != null) {
+                faceProvider.Dispose();
+            }
+            if (handProvider != null) {
+                handProvider.Dispose();
+            }
             if (ikSolver != null) {
                 ikSolver.Dispose();
             }
@@ -209,6 +247,19 @@ namespace VirtualMirror.App {
                 bodyProvider.StartTracking();
             }
             logService.Log(LogLevel.Info, "Body tracking started.");
+
+            if (useFaceTracking) {
+                faceProvider = new FakeFaceTrackingProvider();
+                faceProvider.StartTracking();
+                expressionRetargeter = new VrmExpressionRetargeter();
+                logService.Log(LogLevel.Info, "Face tracking started.");
+            }
+            if (useHandTracking) {
+                handProvider = new FakeHandTrackingProvider();
+                handProvider.StartTracking();
+                handRetargeter = new HumanoidHandRetargeter();
+                logService.Log(LogLevel.Info, "Hand tracking started.");
+            }
         }
 
         private void LoadMirrorScene() {

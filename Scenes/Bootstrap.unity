@@ -170,6 +170,8 @@ MonoBehaviour:
   poseFlipZ: 1
   retargetMinConfidence: 0.5
   useIkDriver: 1
+  useFaceTracking: 1
+  useHandTracking: 1
 --- !u!4 &375600628
 Transform:
   m_ObjectHideFlags: 0
