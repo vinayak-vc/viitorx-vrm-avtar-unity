@@ -12,6 +12,7 @@
         "VirtualMirror.Retargeting",
         "VirtualMirror.IK",
         "VirtualMirror.Rendering",
+        "VirtualMirror.Diagnostics",
         "VRM10"
     ],
     "includePlatforms": [],

@@ -9,6 +9,7 @@ using UniVRM10;
 using VirtualMirror.Avatar.Vrm;
 using VirtualMirror.Camera;
 using VirtualMirror.Core;
+using VirtualMirror.Diagnostics;
 using VirtualMirror.IK;
 using VirtualMirror.IO;
 using VirtualMirror.Rendering;
@@ -63,6 +64,9 @@ namespace VirtualMirror.App {
         private VrmExpressionRetargeter expressionRetargeter;
         private IHandTrackingProvider handProvider;
         private HumanoidHandRetargeter handRetargeter;
+        private PerformanceMonitor performanceMonitor;
+        private DiagnosticsHudPanel diagnosticsHud;
+        private CalibrationSettingsPanel calibrationPanel;
         private Animator boundAnimator;
         private MirrorCameraController cameraController;
 
@@ -290,9 +294,49 @@ namespace VirtualMirror.App {
             avatarSession = new AvatarSessionController(services.AvatarLoader, logService, settingsStore, avatarRoot);
             InitializeAvatarUi(scene);
             InitializeCameraPreview(scene);
+            InitializeDiagnosticsHud(scene);
+            InitializeCalibrationPanel(scene);
             cameraController = FindCameraController(scene);
             avatarSession.AvatarChanged += FrameCameraOnAvatar;
             TryAutoLoadLastAvatar();
+        }
+
+        private void InitializeDiagnosticsHud(Scene scene) {
+            GameObject[] roots = scene.GetRootGameObjects();
+            int index = 0;
+            while (index < roots.Length) {
+                DiagnosticsHudPanel panel = roots[index].GetComponentInChildren<DiagnosticsHudPanel>(true);
+                if (panel != null) {
+                    diagnosticsHud = panel;
+                    diagnosticsHud.Initialize(performanceMonitor);
+                    diagnosticsHud.SetTrackingStatus(useMediaPipeTracking ? "MediaPipe Pose (CPU)" : "Fake Tracking");
+                    diagnosticsHud.SetCameraInfo(useVideoSource ? "Sample Video MP4" : "Webcam 1280x720@30fps");
+                    logService.Log(LogLevel.Info, "Diagnostics HUD wired.");
+                    return;
+                }
+                index = index + 1;
+            }
+        }
+
+        private void InitializeCalibrationPanel(Scene scene) {
+            GameObject[] roots = scene.GetRootGameObjects();
+            int index = 0;
+            while (index < roots.Length) {
+                CalibrationSettingsPanel panel = roots[index].GetComponentInChildren<CalibrationSettingsPanel>(true);
+                if (panel != null) {
+                    calibrationPanel = panel;
+                    calibrationPanel.SetInitialValues(poseFlipX, useIkDriver, useFaceTracking, useHandTracking, filterMinCutoff, filterBeta);
+                    calibrationPanel.OnMirrorFlipToggled += (value) => { poseFlipX = value; };
+                    calibrationPanel.OnIkToggled += (value) => { useIkDriver = value; };
+                    calibrationPanel.OnFaceToggled += (value) => { useFaceTracking = value; };
+                    calibrationPanel.OnHandToggled += (value) => { useHandTracking = value; };
+                    calibrationPanel.OnFilterMinCutoffChanged += (value) => { filterMinCutoff = value; };
+                    calibrationPanel.OnFilterBetaChanged += (value) => { filterBeta = value; };
+                    logService.Log(LogLevel.Info, "Calibration settings panel wired.");
+                    return;
+                }
+                index = index + 1;
+            }
         }
 
         private MirrorCameraController FindCameraController(Scene scene) {
@@ -309,12 +353,17 @@ namespace VirtualMirror.App {
         }
 
         private void FrameCameraOnAvatar() {
-            if (cameraController == null || avatarSession == null || avatarSession.Current == null) {
+            if (avatarSession == null || avatarSession.Current == null) {
                 return;
             }
-            GameObject root = avatarSession.Current.Root;
-            if (root != null) {
-                cameraController.Frame(root.transform);
+            if (diagnosticsHud != null) {
+                diagnosticsHud.SetAvatarName(avatarSession.Current.Root != null ? avatarSession.Current.Root.name : "Avatar");
+            }
+            if (cameraController != null) {
+                GameObject root = avatarSession.Current.Root;
+                if (root != null) {
+                    cameraController.Frame(root.transform);
+                }
             }
         }
 

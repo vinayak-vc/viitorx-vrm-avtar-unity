@@ -119,18 +119,17 @@ Plugin at `Assets/MediaPipeUnity` (homuler). `MediaPipePoseProvider` (`Runtime/T
 - `poseFlipX` set to `true` on `AppBootstrap` instance in `Bootstrap.unity` scene to finalize mirror reflection calibration.
 - Verified in Play mode: webcam feed live, MediaPipe pose provider tracking live, 0 console errors.
 
-## Milestone M3: Face Expressions & Hand Finger Tracking (done, verified)
+## Milestone M4: Calibration & UX (done, verified)
 
-- **Face Retargeting**: `IFaceTrackingProvider` + `FaceFrame` + `VrmExpressionRetargeter` + `FakeFaceTrackingProvider`. Retargets eye blinks, mouth opening (`aa`), smiles (`happy`), surprised & angry directly to VRM 1.0 `Vrm10Instance.Runtime.Expression`.
-- **Hand Finger Retargeting**: `IHandTrackingProvider` + `HandFrame` + `HumanoidHandRetargeter` + `FakeHandTrackingProvider`. Drives proximal, intermediate, and distal finger bone bend rotations across all 5 fingers per hand.
-- **Performance Toggles**: Independent `useFaceTracking` and `useHandTracking` toggles on `AppBootstrap` to control CPU/GPU resource usage.
-- **Automated Tests**: Added `VrmExpressionRetargeterTests` & `HumanoidHandRetargeterTests`. All 19 EditMode unit tests passed 100% cleanly (19/19 passed in 0.81s).
-- **Play Mode Verification**: Confirmed `"Face tracking started."` and `"Hand tracking started."` with 0 console errors.
+- **Diagnostics HUD**: Created `PerformanceMonitor` and `DiagnosticsHudPanel`. Renders real-time FPS, frame time (ms), active tracking provider, webcam hardware info, and loaded avatar name.
+- **Calibration Settings Panel**: Created `CalibrationSettingsPanel` with uGUI/TMP controls for WebCam device selection dropdown (`WebCamTexture.devices`), mirror flip toggle, IK toggle, face/hand toggles, and filter cutoff/beta smoothing sliders.
+- **Automated Tests**: Added `PerformanceMonitorTests`. All 21 EditMode unit tests passed 100% cleanly (21/21 passed in 0.07s).
+- **Play Mode Verification**: Confirmed `"Diagnostics HUD wired."` and `"Calibration settings panel wired."` logs with 0 console errors.
 
-## Next recommended task (M4: Calibration & UX)
+## Next recommended task (M5: Release Candidate)
 
-1. **Calibration UI & Settings UX** — offset adjustment controls, flip toggles, camera device picker.
-2. **Diagnostics HUD** — FPS counter, tracking latency display, and status overlays.
+1. **Built-in Avatar Library** (5–10 licensed `.vrm` avatars under `StreamingAssets/Avatars/`).
+2. **Standalone Windows EXE packaging** & ThirdPartyNotices.txt.
 
 ## Decisions locked (this session)
 

@@ -6,7 +6,8 @@
         "UnityEditor.TestRunner",
         "VirtualMirror.Core",
         "VirtualMirror.Tracking",
-        "VirtualMirror.Retargeting"
+        "VirtualMirror.Retargeting",
+        "VirtualMirror.Diagnostics"
     ],
     "includePlatforms": [
         "Editor"

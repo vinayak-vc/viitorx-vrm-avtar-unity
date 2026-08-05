@@ -70,10 +70,19 @@ New assemblies: `VirtualMirror.Tracking` + `VirtualMirror.Retargeting` (both ref
 
 ## Now (M3 — completed)
 
-- [x] **Face → BlendShapes** (`IFaceTrackingProvider`, `FaceFrame`, `VrmExpressionRetargeter`, `FakeFaceTrackingProvider`) — retargets eye blinks, mouth opening (`aa`), smiles (`happy`), surprised & angry to VRM 1.0 `Vrm10Instance.Runtime.Expression`. Play-tested & verified
-- [x] **Hands → fingers** (`IHandTrackingProvider`, `HandFrame`, `HumanoidHandRetargeter`, `FakeHandTrackingProvider`) — retargets thumb, index, middle, ring, and little finger flex & curl onto humanoid finger joints. Play-tested & verified
-- [x] **Performance Toggles** (`AppBootstrap.useFaceTracking`, `useHandTracking`) — independent toggles to enable/disable face and hand tracking modules to optimize CPU/GPU load. Play-tested & verified
-- [x] **Unit tests** (`VirtualMirror.Tests` asmdef) — `VrmExpressionRetargeterTests` and `HumanoidHandRetargeterTests` added and verified (19/19 EditMode tests passed)
+## Now (M4 — completed)
+
+- [x] **Diagnostics HUD** (`PerformanceMonitor`, `DiagnosticsHudPanel`) — real-time FPS counter, frame time, tracking mode, active webcam device, and avatar status. Play-tested & verified
+- [x] **Calibration & Settings UX** (`CalibrationSettingsPanel`) — uGUI/TMP controls for WebCam device selection, mirror flip toggle, IK toggle, face/hand tracking toggles, and filter cutoff/beta smoothing sliders. Play-tested & verified
+- [x] **Unit tests** (`VirtualMirror.Tests` asmdef) — `PerformanceMonitorTests` added and verified (21/21 EditMode unit tests passed)
+
+---
+
+## Backlog (M5 Release Candidate)
+
+- [ ] Built-in Avatar Library (5–10 licensed `.vrm` avatars)
+- [ ] 2-hour soak stability test harness
+- [ ] Standalone Windows EXE packaging + ThirdPartyNotices.txt
 
 ---
 

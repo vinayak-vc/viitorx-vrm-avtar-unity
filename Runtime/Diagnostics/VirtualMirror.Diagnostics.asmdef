@@ -1,11 +1,8 @@
 {
-    "name": "VirtualMirror.UI",
-    "rootNamespace": "VirtualMirror.UI",
+    "name": "VirtualMirror.Diagnostics",
+    "rootNamespace": "VirtualMirror.Diagnostics",
     "references": [
-        "VirtualMirror.Core",
-        "VirtualMirror.Diagnostics",
-        "UnityEngine.UI",
-        "Unity.TextMeshPro"
+        "VirtualMirror.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
