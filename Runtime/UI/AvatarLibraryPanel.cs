@@ -36,6 +36,37 @@ namespace VirtualMirror.UI {
         }
 
         private void Awake() {
+            if (browseButton == null) {
+                Transform bTransform = transform.Find("BrowseRow/BrowseButton");
+                if (bTransform != null) {
+                    browseButton = bTransform.GetComponent<Button>();
+                }
+            }
+            if (presetDropdown == null) {
+                Transform pTransform = transform.Find("PresetDropdown");
+                if (pTransform != null) {
+                    presetDropdown = pTransform.GetComponent<TMP_Dropdown>();
+                }
+            }
+            if (loadButton == null) {
+                Transform lTransform = transform.Find("LoadButton");
+                if (lTransform != null) {
+                    loadButton = lTransform.GetComponent<Button>();
+                }
+            }
+            if (pathInput == null) {
+                Transform iTransform = transform.Find("BrowseRow/PathInputField");
+                if (iTransform != null) {
+                    pathInput = iTransform.GetComponent<TMP_InputField>();
+                }
+            }
+            if (statusText == null) {
+                Transform sTransform = transform.Find("StatusText");
+                if (sTransform != null) {
+                    statusText = sTransform.GetComponent<TMP_Text>();
+                }
+            }
+
             if (loadButton != null) {
                 loadButton.onClick.AddListener(OnLoadClicked);
             }
@@ -108,9 +139,12 @@ namespace VirtualMirror.UI {
         }
 
         private void OnBrowseClicked() {
-            string filter = "VRM Avatar Files\0*.vrm\0All Files\0*.*\0";
+            string filter = "VRM Avatar Files (*.vrm)|*.vrm|All Files (*.*)|*.*";
             string initialDir = Application.streamingAssetsPath;
             string selectedFile = VirtualMirror.IO.FileExplorer.OpenFileExplorer(filter, initialDir);
+            if (string.IsNullOrEmpty(selectedFile)) {
+                selectedFile = VirtualMirror.IO.NativeFileDialog.OpenFile("Select VRM Avatar", "VRM Avatar Files (*.vrm)\0*.vrm\0All Files (*.*)\0*.*\0\0", "vrm");
+            }
             if (!string.IsNullOrEmpty(selectedFile)) {
                 if (pathInput != null) {
                     pathInput.text = selectedFile;

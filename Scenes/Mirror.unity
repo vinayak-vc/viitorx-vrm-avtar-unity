@@ -690,8 +690,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: VirtualMirror.UI::VirtualMirror.UI.AvatarLibraryPanel
   pathInput: {fileID: 1401187704}
   loadButton: {fileID: 741545294}
-  browseButton: {fileID: 0}
-  presetDropdown: {fileID: 0}
+  browseButton: {fileID: 294736673}
+  presetDropdown: {fileID: 1165234964}
   toggleUiButton: {fileID: 0}
   statusText: {fileID: 2064750841}
 --- !u!114 &239889515
