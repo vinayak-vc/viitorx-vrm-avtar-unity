@@ -30,7 +30,7 @@ namespace VirtualMirror.App {
         [SerializeField] private float settingsSaveDebounceSeconds = 0.4f;
         [SerializeField] private bool mirrorLogToConsole = true;
         [SerializeField] private long maxAvatarFileBytes = 268435456;
-        [SerializeField] private bool useVideoSource = true;
+        [SerializeField] private bool useVideoSource = false;
         [SerializeField] private string sampleVideoPath = "C:/Unity/viitorx-vrm-avtar-unity-base-project/sampleVRMFiles/sample video.mp4";
         [SerializeField] private int cameraWidth = 1280;
         [SerializeField] private int cameraHeight = 720;
@@ -40,7 +40,7 @@ namespace VirtualMirror.App {
         [SerializeField] private float filterDerivativeCutoff = 1f;
         [SerializeField] private bool useMediaPipeTracking = true;
         [SerializeField] private string poseModelFileName = "pose_landmarker_full.bytes";
-        [SerializeField] private bool poseFlipX = false;
+        [SerializeField] private bool poseFlipX = true;
         [SerializeField] private bool poseFlipY = true;
         [SerializeField] private bool poseFlipZ = true;
         [SerializeField] private float retargetMinConfidence = 0.5f;

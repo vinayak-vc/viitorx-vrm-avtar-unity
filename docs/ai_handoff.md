@@ -112,10 +112,17 @@ Plugin at `Assets/MediaPipeUnity` (homuler). `MediaPipePoseProvider` (`Runtime/T
 - Test suites: `PoseSpaceConverterTests` (4 tests), `OneEuroFilterTests` (4 tests), `RotationFromVectorsTests` (5 tests).
 - Automated test run targeting `VirtualMirror.Tests` passed 13/13 tests cleanly in 0.62s.
 
+## Webcam Input Integration & Mirror Calibration (done, verified)
+
+- `AppBootstrap.useVideoSource` set to `false` (switched from video player to live webcam).
+- `WebcamCaptureService` initialized live hardware device (`Logi C270 HD WebCam` @ 1280x720 30fps).
+- `poseFlipX` set to `true` on `AppBootstrap` instance in `Bootstrap.unity` scene to finalize mirror reflection calibration.
+- Verified in Play mode: webcam feed live, MediaPipe pose provider tracking live, 0 console errors.
+
 ## Next recommended task
 
-1. **Full-body webcam input & mirror calibration** — test on normal height avatar with live webcam stream.
-2. **ConfidenceGate with hysteresis & stale-hold** (SDS-025 §4/§7).
+1. **ConfidenceGate with hysteresis & stale-hold** (SDS-025 §4/§7).
+2. **Camera framing fine-tuning** (`MirrorCameraController` padding & look height tuning).
 3. **Camera framing** (`MirrorCameraController` — frame the avatar; matters more for small avatars), **built-in avatars**, **file browser**, **URP renderer asset**.
 4. Swap video → webcam: `AppBootstrap.useVideoSource=false`, then finalize `poseFlipX`.
 
