@@ -397,6 +397,21 @@ namespace VirtualMirror.App {
                 return;
             }
             panel.Initialize(avatarSession, logService);
+            GameObject[] roots = scene.GetRootGameObjects();
+            int index = 0;
+            while (index < roots.Length) {
+                Transform btnTransform = roots[index].transform.Find("ToggleUiButton");
+                if (btnTransform != null) {
+                    UnityEngine.UI.Button btn = btnTransform.GetComponent<UnityEngine.UI.Button>();
+                    if (btn != null) {
+                        btn.onClick.AddListener(() => {
+                            panel.gameObject.SetActive(!panel.gameObject.activeSelf);
+                        });
+                    }
+                    break;
+                }
+                index = index + 1;
+            }
             logService.Log(LogLevel.Info, "Avatar UI wired.");
         }
 

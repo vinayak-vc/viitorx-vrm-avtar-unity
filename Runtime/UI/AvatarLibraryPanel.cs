@@ -16,6 +16,7 @@ namespace VirtualMirror.UI {
     public sealed class AvatarLibraryPanel : MonoBehaviour {
         [SerializeField] private TMP_InputField pathInput;
         [SerializeField] private Button loadButton;
+        [SerializeField] private Button toggleUiButton;
         [SerializeField] private TMP_Text statusText;
 
         private IAvatarSession avatarSession;
@@ -34,15 +35,25 @@ namespace VirtualMirror.UI {
             if (loadButton != null) {
                 loadButton.onClick.AddListener(OnLoadClicked);
             }
+            if (toggleUiButton != null) {
+                toggleUiButton.onClick.AddListener(OnToggleClicked);
+            }
         }
 
         private void OnDestroy() {
             if (loadButton != null) {
                 loadButton.onClick.RemoveListener(OnLoadClicked);
             }
+            if (toggleUiButton != null) {
+                toggleUiButton.onClick.RemoveListener(OnToggleClicked);
+            }
             if (avatarSession != null) {
                 avatarSession.AvatarChanged -= HandleAvatarChanged;
             }
+        }
+
+        private void OnToggleClicked() {
+            SetLoadUiVisible(!loadUiVisible);
         }
 
         private void Update() {
