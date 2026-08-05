@@ -136,7 +136,7 @@ namespace VirtualMirror.Retargeting {
                 return;
             }
             Vector3 restRight = rightUpperLeg.position - leftUpperLeg.position;
-            Vector3 restUp = neck.position - hips.position;
+            Vector3 restUp = hips.position - neck.position;
             Quaternion restBasis;
             if (!RotationFromVectors.TryBasis(restRight, restUp, out restBasis)) {
                 return;
@@ -159,7 +159,7 @@ namespace VirtualMirror.Retargeting {
             Vector3 midShoulder = 0.5f * (frame.GetLandmark(JointId.LeftShoulder).Position + frame.GetLandmark(JointId.RightShoulder).Position);
             Vector3 midHip = 0.5f * (leftHip + rightHip);
             Vector3 targetRight = rightHip - leftHip;
-            Vector3 targetUp = midShoulder - midHip;
+            Vector3 targetUp = midHip - midShoulder;
             Quaternion targetBasis;
             if (!RotationFromVectors.TryBasis(targetRight, targetUp, out targetBasis)) {
                 return;
