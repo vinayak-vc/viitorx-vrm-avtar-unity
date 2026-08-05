@@ -292,6 +292,11 @@ namespace VirtualMirror.App {
                 return;
             }
             avatarSession = new AvatarSessionController(services.AvatarLoader, logService, settingsStore, avatarRoot);
+            AvatarMouseRotator mouseRotator = avatarRoot.gameObject.GetComponent<AvatarMouseRotator>();
+            if (mouseRotator == null) {
+                mouseRotator = avatarRoot.gameObject.AddComponent<AvatarMouseRotator>();
+            }
+            mouseRotator.SetTarget(avatarRoot);
             InitializeAvatarUi(scene);
             InitializeCameraPreview(scene);
             InitializeDiagnosticsHud(scene);

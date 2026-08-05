@@ -82,6 +82,9 @@ namespace VirtualMirror.App {
                 current = null;
             }
             current = result.Instance;
+            if (current != null && current.Root != null) {
+                current.Root.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+            }
             PersistLastPath(request);
             if (AvatarChanged != null) {
                 AvatarChanged.Invoke();
