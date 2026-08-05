@@ -108,7 +108,9 @@ namespace VirtualMirror.UI {
         }
 
         private void OnBrowseClicked() {
-            string selectedFile = VirtualMirror.IO.NativeFileDialog.OpenFile("Select VRM Avatar", "VRM Avatar Files (*.vrm)\0*.vrm\0All Files (*.*)\0*.*\0\0", "vrm");
+            string filter = "VRM Avatar Files\0*.vrm\0All Files\0*.*\0";
+            string initialDir = Application.streamingAssetsPath;
+            string selectedFile = VirtualMirror.IO.FileExplorer.OpenFileExplorer(filter, initialDir);
             if (!string.IsNullOrEmpty(selectedFile)) {
                 if (pathInput != null) {
                     pathInput.text = selectedFile;
