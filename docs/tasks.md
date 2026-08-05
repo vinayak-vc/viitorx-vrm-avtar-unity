@@ -60,7 +60,7 @@ New assemblies: `VirtualMirror.Avatar` (Core + `VRM10` + `UniGLTF`), `VirtualMir
 - [x] **Hide load UI on avatar load** — `AvatarSessionController` fires `AvatarChanged` (manual + auto); `AvatarLibraryPanel` hides input/button/status on it; **Tab** toggles it back  
 - [ ] `AnimationRiggingIkDriver` (hand/foot IK targets) — ADR-002  
 - [ ] Finalize mirror (`poseFlipX`) + judge retarget quality on a normal avatar + full-body input once webcam is live  
-- [ ] **Perf:** full-model CPU inference runs synchronously in `LateUpdate` (~tens of ms/frame). Move to worker thread / try lite model / GPU delegate  
+- [x] **Perf:** MediaPipe CPU inference offloaded to background thread (`ThreadPool`) with frame-dropping and double-buffering. Main thread remains completely unblocked during tracking. Play-tested & verified  
 - [ ] EditMode tests: Y-flip/mirror, no-NaN on missing landmark, One-Euro lag  
 
 Capture source swaps via `AppBootstrap.useVideoSource` (video now, webcam later). Tracking provider swaps via `StartTracking` (fake now, MediaPipe after plugin).  

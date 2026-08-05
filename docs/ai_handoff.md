@@ -74,13 +74,13 @@ Chain (all decision-independent, MediaPipe not yet installed):
 - **Loader change:** VRM now loaded with `ControlRigGenerationOption.None` so humanoid bones are directly drivable.
 - **Verified:** play → `animatorEnabled=False`, arm bones driven (non-rest euler), 0 errors. Motion is subtle on the StrawberryPrincess (big dress) but bone data confirms it.
 
-## MediaPipe pose — LIVE (M2 core done)
+## MediaPipe pose — LIVE & Async Perf (M2 core done)
 
 Plugin at `Assets/MediaPipeUnity` (homuler). `MediaPipePoseProvider` (`Runtime/Tracking/MediaPipe/`, Tracking asmdef refs `Mediapipe.Runtime`):
 - CPU delegate, `RunningMode.VIDEO`, full model via **`BaseOptions.modelAssetBuffer`** (reads `StreamingAssets/MediaPipe/pose_landmarker_full.bytes`, 9.4 MB, Google official) — no ResourceManager/AssetLoader/GpuManager needed. Global init = `Protobuf.SetLogHandler` + `Glog.Initialize` (once, guarded).
-- Per `Tick`: `TextureFramePool` → `TextureFrame.ReadTextureOnCPU(capture.CurrentTexture, false, true)` → `BuildCPUImage` → `TryDetectForVideo(image, tsMs, ipo, ref result)` → `result.poseWorldLandmarks[0].landmarks` → `ToUnitySpace(x,-y,-z)` → `PoseFrame`.
+- **Async ThreadPool Offloading (Perf):** `ReadTextureOnCPU` & `BuildCPUImage` run on the main thread; inference `TryDetectForVideo` is queued on `ThreadPool.QueueUserWorkItem` with double-buffering (`pendingFrame`/`latest`) and frame dropping when busy. Main thread render performance remains silky smooth.
 - Wired via `AppBootstrap.useMediaPipeTracking` (true); **falls back to `FakeBodyTrackingProvider`** if start fails.
-- **Verified:** play → "MediaPipe pose provider started (CPU, VIDEO, full model)", avatar arm bones change frame-to-frame with the sample-video person, 0 errors.
+- **Verified:** play → "MediaPipe pose provider started (CPU, VIDEO, full model, async worker)", avatar arm bones driven smoothly, 0 console errors.
 
 ## Retarget — full body + configurable mapping (done)
 
@@ -102,10 +102,9 @@ Plugin at `Assets/MediaPipeUnity` (homuler). `MediaPipePoseProvider` (`Runtime/T
 ## Next recommended task
 
 1. **`AnimationRiggingIkDriver`** — hand/foot IK targets for planted/reach accuracy (ADR-002).
-3. **Perf:** full-model CPU `TryDetectForVideo` runs synchronously in `LateUpdate` (tens of ms). Move inference to a worker thread (publish immutable `PoseFrame`), or use the lite model / GPU delegate.
-4. **ConfidenceGate with hysteresis + stale-hold** (SDS-025 §4/§7); current gate is a plain per-segment threshold.
-5. **Camera framing** (`MirrorCameraController` — frame the avatar; matters more for small avatars), **built-in avatars**, **file browser**, **URP renderer asset**.
-6. Swap video → webcam: `AppBootstrap.useVideoSource=false`, then finalize `poseFlipX`.
+2. **ConfidenceGate with hysteresis + stale-hold** (SDS-025 §4/§7); current gate is a plain per-segment threshold.
+3. **Camera framing** (`MirrorCameraController` — frame the avatar; matters more for small avatars), **built-in avatars**, **file browser**, **URP renderer asset**.
+4. Swap video → webcam: `AppBootstrap.useVideoSource=false`, then finalize `poseFlipX`.
 
 ## Decisions locked (this session)
 
