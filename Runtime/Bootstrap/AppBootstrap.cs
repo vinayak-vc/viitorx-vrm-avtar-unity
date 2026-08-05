@@ -331,6 +331,7 @@ namespace VirtualMirror.App {
                 if (panel != null) {
                     calibrationPanel = panel;
                     calibrationPanel.SetInitialValues(poseFlipX, useIkDriver, useFaceTracking, useHandTracking, filterMinCutoff, filterBeta);
+                    calibrationPanel.OnCameraDeviceChanged += HandleCameraDeviceChanged;
                     calibrationPanel.OnMirrorFlipToggled += (value) => { poseFlipX = value; };
                     calibrationPanel.OnIkToggled += (value) => { useIkDriver = value; };
                     calibrationPanel.OnFaceToggled += (value) => { useFaceTracking = value; };
@@ -342,6 +343,19 @@ namespace VirtualMirror.App {
                 }
                 index = index + 1;
             }
+        }
+
+        private void HandleCameraDeviceChanged(string deviceName) {
+            if (cameraCapture == null || string.IsNullOrEmpty(deviceName)) {
+                return;
+            }
+            cameraCapture.StopCapture();
+            CameraCaptureRequest request = new CameraCaptureRequest(deviceName, cameraWidth, cameraHeight, cameraFps);
+            bool started = cameraCapture.StartCapture(request);
+            if (started && diagnosticsHud != null) {
+                diagnosticsHud.SetCameraInfo(deviceName + " (" + cameraWidth + "x" + cameraHeight + ")");
+            }
+            logService.Log(LogLevel.Info, "Camera device changed to: " + deviceName + " (Started: " + started + ")");
         }
 
         private MirrorCameraController FindCameraController(Scene scene) {
