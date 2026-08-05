@@ -16,6 +16,8 @@ namespace VirtualMirror.UI {
     public sealed class AvatarLibraryPanel : MonoBehaviour {
         [SerializeField] private TMP_InputField pathInput;
         [SerializeField] private Button loadButton;
+        [SerializeField] private Button browseButton;
+        [SerializeField] private TMP_Dropdown presetDropdown;
         [SerializeField] private Button toggleUiButton;
         [SerializeField] private TMP_Text statusText;
 
@@ -23,17 +25,25 @@ namespace VirtualMirror.UI {
         private ILogService logService;
         private bool isLoading;
         private bool loadUiVisible = true;
+        private System.Collections.Generic.List<string> presetPaths = new System.Collections.Generic.List<string>();
 
         public void Initialize(IAvatarSession avatarSession, ILogService logService) {
             this.avatarSession = avatarSession;
             this.logService = logService;
             avatarSession.AvatarChanged += HandleAvatarChanged;
-            SetStatus("Enter a full .vrm path and press Load.");
+            PopulatePresets();
+            SetStatus("Select a preset avatar or click Browse to load custom .vrm.");
         }
 
         private void Awake() {
             if (loadButton != null) {
                 loadButton.onClick.AddListener(OnLoadClicked);
+            }
+            if (browseButton != null) {
+                browseButton.onClick.AddListener(OnBrowseClicked);
+            }
+            if (presetDropdown != null) {
+                presetDropdown.onValueChanged.AddListener(OnPresetSelected);
             }
             if (toggleUiButton != null) {
                 toggleUiButton.onClick.AddListener(OnToggleClicked);
@@ -44,11 +54,66 @@ namespace VirtualMirror.UI {
             if (loadButton != null) {
                 loadButton.onClick.RemoveListener(OnLoadClicked);
             }
+            if (browseButton != null) {
+                browseButton.onClick.RemoveListener(OnBrowseClicked);
+            }
+            if (presetDropdown != null) {
+                presetDropdown.onValueChanged.RemoveListener(OnPresetSelected);
+            }
             if (toggleUiButton != null) {
                 toggleUiButton.onClick.RemoveListener(OnToggleClicked);
             }
             if (avatarSession != null) {
                 avatarSession.AvatarChanged -= HandleAvatarChanged;
+            }
+        }
+
+        public void PopulatePresets() {
+            if (presetDropdown == null) {
+                return;
+            }
+            presetDropdown.ClearOptions();
+            presetPaths.Clear();
+
+            System.Collections.Generic.List<string> options = new System.Collections.Generic.List<string>();
+            options.Add("Select Preset Avatar...");
+            presetPaths.Add(null);
+
+            string folder = System.IO.Path.Combine(Application.streamingAssetsPath, "Avatars");
+            if (System.IO.Directory.Exists(folder)) {
+                string[] files = System.IO.Directory.GetFiles(folder, "*.vrm");
+                int index = 0;
+                while (index < files.Length) {
+                    string fullPath = files[index];
+                    string fileName = System.IO.Path.GetFileName(fullPath);
+                    options.Add(fileName);
+                    presetPaths.Add(fullPath);
+                    index = index + 1;
+                }
+            }
+            presetDropdown.AddOptions(options);
+        }
+
+        private void OnPresetSelected(int index) {
+            if (index <= 0 || index >= presetPaths.Count) {
+                return;
+            }
+            string path = presetPaths[index];
+            if (!string.IsNullOrEmpty(path)) {
+                if (pathInput != null) {
+                    pathInput.text = path;
+                }
+                RunLoad(path);
+            }
+        }
+
+        private void OnBrowseClicked() {
+            string selectedFile = VirtualMirror.IO.NativeFileDialog.OpenFile("Select VRM Avatar", "VRM Avatar Files (*.vrm)\0*.vrm\0All Files (*.*)\0*.*\0\0", "vrm");
+            if (!string.IsNullOrEmpty(selectedFile)) {
+                if (pathInput != null) {
+                    pathInput.text = selectedFile;
+                }
+                RunLoad(selectedFile);
             }
         }
 

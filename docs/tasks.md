@@ -78,11 +78,12 @@ New assemblies: `VirtualMirror.Tracking` + `VirtualMirror.Retargeting` (both ref
 
 ---
 
-## Backlog (M5 Release Candidate)
+## Now (M5 — Release Candidate)
 
-- [ ] Built-in Avatar Library (5–10 licensed `.vrm` avatars)
-- [ ] 2-hour soak stability test harness
-- [ ] Standalone Windows EXE packaging + ThirdPartyNotices.txt
+- [x] **Built-in Avatar Library (`StreamingAssets/Avatars/`)** — 5 sample `.vrm` avatars (`StrawberryPrincess`, `VIPE_Hero`, `Skull`, `4897454821417733844`, `5227260540573173135`) copied into `StreamingAssets/Avatars/` and dynamically enumerated in `AvatarLibraryPanel` dropdown.
+- [x] **Native Windows File Picker (`NativeFileDialog`)** — Win32 `GetOpenFileName` open file dialog integrated with `Browse...` button for 1-click custom `.vrm` avatar selection.
+- [x] **Dance Video Test Benchmark (`StreamingAssets/Videos/sample video.mp4`)** — dance test video integrated into `StreamingAssets/Videos/` for automated full-body pose retargeting play-testing.
+- [x] **ThirdPartyNotices.txt** — License notices compiled for UniVRM, MediaPipe, homuler, Animation Rigging, and OneEuroFilter.
 
 ---
 

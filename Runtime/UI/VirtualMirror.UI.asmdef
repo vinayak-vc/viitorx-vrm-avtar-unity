@@ -3,6 +3,7 @@
     "rootNamespace": "VirtualMirror.UI",
     "references": [
         "VirtualMirror.Core",
+        "VirtualMirror.IO",
         "VirtualMirror.Diagnostics",
         "UnityEngine.UI",
         "Unity.TextMeshPro"
