@@ -23,6 +23,23 @@ Status: Active
 
 ---
 
+# 1a. Pinned Versions (installed 2026-08-05)
+
+| Package id | Version | Source | Notes |
+|------------|---------|--------|-------|
+| `com.unity.render-pipelines.universal` | 17.3.0 | Unity (base project) | URP already present |
+| `com.unity.animation.rigging` | 1.4.1 | Unity registry | IK backend (ADR-002) |
+| `com.vrmc.vrm` | 0.126.0 | OpenUPM (`package.openupm.com`, scope `com.vrmc`) | VRM 1.0 runtime; display name "VRM-1.0" |
+| `com.vrmc.gltf` | 0.126.0 | OpenUPM (transitive) | Pulled by `com.vrmc.vrm` |
+| `com.unity.nuget.newtonsoft-json` | 3.2.2 | Unity registry (base project) | UniVRM dependency, already present |
+| `com.unity.burst` / `com.unity.collections` | 1.8.28 / 2.6.4 | Unity registry (base project) | Animation Rigging deps, already present |
+
+**Scoped registry added to `Packages/manifest.json`:** `package.openupm.com` → `https://package.openupm.com`, scopes `["com.vrmc"]`.
+
+**Still to pin:** MediaPipe Unity plugin (open question — candidate `com.github.homuler.mediapipe`) + model `.task` files. Deferred to M2.
+
+---
+
 # 2. Optional Dependencies
 
 | Dependency | Purpose | When |

@@ -1,0 +1,96 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e0d412101ac104ec8a48dfe5ec56652c, type: 3}
+  m_Name: GameInfoSo
+  m_EditorClassIdentifier: BaseProject::ViitorCloud.Base.BaseScripts.Internal.Scripts.Models.Data.GameInfo.ViitorCloudGameInfoSo
+  dummyData: '?'
+  value:
+    gamePath: 
+    usesLocalization: 0
+    gameID: 2f0901b73af0430d77d24dd4f91ead74659594d07743a8d5
+    repoPath: https://github.com/vinayak-vc/viitorx-vrm-avtar-unity
+    applicationType: 0
+    scenes:
+    - active: 1
+      scene: {fileID: 102900000, guid: 67abd83f739bd7c48b725547017752fa, type: 3}
+    - active: 1
+      scene: {fileID: 102900000, guid: 8b69f998a05f9d84388a0adad72f89ca, type: 3}
+    - active: 1
+      scene: {fileID: 102900000, guid: f534b98ab89a67347b9261b57aa5dab6, type: 3}
+    photonID: 
+    agoraID: 
+    projectSettings:
+      colorSpace: 1
+      tags: []
+      layers: []
+      physics:
+        physics2DSettings:
+          gravity: {x: 0, y: -9.81}
+          velocityIterations: 8
+          positionIterations: 3
+          velocityThreshold: 1
+          maxLinearCorrection: 0.2
+          maxAngularCorrection: 8
+          maxTranslationSpeed: 100
+          maxRotationSpeed: 360
+          baumgarteScale: 0.2
+          baumgarteTOIScale: 0.75
+          timeToSleep: 0.5
+          linearSleepTolerance: 0.01
+          angularSleepTolerance: 2
+          defaultContactOffset: 0.01
+          simulationMode: 0
+          queriesHitTriggers: 1
+          queriesStartInColliders: 1
+          callbacksOnDisable: 1
+          reuseCollisionCallbacks: 1
+          autoSyncTransforms: 0
+        physics3DSettings:
+          gravity: {x: 0, y: -9.81, z: 0}
+          bounceThreshold: 2
+          sleepThreshold: 0.005
+          defaultContactOffset: 0.01
+          defaultSolverIterations: 6
+          defaultSolverVelocityIterations: 1
+          queriesHitBackfaces: 0
+          queriesHitTriggers: 1
+          autoSimulation: 1
+          autoSyncTransforms: 0
+          reuseCollisionCallbacks: 1
+        collisionOverrides2D: []
+        collisionOverrides3D: []
+      alwaysIncludedShaders: []
+      alwaysIncludedShadersVariantsCollection: []
+    properties:
+      title: ViitorX VRM Avatar
+      companyName: ViitorCloud
+      bundleId: com.viitorx.avatar
+      version: 1.0.0
+      versionCode: 0
+      icon: {fileID: 0}
+      splashScreenLogo: {fileID: 0}
+      splashScreenLogoBg: {fileID: 0}
+      splashBgBlur: 1
+      portrait: 1
+      portraitUpsideDown: 1
+      landscapeLeft: 0
+      landscapeRight: 0
+      hostForSchemes: vxvrm
+      urlSchemes: []
+    packages:
+      ar: 0
+      vr: 0
+      urp: 1
+      hdrp: 0
+      addressables: 0
+      doNotForceChangePipeline: 0
+      renderingPipelineAsset: {fileID: 11400000, guid: de1a6f2fa689ffb48b3377290022f2ae, type: 2}

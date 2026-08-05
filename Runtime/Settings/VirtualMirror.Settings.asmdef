@@ -1,0 +1,17 @@
+{
+    "name": "VirtualMirror.Settings",
+    "rootNamespace": "VirtualMirror.Settings",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.IO"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

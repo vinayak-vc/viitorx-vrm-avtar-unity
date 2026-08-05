@@ -1,0 +1,24 @@
+{
+    "name": "VirtualMirror.App",
+    "rootNamespace": "VirtualMirror.App",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.IO",
+        "VirtualMirror.Settings",
+        "VirtualMirror.Avatar",
+        "VirtualMirror.UI",
+        "VirtualMirror.Camera",
+        "VirtualMirror.Tracking",
+        "VirtualMirror.Retargeting",
+        "VirtualMirror.Rendering"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

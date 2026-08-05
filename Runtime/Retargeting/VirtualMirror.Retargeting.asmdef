@@ -1,0 +1,16 @@
+{
+    "name": "VirtualMirror.Retargeting",
+    "rootNamespace": "VirtualMirror.Retargeting",
+    "references": [
+        "VirtualMirror.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
