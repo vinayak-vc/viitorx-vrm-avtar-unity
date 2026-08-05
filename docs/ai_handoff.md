@@ -106,10 +106,16 @@ Plugin at `Assets/MediaPipeUnity` (homuler). `MediaPipePoseProvider` (`Runtime/T
 - `Glog` lifecycle fix in `MediaPipePoseProvider.cs`: paired `Glog.Initialize` on start with `Glog.Shutdown` in `Dispose()` guarded by `globalInitialized` flag, preventing double-initialization process crashes across domain reloads.
 - Verified in play mode: 0 console errors, clean execution.
 
+## EditMode Unit Tests (done, 13/13 passed)
+
+- `VirtualMirror.Tests` asmdef created under `Tests/EditMode/`.
+- Test suites: `PoseSpaceConverterTests` (4 tests), `OneEuroFilterTests` (4 tests), `RotationFromVectorsTests` (5 tests).
+- Automated test run targeting `VirtualMirror.Tests` passed 13/13 tests cleanly in 0.62s.
+
 ## Next recommended task
 
 1. **Full-body webcam input & mirror calibration** — test on normal height avatar with live webcam stream.
-2. **EditMode unit tests** — test Y-flip, mirror conversion, landmark bounds, and filter smoothing.
+2. **ConfidenceGate with hysteresis & stale-hold** (SDS-025 §4/§7).
 3. **Camera framing** (`MirrorCameraController` — frame the avatar; matters more for small avatars), **built-in avatars**, **file browser**, **URP renderer asset**.
 4. Swap video → webcam: `AppBootstrap.useVideoSource=false`, then finalize `poseFlipX`.
 
