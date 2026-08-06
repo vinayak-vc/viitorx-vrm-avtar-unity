@@ -1,16 +1,20 @@
 namespace VirtualMirror.Core {
     /// <summary>
-    /// Immutable frame of facial expression weights (0.0 to 1.0) for eyes, mouth, and emotions.
+    /// Facial expression weights (0.0 to 1.0) for eyes, mouth, and emotions for one tracked frame.
+    /// Reusable and mutable to avoid per-frame allocations on the hot path: a producer owns a
+    /// <see cref="FaceFrame"/> instance, fills it in place each frame with <see cref="SetExpressions"/> +
+    /// <see cref="SetMeta"/> (or <see cref="MarkInvalid"/>), and hands the reference to a single consumer
+    /// that reads it immediately. When <see cref="IsValid"/> is false, no face was tracked.
     /// </summary>
     public sealed class FaceFrame {
-        private readonly float blinkLeft;
-        private readonly float blinkRight;
-        private readonly float mouthOpen;
-        private readonly float smile;
-        private readonly float angry;
-        private readonly float surprised;
-        private readonly double timestampSeconds;
-        private readonly bool isValid;
+        private float blinkLeft;
+        private float blinkRight;
+        private float mouthOpen;
+        private float smile;
+        private float angry;
+        private float surprised;
+        private double timestampSeconds;
+        private bool isValid;
 
         public float BlinkLeft {
             get {
@@ -60,15 +64,23 @@ namespace VirtualMirror.Core {
             }
         }
 
-        public FaceFrame(float blinkLeft, float blinkRight, float mouthOpen, float smile, float angry, float surprised, double timestampSeconds, bool isValid) {
+        public void SetExpressions(float blinkLeft, float blinkRight, float mouthOpen, float smile, float angry, float surprised) {
             this.blinkLeft = blinkLeft;
             this.blinkRight = blinkRight;
             this.mouthOpen = mouthOpen;
             this.smile = smile;
             this.angry = angry;
             this.surprised = surprised;
+        }
+
+        public void SetMeta(double timestampSeconds, bool isValid) {
             this.timestampSeconds = timestampSeconds;
             this.isValid = isValid;
+        }
+
+        public void MarkInvalid(double timestampSeconds) {
+            this.timestampSeconds = timestampSeconds;
+            isValid = false;
         }
     }
 }

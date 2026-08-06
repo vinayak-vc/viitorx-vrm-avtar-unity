@@ -47,9 +47,15 @@ namespace VirtualMirror.App {
         [SerializeField] private bool poseFlipY = true;
         [SerializeField] private bool poseFlipZ = true;
         [SerializeField] private float retargetMinConfidence = 0.5f;
+        [SerializeField] private float retargetExitConfidence = 0.3f;
+        [SerializeField] private float poseStaleSeconds = 0.5f;
         [SerializeField] private bool useIkDriver = true;
         [SerializeField] private bool useFaceTracking = true;
+        [SerializeField] private bool useMediaPipeFace = true;
+        [SerializeField] private string faceModelFileName = "face_landmarker.bytes";
         [SerializeField] private bool useHandTracking = true;
+        [SerializeField] private bool useMediaPipeHand = true;
+        [SerializeField] private string handModelFileName = "hand_landmarker.bytes";
 
         private ServiceRegistry services;
         private LogService logService;
@@ -69,6 +75,8 @@ namespace VirtualMirror.App {
         private CalibrationSettingsPanel calibrationPanel;
         private Animator boundAnimator;
         private MirrorCameraController cameraController;
+        private double lastFrameTimestamp;
+        private float lastFreshTime;
 
         public ServiceRegistry Services {
             get {
@@ -120,12 +128,27 @@ namespace VirtualMirror.App {
             UpdateTracking();
         }
 
+        private bool IsPoseStale(PoseFrame frame) {
+            if (frame == null || !frame.IsValid) {
+                return true;
+            }
+            double timestamp = frame.TimestampSeconds;
+            if (timestamp != lastFrameTimestamp) {
+                lastFrameTimestamp = timestamp;
+                lastFreshTime = Time.unscaledTime;
+            }
+            return (Time.unscaledTime - lastFreshTime) > poseStaleSeconds;
+        }
+
         private void UpdateTracking() {
             if (bodyProvider == null || retargeter == null || jointFilter == null) {
                 return;
             }
             float deltaSeconds = Time.deltaTime;
             bodyProvider.Tick(deltaSeconds);
+            if (Input.GetKeyDown(KeyCode.C)) {
+                retargeter.Recalibrate();
+            }
 
             Animator animator = null;
             if (avatarSession != null && avatarSession.Current != null) {
@@ -145,9 +168,19 @@ namespace VirtualMirror.App {
             PoseFrame frame;
             if (bodyProvider.TryGetLatestFrame(out frame)) {
                 PoseFrame filtered = jointFilter.Filter(frame, deltaSeconds);
-                retargeter.Apply(filtered, retargetMinConfidence);
+                // FK and IK are mutually exclusive on the arm/leg bones: when the IK solver is active and
+                // bound it owns the limbs, so FK drives only torso (hips/spine) + neck. Otherwise FK drives
+                // everything and the solver is released so the rig stops deforming the limbs.
+                bool ikActive = useIkDriver && ikSolver != null && ikSolver.IsBound;
+                retargeter.SetArmsLegsDrivenExternally(ikActive);
                 if (ikSolver != null && ikSolver.IsBound) {
-                    ikSolver.Apply(filtered, retargetMinConfidence);
+                    ikSolver.SetActive(useIkDriver);
+                }
+                if (!IsPoseStale(filtered)) {
+                    retargeter.Apply(filtered, retargetMinConfidence, retargetExitConfidence);
+                    if (ikActive) {
+                        ikSolver.Apply(filtered, retargetMinConfidence);
+                    }
                 }
             }
 
@@ -163,6 +196,9 @@ namespace VirtualMirror.App {
                 if (faceProvider.TryGetFrame(out faceFrame)) {
                     expressionRetargeter.Apply(faceFrame);
                 }
+            } else if (expressionRetargeter != null && expressionRetargeter.IsBound) {
+                // Face tracking toggled off: reset expressions to neutral so the face does not freeze.
+                expressionRetargeter.Apply(null);
             }
 
             if (useHandTracking && handProvider != null && handRetargeter != null) {
@@ -256,14 +292,40 @@ namespace VirtualMirror.App {
             logService.Log(LogLevel.Info, "Body tracking started.");
 
             if (useFaceTracking) {
-                faceProvider = new FakeFaceTrackingProvider();
-                faceProvider.StartTracking();
+                if (useMediaPipeFace) {
+                    string faceModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", faceModelFileName);
+                    MediaPipeFaceProvider mediaPipeFace = new MediaPipeFaceProvider(logService, cameraCapture, faceModelPath);
+                    if (mediaPipeFace.StartTracking()) {
+                        faceProvider = mediaPipeFace;
+                    } else {
+                        logService.Log(LogLevel.Warning, "MediaPipe face provider failed to start; falling back to fake face tracking.");
+                        mediaPipeFace.Dispose();
+                        faceProvider = new FakeFaceTrackingProvider();
+                        faceProvider.StartTracking();
+                    }
+                } else {
+                    faceProvider = new FakeFaceTrackingProvider();
+                    faceProvider.StartTracking();
+                }
                 expressionRetargeter = new VrmExpressionRetargeter();
                 logService.Log(LogLevel.Info, "Face tracking started.");
             }
             if (useHandTracking) {
-                handProvider = new FakeHandTrackingProvider();
-                handProvider.StartTracking();
+                if (useMediaPipeHand) {
+                    string handModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", handModelFileName);
+                    MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath);
+                    if (mediaPipeHand.StartTracking()) {
+                        handProvider = mediaPipeHand;
+                    } else {
+                        logService.Log(LogLevel.Warning, "MediaPipe hand provider failed to start; falling back to fake hand tracking.");
+                        mediaPipeHand.Dispose();
+                        handProvider = new FakeHandTrackingProvider();
+                        handProvider.StartTracking();
+                    }
+                } else {
+                    handProvider = new FakeHandTrackingProvider();
+                    handProvider.StartTracking();
+                }
                 handRetargeter = new HumanoidHandRetargeter();
                 logService.Log(LogLevel.Info, "Hand tracking started.");
             }

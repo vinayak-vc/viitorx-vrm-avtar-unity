@@ -1,27 +1,69 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-08-05  
+Last updated: 2026-08-06  
 Purpose: next agent can continue without re-deriving context.
 
 ---
 
 ## Current state
 
-- **Milestone:** **M0 done + play-verified. M1 core (avatar load/swap/persist) done + play-verified; UI/builtins remain.**
-- **Code:** Runtime scaffold + infrastructure + avatar loader pipeline implemented and compiling (0 errors).
-- **Packages pinned:** `com.unity.animation.rigging` 1.4.1, `com.vrmc.vrm` 0.126.0 (VRM 1.0 via OpenUPM) + `com.vrmc.gltf` transitive. See `19_ThirdParty.md §1a`.
-- **Docs:** Full SDS `00`–`25` + handoff set. `decisions.md` has ADR-006 (Accepted: Unity Awaitable) + ADR-009 (assemblies).
+- **Milestone:** **M0 ✅. M1 ✅ (VRM load/swap/persist + UI). M2 ✅ core (capture → MediaPipe pose → filter → torso FK + limb IK → avatar; live). M3 ✅ face + hands REAL (MediaPipe Face/Hand Landmarker → VRM expressions / finger curls). M4 ✅ calibration/HUD. M5 ✅ ship (built-ins, file picker, notices).**
+- **IK + Face audit (7 fixes) — DONE + play-verified 2026-08-06.** Arms/legs = IK; FK = torso (hips/spine) + neck only (mutually exclusive). IK targets scale-normalized; position-only IK. Real `MediaPipeFaceProvider`. Expression guard + reset-on-stop. `FaceFrame` reusable buffer. See `tasks.md` "IK + Face audit — FIXED".
+- **Code:** Full runtime pipeline implemented + compiling (0 errors). All feature assemblies created.
+- **Packages pinned:** `com.unity.animation.rigging` 1.4.1, `com.vrmc.vrm` 0.126.0 (+ `com.vrmc.gltf`); homuler MediaPipeUnityPlugin under `Assets/MediaPipeUnity`; pose model at `Assets/StreamingAssets/MediaPipe/pose_landmarker_full.bytes` (9.4 MB). See `19_ThirdParty.md §1a`.
+- **Docs:** SDS `00`–`25` + handoff. `decisions.md`: ADR-006 (Unity Awaitable), ADR-009 (assemblies), ADR-010 (MediaPipe = homuler).
 
-### What runs today
-`Bootstrap.unity` → `AppBootstrap` (composition root) constructs `PathProvider`, `LogService`, `SettingsStore`, `UniVrmAvatarLoader`, wraps them in `ServiceRegistry`, loads settings, additive-loads `Mirror.unity`, then on `sceneLoaded` finds `AvatarRoot`, builds `AvatarSessionController`, and auto-loads `avatar.lastPath`. Verified in play mode:
-- Creates `Documents/MyMirror/{Avatars,Backgrounds,Calibration,Logs,Settings}`
-- Writes `Settings/settings.json` (schema v1, matches SDS-015) + daily log with session header
-- Avatar session wires up; auto-load is a clean no-op until `avatar.lastPath` is set (0 errors)
+### What runs today (live, play-verified)
+`Bootstrap` → `AppBootstrap` wires services + capture (`VideoFileCaptureService` on `sample video.mp4`, or `WebcamCaptureService` — toggle `useVideoSource`) + `MediaPipePoseProvider` + `JointFilterPipeline` + `HumanoidPoseRetargeter`, additive-loads `Mirror`, auto-loads `avatar.lastPath`, hides the load UI on load, and frames the avatar (`MirrorCameraController`). Live chain:
+`capture → MediaPipe PoseLandmarker (full, CPU, background worker) → world landmarks → PoseSpaceConverter → One-Euro filter → full-body FK retarget → VRM`. Verified: avatar tracks the sample video, torso straight, 0 errors.
 
-### Avatar pipeline (M1)
-- `IAvatarLoader.LoadAsync(request, parent, ct) : Awaitable<AvatarLoadResult>` (Core) → `UniVrmAvatarLoader` (Avatar asmdef) reads bytes async, `Vrm10.LoadBytesAsync` with `RuntimeOnlyAwaitCaller`, parents under root, validates `animator.isHuman`, size gate (default 256 MB).
-- `AvatarSessionController` (App): load-new-then-dispose-old swap, keeps old avatar on failure, persists `avatar.lastPath` + debounced save.
-- **Not yet runtime-tested with a real `.vrm`** (no test file available).
+**Retarget (`HumanoidPoseRetargeter`)**: Hips + Spine driven by calibration-relative bases (hip line / shoulder line, shared torso-up) → torso straight at neutral, no waist twist. Arms/legs/neck are roll-constrained FK using per-frame body-forward. All parts hysteresis-gated (enter/exit). `C` key recalibrates.
+
+### Parallel session (present, NOT audited by this agent)
+A second session added: a full HUD + `Settings & Calibration` panel (webcam device picker, IK/face/hand toggles, smoothing sliders), an **IK solver** (Animation Rigging — needs the Animator enabled), and a **face provider + VRM expression retargeter** (M3). Audit these against the same coordinate/handedness conventions that caused the waist-twist bug.
+
+### Audit + fixes (this agent, 2026-08-05)
+1. **Waist twist** — Hips (basis) vs Spine (world-locked direction) disagreed on facing. Fixed: torso is now dual-basis + calibration-relative.
+2. **Threading race** in `MediaPipePoseProvider` — pool get/release + Image build/dispose were split across main/worker. Fixed: worker does only `TryDetectForVideo`; main owns the `TextureFramePool`+`Image` (in-flight, released next tick).
+3. **Per-frame GC** — `PoseFrame` is now a reusable mutable buffer; fake provider, filter, and the (double-buffered) MediaPipe provider fill in place → zero per-frame `PoseFrame`/array allocs.
+4. **Limb roll** — roll reference switched world-forward → per-frame body-forward (twist follows body facing).
+5. **Confidence hysteresis + stale-hold** — retarget gate has enter/exit thresholds (`retargetMinConfidence`/`retargetExitConfidence`); `AppBootstrap.IsPoseStale` holds the pose if frames stop arriving (`poseStaleSeconds`).
+6. **Animator.enabled** — left ENABLED on purpose (the IK path needs it); FK writes in LateUpdate, no AnimatorController so nothing overwrites, IK layers on top.
+
+### IK + Face fixes (this agent, 2026-08-06) — play-verified
+Design locked: **IK owns arms+legs; FK owns torso (hips/spine) + neck** (mutually exclusive per bone).
+1. **FK/IK exclusion** — `HumanoidPoseRetargeter.SetArmsLegsDrivenExternally(bool)` + per-segment `IsLimb` (Neck=false). `AppBootstrap.UpdateTracking` sets it from `ikActive = useIkDriver && ikSolver.IsBound` and calls `IIkSolver.SetActive(useIkDriver)` (new interface member; driver zeros constraint weights when disabled so the toggle works both ways).
+2. **IK target scale** — `AnimationRiggingIkDriver` measures per-side avatar limb lengths at `Bind` and scales each landmark offset by `avatarLen/trackedLen` (`ComputeScale`) → reachable targets on any-scale avatar.
+3. **Position-only IK** — `targetRotationWeight = 0` on all four constraints.
+4. **Real face** — new `MediaPipeFaceProvider` (homuler FaceLandmarker, blendshapes) + new refcounted `MediaPipeGlobalInit` (both pose & face now share Glog init/shutdown — prevents double-init crash). Wired behind `AppBootstrap.useMediaPipeFace` with fake fallback. Model at `StreamingAssets/MediaPipe/face_landmarker.bytes`.
+5. **Expression guard** — `VrmExpressionRetargeter` snapshots the VRM's `ExpressionKeys` at Bind; guards every `SetWeight`; warns once per missing key.
+6. **Reset on stop/invalid** — resets mapped weights to 0 on Unbind, invalid frame, and face-toggle-off.
+7. **`FaceFrame` reusable buffer** — mutable `SetExpressions`/`SetMeta`/`MarkInvalid` like `PoseFrame`; providers fill in place.
+
+Verified live (video → StrawberryPrincess): 0 compile/runtime errors; waist straight (hips↔spine 0.0°, hips→spine 2.0° off up); arm IK weight=1 with targets 0.43/0.60 m vs 0.46 m avatar arm; all constraints rotW=0; `faceProvider=MediaPipeFaceProvider` with valid frames; expression apply 1.00→invalid 0.00.
+
+**Modified/created:** `Runtime/Core/Models/FaceFrame.cs` (rewrite), `Runtime/Core/Interfaces/IIkSolver.cs` (+SetActive), `Runtime/IK/AnimationRiggingIkDriver.cs`, `Runtime/Retargeting/HumanoidPoseRetargeter.cs`, `Runtime/Retargeting/VrmExpressionRetargeter.cs` (rewrite), `Runtime/Tracking/FakeFaceTrackingProvider.cs`, `Runtime/Tracking/MediaPipe/MediaPipeFaceProvider.cs` (new), `Runtime/Tracking/MediaPipe/MediaPipeGlobalInit.cs` (new), `Runtime/Tracking/MediaPipe/MediaPipePoseProvider.cs` (use shared init), `Runtime/Bootstrap/AppBootstrap.cs`, `Tests/EditMode/VrmExpressionRetargeterTests.cs`, `StreamingAssets/MediaPipe/face_landmarker.bytes` (new, 3.67 MB).
+
+### Real hand tracking (this agent, 2026-08-06) — play-verified
+- **`MediaPipeHandProvider`** (new, `Runtime/Tracking/MediaPipe/`) — homuler `HandLandmarker`, CPU/VIDEO, `numHands:2`, `modelAssetBuffer`; mirrors pose/face threading exactly (worker `TryDetectForVideo`; main-thread `TextureFramePool`+`Image`; double-buffered reusable `HandFrame`; shared `MediaPipeGlobalInit`). Per-finger curl = bend angle at the finger's middle joint over the 21 world landmarks (`Vector3.Angle(mid-prox, tip-mid)/160°`, clamped); left/right by MediaPipe handedness label. Wired behind `AppBootstrap.useMediaPipeHand` (fake fallback). Model `StreamingAssets/MediaPipe/hand_landmarker.bytes` (7.6 MB float16, Google official).
+- **`HandFrame`** now a reusable mutable buffer (`SetCurls`/`SetMeta`/`MarkInvalid`) like `FaceFrame`/`PoseFrame`; fake + real fill in place; old 12-arg ctor removed; `HumanoidHandRetargeterTests` updated.
+- **Status:** compiles clean (0 errors) and **play-verified** (video source): `handProvider=MediaPipeHandProvider`, `IsTracking=True`, retargeter bound (15 joints/hand); valid frames carry real per-finger curls that vary frame-to-frame and map to the correct L/R by MediaPipe handedness; pose+face+hand landmarkers run together (shared `MediaPipeGlobalInit`) with 0 runtime errors. Handedness mirror-swap and the `angle/160°` curl scaling may still want fine-tuning against a webcam.
+- **Open notes:** hand curl mapping is a heuristic (single mid-joint angle); good enough for open/curl but not per-joint fidelity. Consider `HandFrame` reset-to-open on invalid/stop (currently holds last pose, like the pre-existing behavior).
+
+### IK facing + calibration fixes (this agent, 2026-08-06) — play-verified
+Reported on a webcam run with the **Skull** avatar: "hands behind the body" + "body horizontal, non-human". Root causes + fixes:
+- **Hands behind body** — IK targets were `hips.position + landmarkOffset` in **world axes**, ignoring the avatar's rest facing. Skull's rest hips face **Y=180°** (avatar faces −Z), so a camera-space forward offset landed *behind* it. Fix: `AnimationRiggingIkDriver` captures `hipsRestRotation` at Bind and places targets/hints as `origin + hipsRestRotation * (offset * scale)`. Verified: hand targets moved from hips-local z ≈ **−0.78 (behind)** to **+0.28/+0.31 (front)**; live screenshot shows arms in front.
+- **Body horizontal** — the calibration-relative torso locks its neutral basis on the first confident frame; a webcam/OBS warm-up frame (hips not yet in view → weak/degenerate basis) locked a bad neutral, tilting the torso ~90° forever. Fix: `HumanoidPoseRetargeter.ApplyTorso` now captures neutral only when the torso up **and** each right vector exceed `MinTorsoVectorMagnitude` (0.08 m) **and** the basis has been strong for `NeutralWarmupRequired` (8) consecutive frames; until then the torso stays at rest (upright). `Recalibrate` (C key) resets the warmup. Verified upright on the video (torso 6° from vertical).
+- Offset uses **rest** hips rotation (not live), decoupling arm placement from torso lean; left/right sign still follows `poseFlipX` and may want webcam tuning. **If a webcam run still looks tilted, press C** while standing upright + centered.
+- **Modified:** `Runtime/IK/AnimationRiggingIkDriver.cs`, `Runtime/Retargeting/HumanoidPoseRetargeter.cs`.
+
+### Open / still to do
+- **`useVideoSource`** is committed **false** (webcam, `Logi C270`). For the 2026-08-06 IK/face verification it was flipped to `true` in-memory (reflection, edit-mode only, never saved) to drive tracking off `sampleVRMFiles/sample video.mp4`, then restored to false. To re-verify off the video, flip `AppBootstrap.useVideoSource` (or set it in Bootstrap.unity).
+- Audit the parallel session's **calibration** code (same coordinate-convention risk as the waist-twist bug).
+- Unused `VRM10` reference in `VirtualMirror.Retargeting.asmdef` — actually now USED by `VrmExpressionRetargeter` (keep it).
+- Finalize mirror sign (`poseFlipX`, committed true) once a real user is on webcam.
+
+> ⚠️ Scheduling as a **cloud** routine won't work end-to-end: cloud agents have no Unity Editor / MCP → code edits + PR only (no compile/play-verify), and local uncommitted work must be pushed to the repo first. Verification needs a local Unity session.
 
 ---
 
@@ -36,8 +78,7 @@ V1 = single user Windows EXE; no marketplace yet.
 
 ## Assemblies (per ADR-009)
 
-`VirtualMirror.Core` (interfaces/models) ← `.IO` ← `.Settings` ← `.App` (composition root).  
-Feature asmdefs (`.Tracking`, `.Retargeting`, `.IK`, `.Avatar`, `.UI`, `.Editor`, `.Tests`) not created yet — add with their first code.
+`VirtualMirror.Core` (interfaces/models) ← `.IO` ← `.Settings`; feature asmdefs `.Camera`, `.Tracking` (refs `Mediapipe.Runtime`), `.Retargeting`, `.Rendering`, `.Avatar` (refs `VRM10`/`UniGLTF`), `.UI` (refs `UnityEngine.UI`, `Unity.TextMeshPro`) — all ← `.App` (composition root). `.Editor`/`.Tests` still pending. Concretes never flow up into Core.
 
 ---
 

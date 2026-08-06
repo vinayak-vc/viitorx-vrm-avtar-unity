@@ -11,13 +11,13 @@ namespace VirtualMirror.Tracking.Filtering {
         private readonly OneEuroFilter[] filtersX;
         private readonly OneEuroFilter[] filtersY;
         private readonly OneEuroFilter[] filtersZ;
-        private readonly PoseLandmark[] buffer;
+        private readonly PoseFrame outputFrame;
 
         public JointFilterPipeline(float minCutoff, float beta, float derivativeCutoff) {
             filtersX = new OneEuroFilter[PoseFrame.LandmarkCount];
             filtersY = new OneEuroFilter[PoseFrame.LandmarkCount];
             filtersZ = new OneEuroFilter[PoseFrame.LandmarkCount];
-            buffer = new PoseLandmark[PoseFrame.LandmarkCount];
+            outputFrame = new PoseFrame();
             int index = 0;
             while (index < PoseFrame.LandmarkCount) {
                 filtersX[index] = new OneEuroFilter(minCutoff, beta, derivativeCutoff);
@@ -38,12 +38,11 @@ namespace VirtualMirror.Tracking.Filtering {
                 float x = filtersX[index].Filter(position.x, deltaSeconds);
                 float y = filtersY[index].Filter(position.y, deltaSeconds);
                 float z = filtersZ[index].Filter(position.z, deltaSeconds);
-                buffer[index] = new PoseLandmark(new Vector3(x, y, z), landmark.Confidence);
+                outputFrame.SetLandmark(index, new PoseLandmark(new Vector3(x, y, z), landmark.Confidence));
                 index = index + 1;
             }
-            PoseLandmark[] copy = new PoseLandmark[PoseFrame.LandmarkCount];
-            System.Array.Copy(buffer, copy, PoseFrame.LandmarkCount);
-            return new PoseFrame(copy, frame.TimestampSeconds, true);
+            outputFrame.SetMeta(frame.TimestampSeconds, true);
+            return outputFrame;
         }
 
         public void Reset() {

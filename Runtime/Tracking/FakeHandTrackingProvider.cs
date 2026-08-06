@@ -6,6 +6,7 @@ namespace VirtualMirror.Tracking {
     /// Procedural fake hand tracking provider for testing finger flexing & curling.
     /// </summary>
     public sealed class FakeHandTrackingProvider : IHandTrackingProvider {
+        private readonly HandFrame frame = new HandFrame();
         private bool tracking;
         private float elapsedTime;
 
@@ -32,9 +33,9 @@ namespace VirtualMirror.Tracking {
             tracking = false;
         }
 
-        public bool TryGetFrame(out HandFrame frame) {
+        public bool TryGetFrame(out HandFrame handFrame) {
             if (!tracking) {
-                frame = null;
+                handFrame = null;
                 return false;
             }
 
@@ -45,11 +46,11 @@ namespace VirtualMirror.Tracking {
             float ring = (Mathf.Sin(elapsedTime * 2.6f + 0.6f) + 1f) * 0.4f;
             float little = (Mathf.Sin(elapsedTime * 2.8f + 0.8f) + 1f) * 0.4f;
 
-            frame = new HandFrame(
+            frame.SetCurls(
                 thumb, index, middle, ring, little,
-                thumb, index, middle, ring, little,
-                elapsedTime, true
-            );
+                thumb, index, middle, ring, little);
+            frame.SetMeta(elapsedTime, true);
+            handFrame = frame;
             return true;
         }
 

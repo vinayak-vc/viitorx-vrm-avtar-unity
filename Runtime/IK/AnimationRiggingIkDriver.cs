@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 
 using UnityEngine;
@@ -11,6 +10,13 @@ namespace VirtualMirror.IK {
     /// <see cref="IIkSolver"/> implementation using Unity Animation Rigging (ADR-002, SDS-011).
     /// Dynamically constructs a Rig and TwoBoneIKConstraints for arms and legs on the target humanoid
     /// avatar, and drives their target/hint transforms from <see cref="PoseFrame"/> landmarks.
+    ///
+    /// Landmark offsets are MediaPipe world metres sized for a real human (~1.7 m span); the avatar may
+    /// be any scale (e.g. a 0.76 m chibi), so each frame the offset is normalized by
+    /// (avatar limb length / tracked limb length) measured at <see cref="Bind"/>, keeping targets reachable.
+    /// IK is position-only (targetRotationWeight = 0) because wrist/ankle orientation is not tracked.
+    /// <see cref="SetActive"/> lets the composition root disable the solver at runtime (releasing the rig
+    /// so FK can drive the limbs instead), keeping FK and IK mutually exclusive on the arm/leg bones.
     /// </summary>
     public sealed class AnimationRiggingIkDriver : IIkSolver {
         private Animator animator;
@@ -33,7 +39,14 @@ namespace VirtualMirror.IK {
         private Transform rightFootTarget;
         private Transform rightKneeHint;
 
+        private float leftArmLength;
+        private float rightArmLength;
+        private float leftLegLength;
+        private float rightLegLength;
+        private Quaternion hipsRestRotation;
+
         private bool bound;
+        private bool active;
 
         public bool IsBound {
             get {
@@ -48,23 +61,47 @@ namespace VirtualMirror.IK {
             }
             animator = targetAnimator;
             animator.enabled = true;
+            // Capture the hips' rest world rotation so landmark offsets (which are in tracking/camera axes)
+            // can be re-expressed in the avatar's facing. Without this, an avatar whose rest hips face a
+            // non-identity direction (e.g. Y=180) gets its hand/foot targets placed behind the body.
+            Transform hipsBone = animator.GetBoneTransform(HumanBodyBones.Hips);
+            hipsRestRotation = hipsBone != null ? hipsBone.rotation : Quaternion.identity;
             Transform rootTransform = targetParent != null ? targetParent : animator.transform;
             CreateTargets(rootTransform);
             CreateRigHierarchy();
+            MeasureLimbLengths();
+            active = true;
             bound = true;
         }
 
+        /// <summary>
+        /// Enable or disable the solver at runtime. When disabled the constraint weights are zeroed so the
+        /// rig stops deforming the arm/leg bones, letting FK drive them instead (mutual exclusion).
+        /// </summary>
+        public void SetActive(bool value) {
+            if (active == value) {
+                return;
+            }
+            active = value;
+            if (!active) {
+                SetConstraintWeight(leftArmConstraint, 0f);
+                SetConstraintWeight(rightArmConstraint, 0f);
+                SetConstraintWeight(leftLegConstraint, 0f);
+                SetConstraintWeight(rightLegConstraint, 0f);
+            }
+        }
+
         public void Apply(PoseFrame frame, float minConfidence) {
-            if (!bound || frame == null || !frame.IsValid || animator == null) {
+            if (!bound || !active || frame == null || !frame.IsValid || animator == null) {
                 return;
             }
             Transform hips = animator.GetBoneTransform(HumanBodyBones.Hips);
             Vector3 origin = hips != null ? hips.position : animator.transform.position;
 
-            UpdateArm(frame, JointId.LeftWrist, JointId.LeftElbow, leftHandTarget, leftElbowHint, leftArmConstraint, minConfidence, origin);
-            UpdateArm(frame, JointId.RightWrist, JointId.RightElbow, rightHandTarget, rightElbowHint, rightArmConstraint, minConfidence, origin);
-            UpdateLeg(frame, JointId.LeftAnkle, JointId.LeftKnee, leftFootTarget, leftKneeHint, leftLegConstraint, minConfidence, origin);
-            UpdateLeg(frame, JointId.RightAnkle, JointId.RightKnee, rightFootTarget, rightKneeHint, rightLegConstraint, minConfidence, origin);
+            UpdateArm(frame, JointId.LeftShoulder, JointId.LeftElbow, JointId.LeftWrist, leftHandTarget, leftElbowHint, leftArmConstraint, minConfidence, origin, leftArmLength);
+            UpdateArm(frame, JointId.RightShoulder, JointId.RightElbow, JointId.RightWrist, rightHandTarget, rightElbowHint, rightArmConstraint, minConfidence, origin, rightArmLength);
+            UpdateLeg(frame, JointId.LeftHip, JointId.LeftKnee, JointId.LeftAnkle, leftFootTarget, leftKneeHint, leftLegConstraint, minConfidence, origin, leftLegLength);
+            UpdateLeg(frame, JointId.RightHip, JointId.RightKnee, JointId.RightAnkle, rightFootTarget, rightKneeHint, rightLegConstraint, minConfidence, origin, rightLegLength);
         }
 
         public void Unbind() {
@@ -86,6 +123,12 @@ namespace VirtualMirror.IK {
             rightArmConstraint = null;
             leftLegConstraint = null;
             rightLegConstraint = null;
+            leftArmLength = 0f;
+            rightArmLength = 0f;
+            leftLegLength = 0f;
+            rightLegLength = 0f;
+            hipsRestRotation = Quaternion.identity;
+            active = false;
             bound = false;
         }
 
@@ -138,6 +181,23 @@ namespace VirtualMirror.IK {
             rigBuilder.Build();
         }
 
+        private void MeasureLimbLengths() {
+            leftArmLength = MeasureChain(HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand);
+            rightArmLength = MeasureChain(HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm, HumanBodyBones.RightHand);
+            leftLegLength = MeasureChain(HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot);
+            rightLegLength = MeasureChain(HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot);
+        }
+
+        private float MeasureChain(HumanBodyBones root, HumanBodyBones mid, HumanBodyBones tip) {
+            Transform rootTransform = animator.GetBoneTransform(root);
+            Transform midTransform = animator.GetBoneTransform(mid);
+            Transform tipTransform = animator.GetBoneTransform(tip);
+            if (rootTransform == null || midTransform == null || tipTransform == null) {
+                return 0f;
+            }
+            return Vector3.Distance(rootTransform.position, midTransform.position) + Vector3.Distance(midTransform.position, tipTransform.position);
+        }
+
         private TwoBoneIKConstraint CreateTwoBoneConstraint(string name, HumanBodyBones rootBone, HumanBodyBones midBone, HumanBodyBones tipBone, Transform target, Transform hint) {
             if (animator == null || target == null || hint == null) {
                 return null;
@@ -162,14 +222,16 @@ namespace VirtualMirror.IK {
             data.target = target;
             data.hint = hint;
             data.targetPositionWeight = 1f;
-            data.targetRotationWeight = 1f;
+            // Position-only IK: the target's rotation is never tracked/set, so weighting it would snap
+            // the hand/foot to world-identity rotation. Keep rotation at rest (weight 0).
+            data.targetRotationWeight = 0f;
             data.hintWeight = 1f;
             constraint.data = data;
 
             return constraint;
         }
 
-        private void UpdateArm(PoseFrame frame, JointId wristJoint, JointId elbowJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, Vector3 origin) {
+        private void UpdateArm(PoseFrame frame, JointId shoulderJoint, JointId elbowJoint, JointId wristJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, Vector3 origin, float avatarLength) {
             if (constraint == null) {
                 return;
             }
@@ -177,15 +239,18 @@ namespace VirtualMirror.IK {
             PoseLandmark elbowLandmark = frame.GetLandmark(elbowJoint);
 
             if (wristLandmark.Confidence >= minConfidence && elbowLandmark.Confidence >= minConfidence) {
-                target.position = origin + wristLandmark.Position;
-                hint.position = origin + elbowLandmark.Position;
+                Vector3 shoulderPosition = frame.GetLandmark(shoulderJoint).Position;
+                float trackedLength = Vector3.Distance(shoulderPosition, elbowLandmark.Position) + Vector3.Distance(elbowLandmark.Position, wristLandmark.Position);
+                float scale = ComputeScale(avatarLength, trackedLength);
+                target.position = origin + hipsRestRotation * (wristLandmark.Position * scale);
+                hint.position = origin + hipsRestRotation * (elbowLandmark.Position * scale);
                 constraint.weight = 1f;
             } else {
                 constraint.weight = 0f;
             }
         }
 
-        private void UpdateLeg(PoseFrame frame, JointId ankleJoint, JointId kneeJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, Vector3 origin) {
+        private void UpdateLeg(PoseFrame frame, JointId hipJoint, JointId kneeJoint, JointId ankleJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, Vector3 origin, float avatarLength) {
             if (constraint == null) {
                 return;
             }
@@ -193,11 +258,27 @@ namespace VirtualMirror.IK {
             PoseLandmark kneeLandmark = frame.GetLandmark(kneeJoint);
 
             if (ankleLandmark.Confidence >= minConfidence && kneeLandmark.Confidence >= minConfidence) {
-                target.position = origin + ankleLandmark.Position;
-                hint.position = origin + kneeLandmark.Position;
+                Vector3 hipPosition = frame.GetLandmark(hipJoint).Position;
+                float trackedLength = Vector3.Distance(hipPosition, kneeLandmark.Position) + Vector3.Distance(kneeLandmark.Position, ankleLandmark.Position);
+                float scale = ComputeScale(avatarLength, trackedLength);
+                target.position = origin + hipsRestRotation * (ankleLandmark.Position * scale);
+                hint.position = origin + hipsRestRotation * (kneeLandmark.Position * scale);
                 constraint.weight = 1f;
             } else {
                 constraint.weight = 0f;
+            }
+        }
+
+        private static float ComputeScale(float avatarLength, float trackedLength) {
+            if (avatarLength <= 1e-4f || trackedLength <= 1e-4f) {
+                return 1f;
+            }
+            return avatarLength / trackedLength;
+        }
+
+        private static void SetConstraintWeight(TwoBoneIKConstraint constraint, float weight) {
+            if (constraint != null) {
+                constraint.weight = weight;
             }
         }
     }

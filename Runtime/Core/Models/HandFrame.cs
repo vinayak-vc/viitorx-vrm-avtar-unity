@@ -1,22 +1,26 @@
 namespace VirtualMirror.Core {
     /// <summary>
-    /// Immutable data model containing finger curl values (0.0 open to 1.0 curled) for both hands.
+    /// Finger curl values (0.0 open to 1.0 curled) for both hands for one tracked frame. Reusable and
+    /// mutable to avoid per-frame allocations on the hot path: a producer owns a <see cref="HandFrame"/>
+    /// instance, fills it in place each frame with <see cref="SetCurls"/> + <see cref="SetMeta"/>
+    /// (or <see cref="MarkInvalid"/>), and hands the reference to a single consumer that reads it
+    /// immediately. When <see cref="IsValid"/> is false, no hand was tracked.
     /// </summary>
     public sealed class HandFrame {
-        private readonly float leftThumbCurl;
-        private readonly float leftIndexCurl;
-        private readonly float leftMiddleCurl;
-        private readonly float leftRingCurl;
-        private readonly float leftLittleCurl;
+        private float leftThumbCurl;
+        private float leftIndexCurl;
+        private float leftMiddleCurl;
+        private float leftRingCurl;
+        private float leftLittleCurl;
 
-        private readonly float rightThumbCurl;
-        private readonly float rightIndexCurl;
-        private readonly float rightMiddleCurl;
-        private readonly float rightRingCurl;
-        private readonly float rightLittleCurl;
+        private float rightThumbCurl;
+        private float rightIndexCurl;
+        private float rightMiddleCurl;
+        private float rightRingCurl;
+        private float rightLittleCurl;
 
-        private readonly double timestampSeconds;
-        private readonly bool isValid;
+        private double timestampSeconds;
+        private bool isValid;
 
         public float LeftThumbCurl {
             get {
@@ -90,10 +94,9 @@ namespace VirtualMirror.Core {
             }
         }
 
-        public HandFrame(
+        public void SetCurls(
             float leftThumbCurl, float leftIndexCurl, float leftMiddleCurl, float leftRingCurl, float leftLittleCurl,
-            float rightThumbCurl, float rightIndexCurl, float rightMiddleCurl, float rightRingCurl, float rightLittleCurl,
-            double timestampSeconds, bool isValid) {
+            float rightThumbCurl, float rightIndexCurl, float rightMiddleCurl, float rightRingCurl, float rightLittleCurl) {
             this.leftThumbCurl = leftThumbCurl;
             this.leftIndexCurl = leftIndexCurl;
             this.leftMiddleCurl = leftMiddleCurl;
@@ -104,8 +107,16 @@ namespace VirtualMirror.Core {
             this.rightMiddleCurl = rightMiddleCurl;
             this.rightRingCurl = rightRingCurl;
             this.rightLittleCurl = rightLittleCurl;
+        }
+
+        public void SetMeta(double timestampSeconds, bool isValid) {
             this.timestampSeconds = timestampSeconds;
             this.isValid = isValid;
+        }
+
+        public void MarkInvalid(double timestampSeconds) {
+            this.timestampSeconds = timestampSeconds;
+            isValid = false;
         }
     }
 }

@@ -21,7 +21,9 @@ namespace VirtualMirror.Tests {
         [Test]
         public void Apply_WhenUnbound_DoesNotThrow() {
             HumanoidHandRetargeter retargeter = new HumanoidHandRetargeter();
-            HandFrame frame = new HandFrame(0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0, true);
+            HandFrame frame = new HandFrame();
+            frame.SetCurls(0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f);
+            frame.SetMeta(1.0, true);
             Assert.DoesNotThrow(() => retargeter.Apply(frame));
         }
     }

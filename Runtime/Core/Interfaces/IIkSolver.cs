@@ -9,6 +9,7 @@ namespace VirtualMirror.Core {
     public interface IIkSolver : IDisposable {
         bool IsBound { get; }
         void Bind(Animator animator, Transform targetParent);
+        void SetActive(bool active);
         void Apply(PoseFrame frame, float minConfidence);
         void Unbind();
     }

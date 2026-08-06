@@ -14,7 +14,9 @@ namespace VirtualMirror.Tests {
         [Test]
         public void Apply_WhenUnbound_DoesNotThrow() {
             VrmExpressionRetargeter retargeter = new VrmExpressionRetargeter();
-            FaceFrame frame = new FaceFrame(0.5f, 0.5f, 0.2f, 0.8f, 0f, 0f, 1.0, true);
+            FaceFrame frame = new FaceFrame();
+            frame.SetExpressions(0.5f, 0.5f, 0.2f, 0.8f, 0f, 0f);
+            frame.SetMeta(1.0, true);
             Assert.DoesNotThrow(() => retargeter.Apply(frame));
         }
 

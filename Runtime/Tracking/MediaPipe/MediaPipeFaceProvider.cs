@@ -8,30 +8,31 @@ using UnityEngine;
 using Mediapipe.Tasks.Components.Containers;
 using Mediapipe.Tasks.Core;
 using Mediapipe.Tasks.Vision.Core;
-using Mediapipe.Tasks.Vision.PoseLandmarker;
+using Mediapipe.Tasks.Vision.FaceLandmarker;
 using Mediapipe.Unity.Experimental;
 
 using VirtualMirror.Core;
 
 namespace VirtualMirror.Tracking.MediaPipe {
     /// <summary>
-    /// <see cref="IBodyTrackingProvider"/> backed by the MediaPipe Pose Landmarker (homuler plugin,
-    /// ADR-010). Runs the FULL model on the CPU in VIDEO mode, reading frames from
-    /// <see cref="ICameraCapture"/>. Emits world landmarks converted to Unity space so the retargeter
-    /// stays source-agnostic. Offloads inference to a background thread to keep main thread responsive.
-    /// Only this file references MediaPipe types.
+    /// <see cref="IFaceTrackingProvider"/> backed by the MediaPipe Face Landmarker (homuler plugin,
+    /// ADR-010). Runs on the CPU in VIDEO mode with blendshape output enabled, reading frames from
+    /// <see cref="ICameraCapture"/> and mapping the ARKit-style blendshape categories to
+    /// <see cref="FaceFrame"/> expression weights. Mirrors <see cref="MediaPipePoseProvider"/> exactly:
+    /// inference is offloaded to a background thread while the main thread owns the (non-thread-safe)
+    /// <see cref="TextureFramePool"/> and <see cref="Mediapipe.Image"/>, with a double-buffered reusable
+    /// <see cref="FaceFrame"/> so there is no per-frame allocation. Only this file references MediaPipe types.
     /// </summary>
-    public sealed class MediaPipePoseProvider : IBodyTrackingProvider {
+    public sealed class MediaPipeFaceProvider : IFaceTrackingProvider {
         private readonly object workerLock;
         private readonly ILogService logService;
         private readonly ICameraCapture cameraCapture;
         private readonly string modelPath;
-        private readonly PoseSpaceConverter converter;
 
-        private PoseLandmarker landmarker;
+        private FaceLandmarker landmarker;
         private TextureFramePool texturePool;
         private ImageProcessingOptions imageProcessingOptions;
-        private PoseLandmarkerResult result;
+        private FaceLandmarkerResult result;
         private int poolWidth;
         private int poolHeight;
         private long timestampMillis;
@@ -39,67 +40,67 @@ namespace VirtualMirror.Tracking.MediaPipe {
         private bool isWorkerBusy;
         private bool hasNewFrame;
         private bool hasAnyFrame;
-        private PoseFrame workerFrame;
-        private PoseFrame mainFrame;
+        private FaceFrame workerFrame;
+        private FaceFrame mainFrame;
         private TextureFrame inFlightTextureFrame;
         private Mediapipe.Image inFlightImage;
 
-        public MediaPipePoseProvider(ILogService logService, ICameraCapture cameraCapture, string modelPath, PoseSpaceConverter converter) {
+        public MediaPipeFaceProvider(ILogService logService, ICameraCapture cameraCapture, string modelPath) {
             if (logService == null) {
                 throw new ArgumentNullException(nameof(logService));
             }
             if (cameraCapture == null) {
                 throw new ArgumentNullException(nameof(cameraCapture));
             }
-            if (converter == null) {
-                throw new ArgumentNullException(nameof(converter));
-            }
             workerLock = new object();
             this.logService = logService;
             this.cameraCapture = cameraCapture;
             this.modelPath = modelPath;
-            this.converter = converter;
         }
 
-        public bool IsRunning {
+        public bool IsTracking {
             get {
                 return running;
             }
         }
 
-        public void StartTracking() {
+        public bool StartTracking() {
             if (running) {
-                return;
+                return true;
             }
             if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath)) {
-                logService.Log(LogLevel.Error, "MediaPipe pose model not found at: " + modelPath);
-                return;
+                logService.Log(LogLevel.Warning, "MediaPipe face model not found at: " + modelPath);
+                return false;
             }
             try {
                 MediaPipeGlobalInit.Acquire(logService);
                 byte[] modelBytes = File.ReadAllBytes(modelPath);
                 BaseOptions baseOptions = new BaseOptions(BaseOptions.Delegate.CPU, modelAssetBuffer: modelBytes);
-                PoseLandmarkerOptions options = new PoseLandmarkerOptions(
+                FaceLandmarkerOptions options = new FaceLandmarkerOptions(
                     baseOptions,
                     runningMode: RunningMode.VIDEO,
-                    numPoses: 1,
-                    minPoseDetectionConfidence: 0.5f,
-                    minPosePresenceConfidence: 0.5f,
+                    numFaces: 1,
+                    minFaceDetectionConfidence: 0.5f,
+                    minFacePresenceConfidence: 0.5f,
                     minTrackingConfidence: 0.5f,
-                    outputSegmentationMasks: false,
+                    outputFaceBlendshapes: true,
+                    outputFaceTransformationMatrixes: false,
                     resultCallback: null);
-                landmarker = PoseLandmarker.CreateFromOptions(options, null);
+                landmarker = FaceLandmarker.CreateFromOptions(options, null);
                 imageProcessingOptions = new ImageProcessingOptions(rotationDegrees: 0);
-                result = PoseLandmarkerResult.Alloc(1, false);
-                workerFrame = new PoseFrame();
-                mainFrame = new PoseFrame();
+                result = FaceLandmarkerResult.Alloc(1, true, false);
+                workerFrame = new FaceFrame();
+                mainFrame = new FaceFrame();
                 hasNewFrame = false;
                 hasAnyFrame = false;
                 running = true;
-                logService.Log(LogLevel.Info, "MediaPipe pose provider started (CPU, VIDEO, full model, async worker).");
+                logService.Log(LogLevel.Info, "MediaPipe face provider started (CPU, VIDEO, blendshapes, async worker).");
+                return true;
             } catch (Exception exception) {
-                logService.LogException(exception, "Failed to start MediaPipe pose provider");
+                logService.LogException(exception, "Failed to start MediaPipe face provider");
+                MediaPipeGlobalInit.Release(logService);
                 running = false;
+                return false;
             }
         }
 
@@ -146,7 +147,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
                     ProcessFrameOnWorker(image, currentTimestamp);
                 });
             } catch (Exception exception) {
-                logService.LogException(exception, "MediaPipe pose detection frame submit failed");
+                logService.LogException(exception, "MediaPipe face detection frame submit failed");
                 ReleaseInFlight();
                 lock (workerLock) {
                     isWorkerBusy = false;
@@ -154,10 +155,10 @@ namespace VirtualMirror.Tracking.MediaPipe {
             }
         }
 
-        public bool TryGetLatestFrame(out PoseFrame frame) {
+        public bool TryGetFrame(out FaceFrame frame) {
             lock (workerLock) {
                 if (hasNewFrame) {
-                    PoseFrame temp = mainFrame;
+                    FaceFrame temp = mainFrame;
                     mainFrame = workerFrame;
                     workerFrame = temp;
                     hasNewFrame = false;
@@ -184,7 +185,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
                 try {
                     landmarker.Close();
                 } catch (Exception exception) {
-                    logService.LogException(exception, "Failed to close MediaPipe pose landmarker");
+                    logService.LogException(exception, "Failed to close MediaPipe face landmarker");
                 }
                 landmarker = null;
             }
@@ -207,7 +208,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
                     hasNewFrame = true;
                 }
             } catch (Exception exception) {
-                logService.LogException(exception, "MediaPipe pose worker detection failed");
+                logService.LogException(exception, "MediaPipe face worker detection failed");
             } finally {
                 // Do NOT touch the pool/Image here — the main thread owns them (see ReleaseInFlight).
                 lock (workerLock) {
@@ -227,25 +228,71 @@ namespace VirtualMirror.Tracking.MediaPipe {
             }
         }
 
-        private void FillFrameFromWorker(PoseLandmarkerResult currentResult, long timestamp) {
-            List<Landmarks> worldLandmarks = currentResult.poseWorldLandmarks;
-            if (worldLandmarks == null || worldLandmarks.Count == 0) {
+        private void FillFrameFromWorker(FaceLandmarkerResult currentResult, long timestamp) {
+            List<Classifications> blendshapes = currentResult.faceBlendshapes;
+            if (blendshapes == null || blendshapes.Count == 0) {
                 workerFrame.MarkInvalid(timestamp * 0.001);
                 return;
             }
-            List<Landmark> landmarks = worldLandmarks[0].landmarks;
-            if (landmarks == null || landmarks.Count < PoseFrame.LandmarkCount) {
+            List<Category> categories = blendshapes[0].categories;
+            if (categories == null || categories.Count == 0) {
                 workerFrame.MarkInvalid(timestamp * 0.001);
                 return;
             }
+
+            float blinkLeft = 0f;
+            float blinkRight = 0f;
+            float jawOpen = 0f;
+            float smileLeft = 0f;
+            float smileRight = 0f;
+            float browDownLeft = 0f;
+            float browDownRight = 0f;
+            float browInnerUp = 0f;
+            float eyeWideLeft = 0f;
+            float eyeWideRight = 0f;
+
             int index = 0;
-            while (index < PoseFrame.LandmarkCount) {
-                Landmark landmark = landmarks[index];
-                Vector3 unityPosition = converter.ToUnity(landmark.x, landmark.y, landmark.z);
-                float confidence = landmark.visibility.GetValueOrDefault(1f);
-                workerFrame.SetLandmark(index, new PoseLandmark(unityPosition, confidence));
+            while (index < categories.Count) {
+                Category category = categories[index];
                 index = index + 1;
+                switch (category.categoryName) {
+                    case "eyeBlinkLeft":
+                        blinkLeft = category.score;
+                        break;
+                    case "eyeBlinkRight":
+                        blinkRight = category.score;
+                        break;
+                    case "jawOpen":
+                        jawOpen = category.score;
+                        break;
+                    case "mouthSmileLeft":
+                        smileLeft = category.score;
+                        break;
+                    case "mouthSmileRight":
+                        smileRight = category.score;
+                        break;
+                    case "browDownLeft":
+                        browDownLeft = category.score;
+                        break;
+                    case "browDownRight":
+                        browDownRight = category.score;
+                        break;
+                    case "browInnerUp":
+                        browInnerUp = category.score;
+                        break;
+                    case "eyeWideLeft":
+                        eyeWideLeft = category.score;
+                        break;
+                    case "eyeWideRight":
+                        eyeWideRight = category.score;
+                        break;
+                }
             }
+
+            float smile = Mathf.Max(smileLeft, smileRight);
+            float angry = Mathf.Max(browDownLeft, browDownRight);
+            float surprised = Mathf.Max(browInnerUp, Mathf.Max(eyeWideLeft, eyeWideRight));
+            workerFrame.SetExpressions(blinkLeft, blinkRight, jawOpen, smile, angry, surprised);
             workerFrame.SetMeta(timestamp * 0.001, true);
         }
 
@@ -263,4 +310,3 @@ namespace VirtualMirror.Tracking.MediaPipe {
         }
     }
 }
-

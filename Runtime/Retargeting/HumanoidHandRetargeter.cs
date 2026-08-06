@@ -102,9 +102,12 @@ namespace VirtualMirror.Retargeting {
             int count = list.Count;
             while (i < count && i < curls.Length) {
                 FingerJointPair joint = list[i];
-                float curlAmount = Mathf.Clamp01(curls[i]);
-                Quaternion curlRotation = Quaternion.AngleAxis(curlAmount * joint.maxDegrees, joint.bendAxis);
-                joint.transform.localRotation = joint.restLocalRotation * curlRotation;
+                if (joint.transform != null)
+                {
+                    float curlAmount = Mathf.Clamp01(curls[i]);
+                    Quaternion curlRotation = Quaternion.AngleAxis(curlAmount * joint.maxDegrees, joint.bendAxis);
+                    joint.transform.localRotation = joint.restLocalRotation * curlRotation;
+                }
                 i = i + 1;
             }
         }

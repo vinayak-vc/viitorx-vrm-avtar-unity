@@ -154,7 +154,7 @@ MonoBehaviour:
   settingsSaveDebounceSeconds: 0.4
   mirrorLogToConsole: 1
   maxAvatarFileBytes: 268435456
-  useVideoSource: 0
+  useVideoSource: 1
   sampleVideoPath: C:/Unity/viitorx-vrm-avtar-unity-base-project/sampleVRMFiles/sample
     video.mp4
   cameraWidth: 1280
@@ -169,9 +169,15 @@ MonoBehaviour:
   poseFlipY: 1
   poseFlipZ: 1
   retargetMinConfidence: 0.5
+  retargetExitConfidence: 0.3
+  poseStaleSeconds: 0.5
   useIkDriver: 1
   useFaceTracking: 1
+  useMediaPipeFace: 1
+  faceModelFileName: face_landmarker.bytes
   useHandTracking: 1
+  useMediaPipeHand: 1
+  handModelFileName: hand_landmarker.bytes
 --- !u!4 &375600628
 Transform:
   m_ObjectHideFlags: 0

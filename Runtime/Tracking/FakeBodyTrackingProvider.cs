@@ -7,16 +7,16 @@ namespace VirtualMirror.Tracking {
     /// Deterministic <see cref="IBodyTrackingProvider"/> that synthesizes a waving-arms pose. Used to
     /// exercise the filter → retarget → avatar path without MediaPipe. Landmarks are emitted in a
     /// Unity-aligned space (X right, Y up, Z forward) so the retargeter maps directions directly.
+    /// Reuses a single <see cref="PoseFrame"/> to avoid per-frame allocations.
     /// </summary>
     public sealed class FakeBodyTrackingProvider : IBodyTrackingProvider {
-        private readonly PoseLandmark[] buffer;
+        private readonly PoseFrame frame;
 
         private bool running;
         private float phase;
-        private PoseFrame latest;
 
         public FakeBodyTrackingProvider() {
-            buffer = new PoseLandmark[PoseFrame.LandmarkCount];
+            frame = new PoseFrame();
         }
 
         public bool IsRunning {
@@ -42,19 +42,18 @@ namespace VirtualMirror.Tracking {
         }
 
         public bool TryGetLatestFrame(out PoseFrame frame) {
-            frame = latest;
-            return latest != null;
+            frame = this.frame;
+            return true;
         }
 
         public void Dispose() {
             running = false;
-            latest = null;
         }
 
         private void BuildPose() {
             int index = 0;
-            while (index < buffer.Length) {
-                buffer[index] = new PoseLandmark(Vector3.zero, 0f);
+            while (index < PoseFrame.LandmarkCount) {
+                frame.SetLandmark(index, new PoseLandmark(Vector3.zero, 0f));
                 index = index + 1;
             }
 
@@ -82,13 +81,11 @@ namespace VirtualMirror.Tracking {
             Set(JointId.LeftAnkle, new Vector3(0.1f, 0.08f, 0f));
             Set(JointId.RightAnkle, new Vector3(-0.1f, 0.08f, 0f));
 
-            PoseLandmark[] copy = new PoseLandmark[PoseFrame.LandmarkCount];
-            System.Array.Copy(buffer, copy, PoseFrame.LandmarkCount);
-            latest = new PoseFrame(copy, phase, true);
+            frame.SetMeta(phase, true);
         }
 
         private void Set(JointId joint, Vector3 position) {
-            buffer[(int)joint] = new PoseLandmark(position, 1f);
+            frame.SetLandmark((int)joint, new PoseLandmark(position, 1f));
         }
     }
 }

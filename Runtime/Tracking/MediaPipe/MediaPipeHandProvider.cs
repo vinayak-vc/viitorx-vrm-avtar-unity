@@ -8,30 +8,41 @@ using UnityEngine;
 using Mediapipe.Tasks.Components.Containers;
 using Mediapipe.Tasks.Core;
 using Mediapipe.Tasks.Vision.Core;
-using Mediapipe.Tasks.Vision.PoseLandmarker;
+using Mediapipe.Tasks.Vision.HandLandmarker;
 using Mediapipe.Unity.Experimental;
 
 using VirtualMirror.Core;
 
 namespace VirtualMirror.Tracking.MediaPipe {
     /// <summary>
-    /// <see cref="IBodyTrackingProvider"/> backed by the MediaPipe Pose Landmarker (homuler plugin,
-    /// ADR-010). Runs the FULL model on the CPU in VIDEO mode, reading frames from
-    /// <see cref="ICameraCapture"/>. Emits world landmarks converted to Unity space so the retargeter
-    /// stays source-agnostic. Offloads inference to a background thread to keep main thread responsive.
-    /// Only this file references MediaPipe types.
+    /// <see cref="IHandTrackingProvider"/> backed by the MediaPipe Hand Landmarker (homuler plugin,
+    /// ADR-010). Runs on the CPU in VIDEO mode for up to two hands, reading frames from
+    /// <see cref="ICameraCapture"/>, and reduces the 21 world landmarks per hand to a per-finger curl
+    /// (0 open .. 1 curled) derived from the bend angle at each finger's middle joint. Mirrors
+    /// <see cref="MediaPipePoseProvider"/> exactly: inference runs on a background thread while the main
+    /// thread owns the (non-thread-safe) <see cref="TextureFramePool"/> and <see cref="Mediapipe.Image"/>,
+    /// with a double-buffered reusable <see cref="HandFrame"/> so there is no per-frame allocation.
+    /// Only this file references MediaPipe hand types.
     /// </summary>
-    public sealed class MediaPipePoseProvider : IBodyTrackingProvider {
+    public sealed class MediaPipeHandProvider : IHandTrackingProvider {
+        // MediaPipe hand landmark indices: [proximal, middle, tip] joints per finger.
+        private static readonly int[] ThumbJoints = new int[] { 2, 3, 4 };
+        private static readonly int[] IndexJoints = new int[] { 5, 6, 8 };
+        private static readonly int[] MiddleJoints = new int[] { 9, 10, 12 };
+        private static readonly int[] RingJoints = new int[] { 13, 14, 16 };
+        private static readonly int[] LittleJoints = new int[] { 17, 18, 20 };
+        private const int HandLandmarkCount = 21;
+        private const float MaxBendAngle = 160f;
+
         private readonly object workerLock;
         private readonly ILogService logService;
         private readonly ICameraCapture cameraCapture;
         private readonly string modelPath;
-        private readonly PoseSpaceConverter converter;
 
-        private PoseLandmarker landmarker;
+        private HandLandmarker landmarker;
         private TextureFramePool texturePool;
         private ImageProcessingOptions imageProcessingOptions;
-        private PoseLandmarkerResult result;
+        private HandLandmarkerResult result;
         private int poolWidth;
         private int poolHeight;
         private long timestampMillis;
@@ -39,67 +50,65 @@ namespace VirtualMirror.Tracking.MediaPipe {
         private bool isWorkerBusy;
         private bool hasNewFrame;
         private bool hasAnyFrame;
-        private PoseFrame workerFrame;
-        private PoseFrame mainFrame;
+        private HandFrame workerFrame;
+        private HandFrame mainFrame;
         private TextureFrame inFlightTextureFrame;
         private Mediapipe.Image inFlightImage;
 
-        public MediaPipePoseProvider(ILogService logService, ICameraCapture cameraCapture, string modelPath, PoseSpaceConverter converter) {
+        public MediaPipeHandProvider(ILogService logService, ICameraCapture cameraCapture, string modelPath) {
             if (logService == null) {
                 throw new ArgumentNullException(nameof(logService));
             }
             if (cameraCapture == null) {
                 throw new ArgumentNullException(nameof(cameraCapture));
             }
-            if (converter == null) {
-                throw new ArgumentNullException(nameof(converter));
-            }
             workerLock = new object();
             this.logService = logService;
             this.cameraCapture = cameraCapture;
             this.modelPath = modelPath;
-            this.converter = converter;
         }
 
-        public bool IsRunning {
+        public bool IsTracking {
             get {
                 return running;
             }
         }
 
-        public void StartTracking() {
+        public bool StartTracking() {
             if (running) {
-                return;
+                return true;
             }
             if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath)) {
-                logService.Log(LogLevel.Error, "MediaPipe pose model not found at: " + modelPath);
-                return;
+                logService.Log(LogLevel.Warning, "MediaPipe hand model not found at: " + modelPath);
+                return false;
             }
             try {
                 MediaPipeGlobalInit.Acquire(logService);
                 byte[] modelBytes = File.ReadAllBytes(modelPath);
                 BaseOptions baseOptions = new BaseOptions(BaseOptions.Delegate.CPU, modelAssetBuffer: modelBytes);
-                PoseLandmarkerOptions options = new PoseLandmarkerOptions(
+                HandLandmarkerOptions options = new HandLandmarkerOptions(
                     baseOptions,
                     runningMode: RunningMode.VIDEO,
-                    numPoses: 1,
-                    minPoseDetectionConfidence: 0.5f,
-                    minPosePresenceConfidence: 0.5f,
+                    numHands: 2,
+                    minHandDetectionConfidence: 0.5f,
+                    minHandPresenceConfidence: 0.5f,
                     minTrackingConfidence: 0.5f,
-                    outputSegmentationMasks: false,
                     resultCallback: null);
-                landmarker = PoseLandmarker.CreateFromOptions(options, null);
+                landmarker = HandLandmarker.CreateFromOptions(options, null);
                 imageProcessingOptions = new ImageProcessingOptions(rotationDegrees: 0);
-                result = PoseLandmarkerResult.Alloc(1, false);
-                workerFrame = new PoseFrame();
-                mainFrame = new PoseFrame();
+                result = HandLandmarkerResult.Alloc(2);
+                workerFrame = new HandFrame();
+                mainFrame = new HandFrame();
                 hasNewFrame = false;
                 hasAnyFrame = false;
                 running = true;
-                logService.Log(LogLevel.Info, "MediaPipe pose provider started (CPU, VIDEO, full model, async worker).");
+                logService.Log(LogLevel.Info, "MediaPipe hand provider started (CPU, VIDEO, 2 hands, async worker).");
+                return true;
             } catch (Exception exception) {
-                logService.LogException(exception, "Failed to start MediaPipe pose provider");
+                logService.LogException(exception, "Failed to start MediaPipe hand provider");
+                MediaPipeGlobalInit.Release(logService);
                 running = false;
+                return false;
             }
         }
 
@@ -146,7 +155,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
                     ProcessFrameOnWorker(image, currentTimestamp);
                 });
             } catch (Exception exception) {
-                logService.LogException(exception, "MediaPipe pose detection frame submit failed");
+                logService.LogException(exception, "MediaPipe hand detection frame submit failed");
                 ReleaseInFlight();
                 lock (workerLock) {
                     isWorkerBusy = false;
@@ -154,10 +163,10 @@ namespace VirtualMirror.Tracking.MediaPipe {
             }
         }
 
-        public bool TryGetLatestFrame(out PoseFrame frame) {
+        public bool TryGetFrame(out HandFrame frame) {
             lock (workerLock) {
                 if (hasNewFrame) {
-                    PoseFrame temp = mainFrame;
+                    HandFrame temp = mainFrame;
                     mainFrame = workerFrame;
                     workerFrame = temp;
                     hasNewFrame = false;
@@ -184,7 +193,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
                 try {
                     landmarker.Close();
                 } catch (Exception exception) {
-                    logService.LogException(exception, "Failed to close MediaPipe pose landmarker");
+                    logService.LogException(exception, "Failed to close MediaPipe hand landmarker");
                 }
                 landmarker = null;
             }
@@ -207,7 +216,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
                     hasNewFrame = true;
                 }
             } catch (Exception exception) {
-                logService.LogException(exception, "MediaPipe pose worker detection failed");
+                logService.LogException(exception, "MediaPipe hand worker detection failed");
             } finally {
                 // Do NOT touch the pool/Image here — the main thread owns them (see ReleaseInFlight).
                 lock (workerLock) {
@@ -227,26 +236,86 @@ namespace VirtualMirror.Tracking.MediaPipe {
             }
         }
 
-        private void FillFrameFromWorker(PoseLandmarkerResult currentResult, long timestamp) {
-            List<Landmarks> worldLandmarks = currentResult.poseWorldLandmarks;
+        private void FillFrameFromWorker(HandLandmarkerResult currentResult, long timestamp) {
+            List<Landmarks> worldLandmarks = currentResult.handWorldLandmarks;
+            List<Classifications> handedness = currentResult.handedness;
             if (worldLandmarks == null || worldLandmarks.Count == 0) {
                 workerFrame.MarkInvalid(timestamp * 0.001);
                 return;
             }
-            List<Landmark> landmarks = worldLandmarks[0].landmarks;
-            if (landmarks == null || landmarks.Count < PoseFrame.LandmarkCount) {
-                workerFrame.MarkInvalid(timestamp * 0.001);
-                return;
+
+            float leftThumb = 0f;
+            float leftIndex = 0f;
+            float leftMiddle = 0f;
+            float leftRing = 0f;
+            float leftLittle = 0f;
+            float rightThumb = 0f;
+            float rightIndex = 0f;
+            float rightMiddle = 0f;
+            float rightRing = 0f;
+            float rightLittle = 0f;
+
+            int handIndex = 0;
+            while (handIndex < worldLandmarks.Count) {
+                List<Landmark> landmarks = worldLandmarks[handIndex].landmarks;
+                if (landmarks == null || landmarks.Count < HandLandmarkCount) {
+                    handIndex = handIndex + 1;
+                    continue;
+                }
+                bool isLeft = IsLeftHand(handedness, handIndex);
+                float thumb = FingerCurl(landmarks, ThumbJoints);
+                float index = FingerCurl(landmarks, IndexJoints);
+                float middle = FingerCurl(landmarks, MiddleJoints);
+                float ring = FingerCurl(landmarks, RingJoints);
+                float little = FingerCurl(landmarks, LittleJoints);
+                if (isLeft) {
+                    leftThumb = thumb;
+                    leftIndex = index;
+                    leftMiddle = middle;
+                    leftRing = ring;
+                    leftLittle = little;
+                } else {
+                    rightThumb = thumb;
+                    rightIndex = index;
+                    rightMiddle = middle;
+                    rightRing = ring;
+                    rightLittle = little;
+                }
+                handIndex = handIndex + 1;
             }
-            int index = 0;
-            while (index < PoseFrame.LandmarkCount) {
-                Landmark landmark = landmarks[index];
-                Vector3 unityPosition = converter.ToUnity(landmark.x, landmark.y, landmark.z);
-                float confidence = landmark.visibility.GetValueOrDefault(1f);
-                workerFrame.SetLandmark(index, new PoseLandmark(unityPosition, confidence));
-                index = index + 1;
-            }
+
+            workerFrame.SetCurls(
+                leftThumb, leftIndex, leftMiddle, leftRing, leftLittle,
+                rightThumb, rightIndex, rightMiddle, rightRing, rightLittle);
             workerFrame.SetMeta(timestamp * 0.001, true);
+        }
+
+        private static bool IsLeftHand(List<Classifications> handedness, int handIndex) {
+            if (handedness == null || handIndex >= handedness.Count) {
+                return handIndex == 0;
+            }
+            List<Category> categories = handedness[handIndex].categories;
+            if (categories == null || categories.Count == 0) {
+                return handIndex == 0;
+            }
+            return categories[0].categoryName == "Left";
+        }
+
+        private static float FingerCurl(List<Landmark> landmarks, int[] joints) {
+            Vector3 proximal = ToVector(landmarks[joints[0]]);
+            Vector3 middle = ToVector(landmarks[joints[1]]);
+            Vector3 tip = ToVector(landmarks[joints[2]]);
+            Vector3 lower = middle - proximal;
+            Vector3 upper = tip - middle;
+            if (lower.sqrMagnitude < 1e-10f || upper.sqrMagnitude < 1e-10f) {
+                return 0f;
+            }
+            float angle = Vector3.Angle(lower, upper);
+            return Mathf.Clamp01(angle / MaxBendAngle);
+        }
+
+        private static Vector3 ToVector(Landmark landmark) {
+            return new Vector3(landmark.x, landmark.y, landmark.z);
         }
 
         private void EnsurePool(int width, int height) {
@@ -263,4 +332,3 @@ namespace VirtualMirror.Tracking.MediaPipe {
         }
     }
 }
-

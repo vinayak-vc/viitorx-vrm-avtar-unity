@@ -6,6 +6,7 @@ namespace VirtualMirror.Tracking {
     /// Procedural fake face tracking provider for testing facial expressions (blinks, mouth opening, smiles).
     /// </summary>
     public sealed class FakeFaceTrackingProvider : IFaceTrackingProvider {
+        private readonly FaceFrame frame = new FaceFrame();
         private bool tracking;
         private float elapsedTime;
 
@@ -32,9 +33,9 @@ namespace VirtualMirror.Tracking {
             tracking = false;
         }
 
-        public bool TryGetFrame(out FaceFrame frame) {
+        public bool TryGetFrame(out FaceFrame faceFrame) {
             if (!tracking) {
-                frame = null;
+                faceFrame = null;
                 return false;
             }
 
@@ -48,7 +49,9 @@ namespace VirtualMirror.Tracking {
             // Subtle smile wave
             float smile = (Mathf.Cos(elapsedTime * 1.5f) + 1f) * 0.3f;
 
-            frame = new FaceFrame(blink, blink, mouthOpen, smile, 0f, 0f, elapsedTime, true);
+            frame.SetExpressions(blink, blink, mouthOpen, smile, 0f, 0f);
+            frame.SetMeta(elapsedTime, true);
+            faceFrame = frame;
             return true;
         }
 
