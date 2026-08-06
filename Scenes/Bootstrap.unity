@@ -155,7 +155,7 @@ MonoBehaviour:
   mirrorLogToConsole: 1
   maxAvatarFileBytes: 268435456
   useVideoSource: 0
-  sampleVideoPath: D:\Unity\viitorx-vrm-avtar-unity-base-project\Assets\Games\viitorx-vrm-avtar-unity\StreamingAssets\Videos\vid.mp4
+  sampleVideoPath: C:\Unity\viitorx-vrm-avtar-unity-base-project\Assets\StreamingAssets\vid.mp4
   cameraWidth: 1280
   cameraHeight: 720
   cameraFps: 30
