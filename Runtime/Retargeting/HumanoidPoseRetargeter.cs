@@ -67,15 +67,22 @@ namespace VirtualMirror.Retargeting {
             public readonly Quaternion AvatarRestRotation;
             public readonly JointId RightFrom;
             public readonly JointId RightTo;
+            // When true, this bone uses a STABLE vertical up instead of the live torso-up. Used for the Hips
+            // (pelvis): with the shared torso-up, a forward waist bend tilts the up-vector and rotates BOTH
+            // hips and spine together → the whole body tilts rigidly. Anchoring the hips to vertical means the
+            // hips only track facing (yaw) / side-lean from the hip line and stay upright, so the SPINE (which
+            // keeps the live torso-up) carries the forward bend → a real waist bend, not a rigid tilt.
+            public readonly bool StableUp;
 
             public Quaternion NeutralBasis;
             public bool HasNeutral;
 
-            public BasisBone(Transform bone, Quaternion avatarRestRotation, JointId rightFrom, JointId rightTo) {
+            public BasisBone(Transform bone, Quaternion avatarRestRotation, JointId rightFrom, JointId rightTo, bool stableUp) {
                 Bone = bone;
                 AvatarRestRotation = avatarRestRotation;
                 RightFrom = rightFrom;
                 RightTo = rightTo;
+                StableUp = stableUp;
                 NeutralBasis = Quaternion.identity;
                 HasNeutral = false;
             }
@@ -181,8 +188,11 @@ namespace VirtualMirror.Retargeting {
                 if (right.magnitude < MinTorsoVectorMagnitude) {
                     continue;
                 }
+                // Hips use a stable vertical up (no forward pitch → no rigid whole-body tilt on a waist bend);
+                // the spine uses the live torso-up so it carries the bend. See BasisBone.StableUp.
+                Vector3 boneUp = basisBone.StableUp ? Vector3.up : up;
                 Quaternion currentBasis;
-                if (!RotationFromVectors.TryBasis(right, up, out currentBasis)) {
+                if (!RotationFromVectors.TryBasis(right, boneUp, out currentBasis)) {
                     continue;
                 }
                 if (!basisBone.HasNeutral) {
@@ -253,16 +263,17 @@ namespace VirtualMirror.Retargeting {
         }
 
         private void BindBasisBones(Animator animator) {
-            AddBasisBone(animator, HumanBodyBones.Hips, JointId.LeftHip, JointId.RightHip);
-            AddBasisBone(animator, HumanBodyBones.Spine, JointId.LeftShoulder, JointId.RightShoulder);
+            // Hips: stable vertical up (yaw/side-lean only, stays upright). Spine: live torso-up (carries bend).
+            AddBasisBone(animator, HumanBodyBones.Hips, JointId.LeftHip, JointId.RightHip, true);
+            AddBasisBone(animator, HumanBodyBones.Spine, JointId.LeftShoulder, JointId.RightShoulder, false);
         }
 
-        private void AddBasisBone(Animator animator, HumanBodyBones bone, JointId rightFrom, JointId rightTo) {
+        private void AddBasisBone(Animator animator, HumanBodyBones bone, JointId rightFrom, JointId rightTo, bool stableUp) {
             Transform transform = animator.GetBoneTransform(bone);
             if (transform == null) {
                 return;
             }
-            basisBones.Add(new BasisBone(transform, transform.rotation, rightFrom, rightTo));
+            basisBones.Add(new BasisBone(transform, transform.rotation, rightFrom, rightTo, stableUp));
         }
 
         private static bool UpdateGate(bool active, float confidence, float enterConfidence, float exitConfidence) {

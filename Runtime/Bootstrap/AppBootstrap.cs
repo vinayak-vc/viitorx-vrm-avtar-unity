@@ -18,6 +18,7 @@ using VirtualMirror.Settings;
 using VirtualMirror.Tracking;
 using VirtualMirror.Tracking.Filtering;
 using VirtualMirror.Tracking.MediaPipe;
+using VirtualMirror.Tracking.OakD;
 using VirtualMirror.Tracking.Sentis;
 using VirtualMirror.UI;
 
@@ -62,6 +63,16 @@ namespace VirtualMirror.App {
         [SerializeField] private Unity.InferenceEngine.ModelAsset sentisModel;
         [SerializeField] private bool sentisImageNetNorm = true;
         [SerializeField] private float sentisMetreScale = 1.7f;
+        [SerializeField] private float sentisDepthScale = 0.8f;
+        [SerializeField] private bool sentisPersonCrop = true;
+        [SerializeField] private float sentisFilterBeta = 0.6f;
+        [SerializeField] private float sentisFilterMinCutoff = 1.5f;
+        [SerializeField] private bool useOakDTracking = false; // B1 (in-Unity native plugin) — abandoned, keep off
+        [SerializeField] private string oakModelFileName = "movenet_singlepose_lightning_3.blob";
+        [SerializeField] private int oakDeviceNum = 0;
+        [SerializeField] private float oakLandmarkThreshold = 0.3f;
+        [SerializeField] private bool useOakUdpTracking = false; // B2 (Python sidecar over UDP) — ADR-016
+        [SerializeField] private int oakUdpPort = 8899;
 
         private ServiceRegistry services;
         private LogService logService;
@@ -151,6 +162,11 @@ namespace VirtualMirror.App {
                 return;
             }
             float deltaSeconds = Time.deltaTime;
+            if (bodyProvider is SentisPoseProvider) {
+                // Push the amplitude knobs live so they can be tuned in the Inspector during Play.
+                SentisPoseProvider sentisProvider = (SentisPoseProvider)bodyProvider;
+                sentisProvider.SetTuning(sentisMetreScale, sentisDepthScale);
+            }
             bodyProvider.Tick(deltaSeconds);
             if (Input.GetKeyDown(KeyCode.C)) {
                 retargeter.Recalibrate();
@@ -285,20 +301,54 @@ namespace VirtualMirror.App {
                 ikSolver = new AnimationRiggingIkDriver();
             }
             PoseSpaceConverter converter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
-            if (useSentis3dTracking && sentisModel != null) {
-                bodyProvider = new SentisPoseProvider(logService, cameraCapture, converter, sentisModel, sentisImageNetNorm, sentisMetreScale);
-            } else if (useMediaPipeTracking) {
-                string modelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", poseModelFileName);
-                bodyProvider = new MediaPipePoseProvider(logService, cameraCapture, modelPath, converter);
-            } else {
-                bodyProvider = new FakeBodyTrackingProvider();
+            // OAK-D via the Python sidecar over UDP (B2, ADR-016) takes top priority. No native DLL in-process
+            // → cannot crash Unity. Binds a UDP socket; if the port is free it "starts" and waits for the
+            // sidecar's datagrams (avatar rests until the sidecar streams). Run udp_pose_sender.py separately.
+            if (useOakUdpTracking) {
+                OakDUdpPoseProvider oakUdp = new OakDUdpPoseProvider(logService, converter, oakUdpPort);
+                oakUdp.StartTracking();
+                if (oakUdp.IsRunning) {
+                    bodyProvider = oakUdp;
+                } else {
+                    logService.Log(LogLevel.Warning, "OAK-D UDP provider failed to start; falling back.");
+                    oakUdp.Dispose();
+                }
             }
-            bodyProvider.StartTracking();
-            if (!bodyProvider.IsRunning && !(bodyProvider is FakeBodyTrackingProvider)) {
-                logService.Log(LogLevel.Warning, "Body tracking provider failed to start; falling back to fake tracking.");
-                bodyProvider.Dispose();
-                bodyProvider = new FakeBodyTrackingProvider();
+            // OAK-D in-Unity native plugin (B1) — abandoned as too crash-prone; kept behind the flag (OFF).
+            if (bodyProvider == null && useOakDTracking) {
+                string oakModelPath = Path.Combine(Application.dataPath, "Plugins", "OAKForUnity", "Models", oakModelFileName);
+                OakDPoseProvider oakProvider = new OakDPoseProvider(logService, converter, oakModelPath, oakDeviceNum, oakLandmarkThreshold);
+                oakProvider.StartTracking();
+                if (oakProvider.IsRunning) {
+                    bodyProvider = oakProvider;
+                } else {
+                    logService.Log(LogLevel.Warning, "OAK-D provider failed to start; falling back to RGB tracking.");
+                    oakProvider.Dispose();
+                }
+            }
+            if (bodyProvider == null) {
+                if (useSentis3dTracking && sentisModel != null) {
+                    bodyProvider = new SentisPoseProvider(logService, cameraCapture, converter, sentisModel, sentisImageNetNorm, sentisMetreScale, sentisDepthScale, sentisPersonCrop);
+                } else if (useMediaPipeTracking) {
+                    string modelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", poseModelFileName);
+                    bodyProvider = new MediaPipePoseProvider(logService, cameraCapture, modelPath, converter);
+                } else {
+                    bodyProvider = new FakeBodyTrackingProvider();
+                }
                 bodyProvider.StartTracking();
+                if (!bodyProvider.IsRunning && !(bodyProvider is FakeBodyTrackingProvider)) {
+                    logService.Log(LogLevel.Warning, "Body tracking provider failed to start; falling back to fake tracking.");
+                    bodyProvider.Dispose();
+                    bodyProvider = new FakeBodyTrackingProvider();
+                    bodyProvider.StartTracking();
+                }
+            }
+            if (bodyProvider is SentisPoseProvider) {
+                // The 3D path (fast dance, true depth) needs a snappier filter than the calm-webcam default,
+                // or fast motion gets damped into the "under-responsive" look. Live-tunable via the sliders.
+                filterMinCutoff = sentisFilterMinCutoff;
+                filterBeta = sentisFilterBeta;
+                jointFilter.SetParameters(sentisFilterMinCutoff, sentisFilterBeta);
             }
             logService.Log(LogLevel.Info, "Body tracking started.");
 
@@ -384,6 +434,22 @@ namespace VirtualMirror.App {
             TryAutoLoadLastAvatar();
         }
 
+        private string DescribeActiveTracking() {
+            if (bodyProvider is OakDUdpPoseProvider) {
+                return "OAK-D 3D (UDP sidecar)";
+            }
+            if (bodyProvider is OakDPoseProvider) {
+                return "OAK-D 3D (on-device)";
+            }
+            if (bodyProvider is SentisPoseProvider) {
+                return "Sentis RTMW3D (GPU)";
+            }
+            if (bodyProvider is MediaPipePoseProvider) {
+                return "MediaPipe Pose (CPU)";
+            }
+            return "Fake Tracking";
+        }
+
         private void InitializeDiagnosticsHud(Scene scene) {
             GameObject[] roots = scene.GetRootGameObjects();
             int index = 0;
@@ -392,7 +458,7 @@ namespace VirtualMirror.App {
                 if (panel != null) {
                     diagnosticsHud = panel;
                     diagnosticsHud.Initialize(performanceMonitor);
-                    diagnosticsHud.SetTrackingStatus(useMediaPipeTracking ? "MediaPipe Pose (CPU)" : "Fake Tracking");
+                    diagnosticsHud.SetTrackingStatus(DescribeActiveTracking());
                     diagnosticsHud.SetCameraInfo(useVideoSource ? "Sample Video MP4" : "Webcam 1280x720@30fps");
                     logService.Log(LogLevel.Info, "Diagnostics HUD wired.");
                     return;

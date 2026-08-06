@@ -4,7 +4,8 @@
     "references": [
         "VirtualMirror.Core",
         "Mediapipe.Runtime",
-        "Unity.InferenceEngine"
+        "Unity.InferenceEngine",
+        "Newtonsoft.Json"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
