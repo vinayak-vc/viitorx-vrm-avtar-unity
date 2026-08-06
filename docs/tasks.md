@@ -126,8 +126,13 @@ Root cause of the recurring head-pitch / wrist / folded-leg / jitter issues: Med
 - [~] **Play-verify head/legs/arms (ADR-011/012)** — ✅ DONE 2026-08-06 (Unity MCP, port 6400): 0 errors; neck undriven (head forward, up-vector ≈ world-up); all 4 IK constraints `rotW=0/posW=1`; arms follow the waving-arms fake pose from hip level to `+0.81` above the shoulder (not collapsed). See `ai_handoff.md` "Live play-verification".
 - [ ] **Tune `wristRotationWeight` (ADR-013) live** — still pending: needs a webcam pass with hands in upper-body framing (real MediaPipe hand detection). Default 0.7; **C** recalibrates neutral upright; 0 disables (fingers still curl). Not exercisable from the full-body dance video or the fake provider.
 
-### Higher accuracy — GPU 3D-pose path (uses the RTX 3060, the real jump)
-- [ ] **Add a GPU 3D-pose provider** behind `IBodyTrackingProvider` (ADR-003 / SDS-018 already allow the swap — no UI/avatar change). Runtime: **Unity Sentis** or **ONNX Runtime (DirectML/CUDA)**. Model options: **RTMPose (2D) + MotionBERT / VideoPose3D (3D lifting)**, or **BlazePose-GHUM-3D-heavy / Sapiens**. → new ADR + `Runtime/Tracking/<Backend>/` provider; emit the same `PoseFrame` contract (SDS-018 §5).
+### Higher accuracy — GPU 3D-pose path (uses the RTX 3060, the real jump) — ADR-015, IN PROGRESS
+Stack chosen: **Unity Sentis** `com.unity.ai.inference` 2.6.1 (INSTALLED ✅, 0 errors), model **RTMW3D** (RTMPose3D family, whole-body 3D incl. hands, Apache-2.0). POC → non-commercial licenses OK.
+- [x] **Install Sentis** (`com.unity.ai.inference` 2.6.1) — namespace/assembly `Unity.InferenceEngine`. Build clean.
+- [~] **RTMW3D feasibility spike (NEXT — resume here):** ONNX downloaded + verified (`Soykaf/RTMW3D-x`, 369 MB, 384×288). **Import into Sentis** (regular `Assets/` folder) and read the import log for unsupported operators. Clean → Sentis; rejected → **ONNX Runtime (DirectML)**. See ADR-015 for URL + decode.
+- [ ] **Build `SentisPoseProvider : IBodyTrackingProvider`** — camera→`TextureConverter.ToTensor`(384×288)→`Worker.Schedule`(GPUCompute)→readback→**SimCC decode**→133 keypoints→our 33 `JointId` (Unity hips-centred m). Tracking asmdef + `Unity.InferenceEngine` ref. Wire behind `AppBootstrap.useSentis3dTracking` (default off) + MediaPipe fallback. Live-validate/tune (like `poseFlipX`).
+- [ ] **Bonus from RTMW3D:** whole-body includes **hands + face** → could replace the separate MediaPipe hand/face providers and fix dead-hands-at-distance.
+- [ ] **Also:** root/hip grounding (stop the avatar floating), velocity outlier-reject (leg jitter seen while standing).
 - [ ] **Direct rotational retarget from 3D** — feed true 3D limb rotations, dropping most IK reconstruction (fixes head pitch, wrist, depth at the source, not as symptoms).
 - [ ] **Per-joint finger + wrist from 3D hand** — replace the single mid-joint curl heuristic (SDS-011 curl) with per-joint angles + real wrist pose; supersedes the ADR-013 delta-from-neutral wrist hack.
 - [ ] **(Optional, Phase 3)** depth camera provider (RealSense D455 / OAK-D) behind `ICameraCapture` / `IBodyTrackingProvider` — best scale + occlusion; hardware, ADR-007.
