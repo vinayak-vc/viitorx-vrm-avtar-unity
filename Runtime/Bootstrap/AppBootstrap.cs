@@ -56,6 +56,7 @@ namespace VirtualMirror.App {
         [SerializeField] private bool useHandTracking = true;
         [SerializeField] private bool useMediaPipeHand = true;
         [SerializeField] private string handModelFileName = "hand_landmarker.bytes";
+        [SerializeField] private float wristRotationWeight = 0.7f;
 
         private ServiceRegistry services;
         private LogService logService;
@@ -148,6 +149,9 @@ namespace VirtualMirror.App {
             bodyProvider.Tick(deltaSeconds);
             if (Input.GetKeyDown(KeyCode.C)) {
                 retargeter.Recalibrate();
+                if (handRetargeter != null) {
+                    handRetargeter.Recalibrate();
+                }
             }
 
             Animator animator = null;
@@ -313,7 +317,8 @@ namespace VirtualMirror.App {
             if (useHandTracking) {
                 if (useMediaPipeHand) {
                     string handModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", handModelFileName);
-                    MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath);
+                    PoseSpaceConverter handConverter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
+                    MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath, handConverter);
                     if (mediaPipeHand.StartTracking()) {
                         handProvider = mediaPipeHand;
                     } else {
@@ -327,6 +332,7 @@ namespace VirtualMirror.App {
                     handProvider.StartTracking();
                 }
                 handRetargeter = new HumanoidHandRetargeter();
+                handRetargeter.SetWristWeight(wristRotationWeight);
                 logService.Log(LogLevel.Info, "Hand tracking started.");
             }
         }

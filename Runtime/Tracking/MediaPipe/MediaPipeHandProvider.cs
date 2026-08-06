@@ -38,6 +38,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
         private readonly ILogService logService;
         private readonly ICameraCapture cameraCapture;
         private readonly string modelPath;
+        private readonly PoseSpaceConverter converter;
 
         private HandLandmarker landmarker;
         private TextureFramePool texturePool;
@@ -55,17 +56,21 @@ namespace VirtualMirror.Tracking.MediaPipe {
         private TextureFrame inFlightTextureFrame;
         private Mediapipe.Image inFlightImage;
 
-        public MediaPipeHandProvider(ILogService logService, ICameraCapture cameraCapture, string modelPath) {
+        public MediaPipeHandProvider(ILogService logService, ICameraCapture cameraCapture, string modelPath, PoseSpaceConverter converter) {
             if (logService == null) {
                 throw new ArgumentNullException(nameof(logService));
             }
             if (cameraCapture == null) {
                 throw new ArgumentNullException(nameof(cameraCapture));
             }
+            if (converter == null) {
+                throw new ArgumentNullException(nameof(converter));
+            }
             workerLock = new object();
             this.logService = logService;
             this.cameraCapture = cameraCapture;
             this.modelPath = modelPath;
+            this.converter = converter;
         }
 
         public bool IsTracking {
@@ -255,6 +260,11 @@ namespace VirtualMirror.Tracking.MediaPipe {
             float rightRing = 0f;
             float rightLittle = 0f;
 
+            Quaternion leftWrist = Quaternion.identity;
+            Quaternion rightWrist = Quaternion.identity;
+            bool leftTracked = false;
+            bool rightTracked = false;
+
             int handIndex = 0;
             while (handIndex < worldLandmarks.Count) {
                 List<Landmark> landmarks = worldLandmarks[handIndex].landmarks;
@@ -268,18 +278,23 @@ namespace VirtualMirror.Tracking.MediaPipe {
                 float middle = FingerCurl(landmarks, MiddleJoints);
                 float ring = FingerCurl(landmarks, RingJoints);
                 float little = FingerCurl(landmarks, LittleJoints);
+                Quaternion wrist = PalmRotation(landmarks);
                 if (isLeft) {
                     leftThumb = thumb;
                     leftIndex = index;
                     leftMiddle = middle;
                     leftRing = ring;
                     leftLittle = little;
+                    leftWrist = wrist;
+                    leftTracked = true;
                 } else {
                     rightThumb = thumb;
                     rightIndex = index;
                     rightMiddle = middle;
                     rightRing = ring;
                     rightLittle = little;
+                    rightWrist = wrist;
+                    rightTracked = true;
                 }
                 handIndex = handIndex + 1;
             }
@@ -287,6 +302,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
             workerFrame.SetCurls(
                 leftThumb, leftIndex, leftMiddle, leftRing, leftLittle,
                 rightThumb, rightIndex, rightMiddle, rightRing, rightLittle);
+            workerFrame.SetWristRotations(leftWrist, leftTracked, rightWrist, rightTracked);
             workerFrame.SetMeta(timestamp * 0.001, true);
         }
 
@@ -316,6 +332,31 @@ namespace VirtualMirror.Tracking.MediaPipe {
 
         private static Vector3 ToVector(Landmark landmark) {
             return new Vector3(landmark.x, landmark.y, landmark.z);
+        }
+
+        // Palm orientation in Unity space: forward = wrist(0) -> middle knuckle(9) (finger direction),
+        // up = palm normal = forward x acrossPalm, where acrossPalm = indexMcp(5) -> pinkyMcp(17). Points
+        // are run through the SAME PoseSpaceConverter as the body so the axes/mirror match. Consumers use
+        // this delta-from-neutral, so a constant bone-axis offset cancels and only relative wrist motion shows.
+        private Quaternion PalmRotation(List<Landmark> landmarks) {
+            Vector3 wrist = ConvertPoint(landmarks[0]);
+            Vector3 indexMcp = ConvertPoint(landmarks[5]);
+            Vector3 middleMcp = ConvertPoint(landmarks[9]);
+            Vector3 pinkyMcp = ConvertPoint(landmarks[17]);
+            Vector3 forward = middleMcp - wrist;
+            Vector3 across = indexMcp - pinkyMcp;
+            if (forward.sqrMagnitude < 1e-10f || across.sqrMagnitude < 1e-10f) {
+                return Quaternion.identity;
+            }
+            Vector3 normal = Vector3.Cross(forward, across);
+            if (normal.sqrMagnitude < 1e-10f) {
+                return Quaternion.identity;
+            }
+            return Quaternion.LookRotation(forward.normalized, normal.normalized);
+        }
+
+        private Vector3 ConvertPoint(Landmark landmark) {
+            return converter.ToUnity(landmark.x, landmark.y, landmark.z);
         }
 
         private void EnsurePool(int width, int height) {

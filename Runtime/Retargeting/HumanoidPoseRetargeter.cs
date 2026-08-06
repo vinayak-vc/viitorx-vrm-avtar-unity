@@ -299,9 +299,12 @@ namespace VirtualMirror.Retargeting {
         }
 
         private static SegmentDefinition[] BuildDefinitions() {
-            JointId[] shoulders = new JointId[] { JointId.LeftShoulder, JointId.RightShoulder };
+            // Neck/head orientation is intentionally NOT driven from pose landmarks. Deriving neck pitch
+            // from midShoulder->nose (or ->ear) is unreliable under the tuned tracking Z convention and
+            // craned the head UP instead of forward (see ADR-011). The head now rests forward; head
+            // orientation will later come from the face landmarker's head pose (SDS-007 §4). The limb
+            // segments below are IK-owned and used by this FK path only when the IK driver is disabled.
             return new SegmentDefinition[] {
-                new SegmentDefinition(HumanBodyBones.Neck, HumanBodyBones.Head, shoulders, new JointId[] { JointId.Nose }, false),
                 new SegmentDefinition(HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, new JointId[] { JointId.LeftShoulder }, new JointId[] { JointId.LeftElbow }, true),
                 new SegmentDefinition(HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand, new JointId[] { JointId.LeftElbow }, new JointId[] { JointId.LeftWrist }, true),
                 new SegmentDefinition(HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm, new JointId[] { JointId.RightShoulder }, new JointId[] { JointId.RightElbow }, true),

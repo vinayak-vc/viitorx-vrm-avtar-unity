@@ -19,6 +19,10 @@ namespace VirtualMirror.IK {
     /// so FK can drive the limbs instead), keeping FK and IK mutually exclusive on the arm/leg bones.
     /// </summary>
     public sealed class AnimationRiggingIkDriver : IIkSolver {
+        // Minimum ankle-below-hip drop (MediaPipe world metres, ~1.7 m human) for the lower body to count
+        // as visible/standing. Below this the legs are treated as occluded and leg IK is held off.
+        private const float MinLegDropMetres = 0.35f;
+
         private Animator animator;
         private RigBuilder rigBuilder;
         private Rig rig;
@@ -95,13 +99,14 @@ namespace VirtualMirror.IK {
             if (!bound || !active || frame == null || !frame.IsValid || animator == null) {
                 return;
             }
-            Transform hips = animator.GetBoneTransform(HumanBodyBones.Hips);
-            Vector3 origin = hips != null ? hips.position : animator.transform.position;
-
-            UpdateArm(frame, JointId.LeftShoulder, JointId.LeftElbow, JointId.LeftWrist, leftHandTarget, leftElbowHint, leftArmConstraint, minConfidence, origin, leftArmLength);
-            UpdateArm(frame, JointId.RightShoulder, JointId.RightElbow, JointId.RightWrist, rightHandTarget, rightElbowHint, rightArmConstraint, minConfidence, origin, rightArmLength);
-            UpdateLeg(frame, JointId.LeftHip, JointId.LeftKnee, JointId.LeftAnkle, leftFootTarget, leftKneeHint, leftLegConstraint, minConfidence, origin, leftLegLength);
-            UpdateLeg(frame, JointId.RightHip, JointId.RightKnee, JointId.RightAnkle, rightFootTarget, rightKneeHint, rightLegConstraint, minConfidence, origin, rightLegLength);
+            // Each limb target is anchored at the AVATAR's own limb-root bone (shoulder / hip joint) and
+            // only the limb-local offset (root-joint -> tip) is scaled. Anchoring at the avatar hips and
+            // scaling the full hip-centred landmark vector (as before) shrank the torso->shoulder span by
+            // the arm ratio too, collapsing the hand/foot target down to hip level. See UpdateArm/UpdateLeg.
+            UpdateArm(frame, HumanBodyBones.LeftUpperArm, JointId.LeftShoulder, JointId.LeftElbow, JointId.LeftWrist, leftHandTarget, leftElbowHint, leftArmConstraint, minConfidence, leftArmLength);
+            UpdateArm(frame, HumanBodyBones.RightUpperArm, JointId.RightShoulder, JointId.RightElbow, JointId.RightWrist, rightHandTarget, rightElbowHint, rightArmConstraint, minConfidence, rightArmLength);
+            UpdateLeg(frame, HumanBodyBones.LeftUpperLeg, JointId.LeftHip, JointId.LeftKnee, JointId.LeftAnkle, leftFootTarget, leftKneeHint, leftLegConstraint, minConfidence, leftLegLength);
+            UpdateLeg(frame, HumanBodyBones.RightUpperLeg, JointId.RightHip, JointId.RightKnee, JointId.RightAnkle, rightFootTarget, rightKneeHint, rightLegConstraint, minConfidence, rightLegLength);
         }
 
         public void Unbind() {
@@ -231,7 +236,7 @@ namespace VirtualMirror.IK {
             return constraint;
         }
 
-        private void UpdateArm(PoseFrame frame, JointId shoulderJoint, JointId elbowJoint, JointId wristJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, Vector3 origin, float avatarLength) {
+        private void UpdateArm(PoseFrame frame, HumanBodyBones rootBone, JointId shoulderJoint, JointId elbowJoint, JointId wristJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, float avatarLength) {
             if (constraint == null) {
                 return;
             }
@@ -239,18 +244,26 @@ namespace VirtualMirror.IK {
             PoseLandmark elbowLandmark = frame.GetLandmark(elbowJoint);
 
             if (wristLandmark.Confidence >= minConfidence && elbowLandmark.Confidence >= minConfidence) {
+                Transform rootTransform = animator.GetBoneTransform(rootBone);
+                if (rootTransform == null) {
+                    constraint.weight = 0f;
+                    return;
+                }
+                // Anchor at the avatar's shoulder (limb root) and scale ONLY the shoulder->wrist offset,
+                // so the target lands an avatar-arm-length away from the avatar shoulder — never sunk to the hips.
+                Vector3 anchor = rootTransform.position;
                 Vector3 shoulderPosition = frame.GetLandmark(shoulderJoint).Position;
                 float trackedLength = Vector3.Distance(shoulderPosition, elbowLandmark.Position) + Vector3.Distance(elbowLandmark.Position, wristLandmark.Position);
                 float scale = ComputeScale(avatarLength, trackedLength);
-                target.position = origin + hipsRestRotation * (wristLandmark.Position * scale);
-                hint.position = origin + hipsRestRotation * (elbowLandmark.Position * scale);
+                target.position = anchor + hipsRestRotation * ((wristLandmark.Position - shoulderPosition) * scale);
+                hint.position = anchor + hipsRestRotation * ((elbowLandmark.Position - shoulderPosition) * scale);
                 constraint.weight = 1f;
             } else {
                 constraint.weight = 0f;
             }
         }
 
-        private void UpdateLeg(PoseFrame frame, JointId hipJoint, JointId kneeJoint, JointId ankleJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, Vector3 origin, float avatarLength) {
+        private void UpdateLeg(PoseFrame frame, HumanBodyBones rootBone, JointId hipJoint, JointId kneeJoint, JointId ankleJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, float avatarLength) {
             if (constraint == null) {
                 return;
             }
@@ -258,15 +271,42 @@ namespace VirtualMirror.IK {
             PoseLandmark kneeLandmark = frame.GetLandmark(kneeJoint);
 
             if (ankleLandmark.Confidence >= minConfidence && kneeLandmark.Confidence >= minConfidence) {
+                Transform rootTransform = animator.GetBoneTransform(rootBone);
+                if (rootTransform == null) {
+                    constraint.weight = 0f;
+                    return;
+                }
                 Vector3 hipPosition = frame.GetLandmark(hipJoint).Position;
+                // Lower-body plausibility gate (SDS-011 §8): drive leg IK only when the tracked ankle sits
+                // clearly below the hip — i.e. the legs are actually in frame (standing / full body). On a
+                // seated or upper-body webcam the lower body is occluded and MediaPipe still emits collapsed
+                // leg landmarks that would FOLD the avatar's legs; hold the leg at rest (weight 0) instead.
+                Vector3 torsoUp = TorsoUp(frame);
+                float ankleDrop = Vector3.Dot(-torsoUp, ankleLandmark.Position - hipPosition);
+                if (ankleDrop < MinLegDropMetres) {
+                    constraint.weight = 0f;
+                    return;
+                }
+                // Anchor at the avatar's hip joint (limb root) and scale ONLY the hip->ankle offset.
+                Vector3 anchor = rootTransform.position;
                 float trackedLength = Vector3.Distance(hipPosition, kneeLandmark.Position) + Vector3.Distance(kneeLandmark.Position, ankleLandmark.Position);
                 float scale = ComputeScale(avatarLength, trackedLength);
-                target.position = origin + hipsRestRotation * (ankleLandmark.Position * scale);
-                hint.position = origin + hipsRestRotation * (kneeLandmark.Position * scale);
+                target.position = anchor + hipsRestRotation * ((ankleLandmark.Position - hipPosition) * scale);
+                hint.position = anchor + hipsRestRotation * ((kneeLandmark.Position - hipPosition) * scale);
                 constraint.weight = 1f;
             } else {
                 constraint.weight = 0f;
             }
+        }
+
+        private Vector3 TorsoUp(PoseFrame frame) {
+            Vector3 midShoulder = 0.5f * (frame.GetLandmark(JointId.LeftShoulder).Position + frame.GetLandmark(JointId.RightShoulder).Position);
+            Vector3 midHip = 0.5f * (frame.GetLandmark(JointId.LeftHip).Position + frame.GetLandmark(JointId.RightHip).Position);
+            Vector3 up = midShoulder - midHip;
+            if (up.sqrMagnitude < 1e-6f) {
+                return Vector3.up;
+            }
+            return up.normalized;
         }
 
         private static float ComputeScale(float avatarLength, float trackedLength) {
