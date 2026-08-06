@@ -13,7 +13,8 @@
         "VirtualMirror.IK",
         "VirtualMirror.Rendering",
         "VirtualMirror.Diagnostics",
-        "VRM10"
+        "VRM10",
+        "Unity.InferenceEngine"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -3,7 +3,8 @@
     "rootNamespace": "VirtualMirror.Tracking",
     "references": [
         "VirtualMirror.Core",
-        "Mediapipe.Runtime"
+        "Mediapipe.Runtime",
+        "Unity.InferenceEngine"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

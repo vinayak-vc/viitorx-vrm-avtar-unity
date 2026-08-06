@@ -18,6 +18,7 @@ using VirtualMirror.Settings;
 using VirtualMirror.Tracking;
 using VirtualMirror.Tracking.Filtering;
 using VirtualMirror.Tracking.MediaPipe;
+using VirtualMirror.Tracking.Sentis;
 using VirtualMirror.UI;
 
 namespace VirtualMirror.App {
@@ -57,6 +58,10 @@ namespace VirtualMirror.App {
         [SerializeField] private bool useMediaPipeHand = true;
         [SerializeField] private string handModelFileName = "hand_landmarker.bytes";
         [SerializeField] private float wristRotationWeight = 0.7f;
+        [SerializeField] private bool useSentis3dTracking = false;
+        [SerializeField] private Unity.InferenceEngine.ModelAsset sentisModel;
+        [SerializeField] private bool sentisImageNetNorm = true;
+        [SerializeField] private float sentisMetreScale = 1.7f;
 
         private ServiceRegistry services;
         private LogService logService;
@@ -279,16 +284,18 @@ namespace VirtualMirror.App {
             if (useIkDriver) {
                 ikSolver = new AnimationRiggingIkDriver();
             }
-            if (useMediaPipeTracking) {
+            PoseSpaceConverter converter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
+            if (useSentis3dTracking && sentisModel != null) {
+                bodyProvider = new SentisPoseProvider(logService, cameraCapture, converter, sentisModel, sentisImageNetNorm, sentisMetreScale);
+            } else if (useMediaPipeTracking) {
                 string modelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", poseModelFileName);
-                PoseSpaceConverter converter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
                 bodyProvider = new MediaPipePoseProvider(logService, cameraCapture, modelPath, converter);
             } else {
                 bodyProvider = new FakeBodyTrackingProvider();
             }
             bodyProvider.StartTracking();
-            if (useMediaPipeTracking && !bodyProvider.IsRunning) {
-                logService.Log(LogLevel.Warning, "MediaPipe provider failed to start; falling back to fake tracking.");
+            if (!bodyProvider.IsRunning && !(bodyProvider is FakeBodyTrackingProvider)) {
+                logService.Log(LogLevel.Warning, "Body tracking provider failed to start; falling back to fake tracking.");
                 bodyProvider.Dispose();
                 bodyProvider = new FakeBodyTrackingProvider();
                 bodyProvider.StartTracking();
