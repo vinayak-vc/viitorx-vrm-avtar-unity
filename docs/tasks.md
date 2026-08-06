@@ -110,6 +110,49 @@ New assemblies: `VirtualMirror.Tracking` + `VirtualMirror.Retargeting` (both ref
 
 ---
 
+## Quality & Accuracy (post-M5)
+
+Root cause of the recurring head-pitch / wrist / folded-leg / jitter issues: MediaPipe is **monocular 2D + weak-Z** (no reliable depth or true limb rotation), so rotation is reconstructed from vectors. Stack (Unity 6 + homuler MediaPipe + UniVRM + Animation Rigging + URP) is correct for V1; the accuracy ceiling is the tracking model. NOTE: MediaPipe runs **CPU** here — the RTX 3060 is idle, and homuler's GPU delegate on Windows is unreliable, so accuracy gains come from changing the **model**, not a flag.
+
+### Accuracy strategy — ADR-014 (staged: cheap wins → GPU 3D). Triggered by a live webcam test showing ~20–30% replication (see ADR-014 / ai_handoff "Live webcam accuracy test").
+
+### Cheap wins (current stack, high ROI)
+- [x] **Pose model Full → Heavy** — ✅ 2026-08-06: downloaded `pose_landmarker_heavy.bytes` (29 MB, Google official) to `StreamingAssets/MediaPipe/`; `AppBootstrap.poseModelFileName` + `Bootstrap.unity` point at it. NOTE: heavier CPU inference → may lower tracking framerate; compare vs `pose_landmarker_full.bytes` if it feels laggier.
+- [x] **Filter live-tunable + responsive default** — ✅ 2026-08-06: `OneEuroFilter.SetParameters` + `JointFilterPipeline.SetParameters`; calibration sliders now retune the live filter (they were dead before); default `filterBeta` 0.02 → 0.2 to cut lag. Raise Beta slider for more responsiveness, lower for less jitter.
+- [ ] **⭐ FRAMING (free, biggest win) — user stands closer / upper-body.** At full-body distance the hands are too small for the Hand Landmarker (dead fingers/wrist) and body landmarks are noisy. Closest single improvement; no code.
+- [ ] **Implement calibration (T-pose scale/offset)** — SDS-025 §5 / SDS-005 §7, still TODO (no `Runtime/Tracking/Calibration/` code exists yet). Deferred behind the framing+model+filter re-test (ADR-014): the live-test failures are dominated by distance-noise + lag, not proportion, so re-test first before building this.
+- [ ] **Camera 1080p60** — Logi C270 caps at 720p30, so this needs a better webcam; raise `cameraWidth`/`cameraHeight`/`cameraFps` once hardware allows.
+- [ ] **Outlier rejection** — velocity-based reject (SDS-025 §4 TODO) to cut the leg/limb jitter seen while standing still.
+- [~] **Play-verify head/legs/arms (ADR-011/012)** — ✅ DONE 2026-08-06 (Unity MCP, port 6400): 0 errors; neck undriven (head forward, up-vector ≈ world-up); all 4 IK constraints `rotW=0/posW=1`; arms follow the waving-arms fake pose from hip level to `+0.81` above the shoulder (not collapsed). See `ai_handoff.md` "Live play-verification".
+- [ ] **Tune `wristRotationWeight` (ADR-013) live** — still pending: needs a webcam pass with hands in upper-body framing (real MediaPipe hand detection). Default 0.7; **C** recalibrates neutral upright; 0 disables (fingers still curl). Not exercisable from the full-body dance video or the fake provider.
+
+### Higher accuracy — GPU 3D-pose path (uses the RTX 3060, the real jump)
+- [ ] **Add a GPU 3D-pose provider** behind `IBodyTrackingProvider` (ADR-003 / SDS-018 already allow the swap — no UI/avatar change). Runtime: **Unity Sentis** or **ONNX Runtime (DirectML/CUDA)**. Model options: **RTMPose (2D) + MotionBERT / VideoPose3D (3D lifting)**, or **BlazePose-GHUM-3D-heavy / Sapiens**. → new ADR + `Runtime/Tracking/<Backend>/` provider; emit the same `PoseFrame` contract (SDS-018 §5).
+- [ ] **Direct rotational retarget from 3D** — feed true 3D limb rotations, dropping most IK reconstruction (fixes head pitch, wrist, depth at the source, not as symptoms).
+- [ ] **Per-joint finger + wrist from 3D hand** — replace the single mid-joint curl heuristic (SDS-011 curl) with per-joint angles + real wrist pose; supersedes the ADR-013 delta-from-neutral wrist hack.
+- [ ] **(Optional, Phase 3)** depth camera provider (RealSense D455 / OAK-D) behind `ICameraCapture` / `IBodyTrackingProvider` — best scale + occlusion; hardware, ADR-007.
+
+---
+
+### Head-forward + folded-legs bugfix (2026-08-06, iter 2) — ADR-012
+Webcam (seated, upper-body) run after iter 1: arms track ✅, but head still up, legs folded by default, wrist static.
+- [x] **Head still up** — ear-midpoint aim (iter 1) still tilted back under the tracking Z convention. **Fix:** removed the Neck FK segment entirely (`HumanoidPoseRetargeter.BuildDefinitions`) — head rests forward. Head pose to come later from the face landmarker (SDS-007 §4).
+- [x] **Legs folded by default** — seated webcam → occluded lower body → MediaPipe emits collapsed leg landmarks that leg IK folded onto. **Fix:** `AnimationRiggingIkDriver.UpdateLeg` gates on ankle sitting ≥ `MinLegDropMetres` (0.35 m) below the hip (torso-up axis); else leg weight 0 = rest straight (SDS-011 §8).
+- [x] **Wrist/hand orientation** — added palm basis from MediaPipe Hand world landmarks (`PalmRotation`: wrist→middleMcp forward, palm-normal up), carried on `HandFrame`, applied **delta-from-neutral** to the Hand bone in `HumanoidHandRetargeter.ApplyWrist` (slerp by `wristRotationWeight`, default 0.7; C recalibrates neutral; 0 disables). Provider now takes the shared `PoseSpaceConverter`. See ADR-013. **Needs live weight/axis tuning** (convention-sensitive).
+- [x] **Play-verify** — ✅ 2026-08-06 (Unity MCP, new machine): head forward (neck undriven), legs not folded (tracked plausibly on full-body video; gate-off/seated case by inspection), arms track (fake waving-arms: hand hip→above-head). 0 runtime errors. Wrist still pending a live webcam pass.
+- ⚠️ **Regression fixed same session:** the fake-arms test left `useMediaPipeTracking=0` persisted in `Bootstrap.unity` (body ran on the fake provider → user saw "only face tracking"); restored to `1` on the real scene instance + saved. Do not leave that flag off on disk.
+- Files: `Runtime/Retargeting/HumanoidPoseRetargeter.cs`, `Runtime/IK/AnimationRiggingIkDriver.cs`.
+
+### IK arm-placement + head-up bugfix (2026-08-06)
+Reported from a full-body dance-video run (VRM1 `Anime-Boy+V-tuber`, IK Arm/Leg Driver ON): arms hang at the hips (don't follow raised arms), head pitched up. See ADR-011.
+- [x] **IK targets collapse to hips** — `AnimationRiggingIkDriver.UpdateArm/UpdateLeg` scaled the whole hip-centred landmark vector by the limb ratio, shrinking the torso→shoulder span too → hand/foot target sank to hip level on sub-human-scale avatars. **Fix:** anchor at the avatar `UpperArm`/`UpperLeg` bone and scale only the limb-local offset (`(wrist-shoulder)` / `(ankle-hip)`). IK now reaches correctly with IK ON.
+- [x] **Head looks up** — neck FK segment aimed `midShoulder → Nose`; the nose's forward offset + tuned Z sign tilted the head back. **Fix:** aim `midShoulder → midEar` (centred, near-vertical) → head level/forward (SDS-011 §4 nose–ear plane). Trade-off: neck nod dropped for V1.
+- [x] **Play-verify in Unity** — ✅ 2026-08-06 (Unity MCP connected, bridge port 6400): arm IK anchors correctly (hands follow raised-arm input up past the head, not pinned at the hips); head forward; 0 console errors.
+- Files: `Runtime/IK/AnimationRiggingIkDriver.cs`, `Runtime/Retargeting/HumanoidPoseRetargeter.cs`.
+- Note (not a code bug): fingers won't animate from a full-body dance video — hands are too small for the MediaPipe Hand Landmarker; needs upper-body framing. Legs having only UpperLeg→LowerLeg→Foot→Toes is the VRM Humanoid spec, not a defect.
+
+---
+
 ## Blocked
 
 _None_

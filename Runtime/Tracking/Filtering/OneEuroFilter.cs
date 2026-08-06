@@ -6,8 +6,8 @@ namespace VirtualMirror.Tracking.Filtering {
     /// slow. See Casiez et al. 2012. Reused per axis by <see cref="JointFilterPipeline"/>.
     /// </summary>
     public sealed class OneEuroFilter {
-        private readonly float minCutoff;
-        private readonly float beta;
+        private float minCutoff;
+        private float beta;
         private readonly float derivativeCutoff;
 
         private bool initialized;
@@ -18,6 +18,16 @@ namespace VirtualMirror.Tracking.Filtering {
             this.minCutoff = minCutoff > 0f ? minCutoff : 1f;
             this.beta = beta;
             this.derivativeCutoff = derivativeCutoff > 0f ? derivativeCutoff : 1f;
+        }
+
+        /// <summary>
+        /// Update the responsiveness parameters at runtime (e.g. from the calibration sliders). Filter
+        /// state is preserved; only the cutoff response changes. Higher <paramref name="beta"/> = less lag
+        /// during motion, lower = smoother/laggier.
+        /// </summary>
+        public void SetParameters(float minCutoff, float beta) {
+            this.minCutoff = minCutoff > 0f ? minCutoff : 1f;
+            this.beta = beta;
         }
 
         public float Filter(float value, float deltaSeconds) {

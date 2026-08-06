@@ -1,3 +1,5 @@
+using UnityEngine;
+
 namespace VirtualMirror.Core {
     /// <summary>
     /// Finger curl values (0.0 open to 1.0 curled) for both hands for one tracked frame. Reusable and
@@ -18,6 +20,14 @@ namespace VirtualMirror.Core {
         private float rightMiddleCurl;
         private float rightRingCurl;
         private float rightLittleCurl;
+
+        // Wrist/palm world orientation per hand (see MediaPipeHandProvider.PalmRotation). Consumers apply
+        // it delta-from-neutral so the absolute axis convention cancels. Tracked flags are false when the
+        // corresponding hand was not detected this frame (identity rotation carried, must be ignored).
+        private Quaternion leftWristRotation = Quaternion.identity;
+        private Quaternion rightWristRotation = Quaternion.identity;
+        private bool leftWristTracked;
+        private bool rightWristTracked;
 
         private double timestampSeconds;
         private bool isValid;
@@ -82,6 +92,30 @@ namespace VirtualMirror.Core {
             }
         }
 
+        public Quaternion LeftWristRotation {
+            get {
+                return leftWristRotation;
+            }
+        }
+
+        public Quaternion RightWristRotation {
+            get {
+                return rightWristRotation;
+            }
+        }
+
+        public bool LeftWristTracked {
+            get {
+                return leftWristTracked;
+            }
+        }
+
+        public bool RightWristTracked {
+            get {
+                return rightWristTracked;
+            }
+        }
+
         public double TimestampSeconds {
             get {
                 return timestampSeconds;
@@ -107,6 +141,13 @@ namespace VirtualMirror.Core {
             this.rightMiddleCurl = rightMiddleCurl;
             this.rightRingCurl = rightRingCurl;
             this.rightLittleCurl = rightLittleCurl;
+        }
+
+        public void SetWristRotations(Quaternion leftWristRotation, bool leftWristTracked, Quaternion rightWristRotation, bool rightWristTracked) {
+            this.leftWristRotation = leftWristRotation;
+            this.leftWristTracked = leftWristTracked;
+            this.rightWristRotation = rightWristRotation;
+            this.rightWristTracked = rightWristTracked;
         }
 
         public void SetMeta(double timestampSeconds, bool isValid) {

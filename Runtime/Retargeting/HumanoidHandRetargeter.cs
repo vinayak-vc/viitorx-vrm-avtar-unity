@@ -26,10 +26,33 @@ namespace VirtualMirror.Retargeting {
         private readonly List<FingerJointPair> rightFingerJoints = new List<FingerJointPair>();
         private bool bound;
 
+        private Transform leftHand;
+        private Transform rightHand;
+        private Quaternion leftNeutralPalm = Quaternion.identity;
+        private Quaternion rightNeutralPalm = Quaternion.identity;
+        private bool leftHasNeutral;
+        private bool rightHasNeutral;
+        private float wristWeight = 0.7f;
+
         public bool IsBound {
             get {
                 return bound;
             }
+        }
+
+        /// <summary>
+        /// Blend weight (0..1) for wrist/palm orientation. 0 disables wrist rotation (fingers still curl).
+        /// The mapping from MediaPipe hand landmarks to the avatar wrist is convention-sensitive; this is
+        /// exposed so it can be tuned live like the pose mirror flags.
+        /// </summary>
+        public void SetWristWeight(float weight) {
+            wristWeight = Mathf.Clamp01(weight);
+        }
+
+        /// <summary>Re-capture each hand's neutral palm orientation on the next tracked frame.</summary>
+        public void Recalibrate() {
+            leftHasNeutral = false;
+            rightHasNeutral = false;
         }
 
         public void Bind(Animator animator) {
@@ -40,12 +63,20 @@ namespace VirtualMirror.Retargeting {
 
             BindHandFingers(animator, true);
             BindHandFingers(animator, false);
-            bound = leftFingerJoints.Count > 0 || rightFingerJoints.Count > 0;
+            leftHand = animator.GetBoneTransform(HumanBodyBones.LeftHand);
+            rightHand = animator.GetBoneTransform(HumanBodyBones.RightHand);
+            leftHasNeutral = false;
+            rightHasNeutral = false;
+            bound = leftFingerJoints.Count > 0 || rightFingerJoints.Count > 0 || leftHand != null || rightHand != null;
         }
 
         public void Unbind() {
             leftFingerJoints.Clear();
             rightFingerJoints.Clear();
+            leftHand = null;
+            rightHand = null;
+            leftHasNeutral = false;
+            rightHasNeutral = false;
             bound = false;
         }
 
@@ -56,6 +87,32 @@ namespace VirtualMirror.Retargeting {
 
             ApplyHandFingers(leftFingerJoints, frame.LeftThumbCurl, frame.LeftIndexCurl, frame.LeftMiddleCurl, frame.LeftRingCurl, frame.LeftLittleCurl);
             ApplyHandFingers(rightFingerJoints, frame.RightThumbCurl, frame.RightIndexCurl, frame.RightMiddleCurl, frame.RightRingCurl, frame.RightLittleCurl);
+            ApplyWrist(true, frame.LeftWristTracked, frame.LeftWristRotation);
+            ApplyWrist(false, frame.RightWristTracked, frame.RightWristRotation);
+        }
+
+        // Rotate the hand by the palm's change since a captured neutral (delta-from-neutral, like the torso
+        // basis) so the absolute landmark->bone axis convention cancels and only relative wrist motion shows.
+        // Applied in world space on top of the IK-posed forearm; runs after IK in LateUpdate so it survives.
+        private void ApplyWrist(bool isLeft, bool tracked, Quaternion palm) {
+            Transform hand = isLeft ? leftHand : rightHand;
+            if (hand == null || !tracked || wristWeight <= 0f) {
+                return;
+            }
+            bool hasNeutral = isLeft ? leftHasNeutral : rightHasNeutral;
+            if (!hasNeutral) {
+                if (isLeft) {
+                    leftNeutralPalm = palm;
+                    leftHasNeutral = true;
+                } else {
+                    rightNeutralPalm = palm;
+                    rightHasNeutral = true;
+                }
+                return;
+            }
+            Quaternion neutral = isLeft ? leftNeutralPalm : rightNeutralPalm;
+            Quaternion worldDelta = palm * Quaternion.Inverse(neutral);
+            hand.rotation = Quaternion.Slerp(hand.rotation, worldDelta * hand.rotation, wristWeight);
         }
 
         private void BindHandFingers(Animator animator, bool isLeft) {

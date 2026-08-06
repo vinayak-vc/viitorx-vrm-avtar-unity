@@ -45,6 +45,20 @@ namespace VirtualMirror.Tracking.Filtering {
             return outputFrame;
         }
 
+        /// <summary>
+        /// Retune every per-axis filter at runtime (from the calibration sliders). Higher beta reduces
+        /// tracking lag during motion at the cost of more jitter when still.
+        /// </summary>
+        public void SetParameters(float minCutoff, float beta) {
+            int index = 0;
+            while (index < PoseFrame.LandmarkCount) {
+                filtersX[index].SetParameters(minCutoff, beta);
+                filtersY[index].SetParameters(minCutoff, beta);
+                filtersZ[index].SetParameters(minCutoff, beta);
+                index = index + 1;
+            }
+        }
+
         public void Reset() {
             int index = 0;
             while (index < PoseFrame.LandmarkCount) {

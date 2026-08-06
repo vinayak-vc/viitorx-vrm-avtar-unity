@@ -39,10 +39,10 @@ namespace VirtualMirror.App {
         [SerializeField] private int cameraHeight = 720;
         [SerializeField] private int cameraFps = 30;
         [SerializeField] private float filterMinCutoff = 1f;
-        [SerializeField] private float filterBeta = 0.02f;
+        [SerializeField] private float filterBeta = 0.2f;
         [SerializeField] private float filterDerivativeCutoff = 1f;
         [SerializeField] private bool useMediaPipeTracking = true;
-        [SerializeField] private string poseModelFileName = "pose_landmarker_full.bytes";
+        [SerializeField] private string poseModelFileName = "pose_landmarker_heavy.bytes";
         [SerializeField] private bool poseFlipX = true;
         [SerializeField] private bool poseFlipY = true;
         [SerializeField] private bool poseFlipZ = true;
@@ -56,6 +56,7 @@ namespace VirtualMirror.App {
         [SerializeField] private bool useHandTracking = true;
         [SerializeField] private bool useMediaPipeHand = true;
         [SerializeField] private string handModelFileName = "hand_landmarker.bytes";
+        [SerializeField] private float wristRotationWeight = 0.7f;
 
         private ServiceRegistry services;
         private LogService logService;
@@ -148,6 +149,9 @@ namespace VirtualMirror.App {
             bodyProvider.Tick(deltaSeconds);
             if (Input.GetKeyDown(KeyCode.C)) {
                 retargeter.Recalibrate();
+                if (handRetargeter != null) {
+                    handRetargeter.Recalibrate();
+                }
             }
 
             Animator animator = null;
@@ -313,7 +317,8 @@ namespace VirtualMirror.App {
             if (useHandTracking) {
                 if (useMediaPipeHand) {
                     string handModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", handModelFileName);
-                    MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath);
+                    PoseSpaceConverter handConverter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
+                    MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath, handConverter);
                     if (mediaPipeHand.StartTracking()) {
                         handProvider = mediaPipeHand;
                     } else {
@@ -327,6 +332,7 @@ namespace VirtualMirror.App {
                     handProvider.StartTracking();
                 }
                 handRetargeter = new HumanoidHandRetargeter();
+                handRetargeter.SetWristWeight(wristRotationWeight);
                 logService.Log(LogLevel.Info, "Hand tracking started.");
             }
         }
@@ -401,8 +407,18 @@ namespace VirtualMirror.App {
                     calibrationPanel.OnIkToggled += (value) => { useIkDriver = value; };
                     calibrationPanel.OnFaceToggled += (value) => { useFaceTracking = value; };
                     calibrationPanel.OnHandToggled += (value) => { useHandTracking = value; };
-                    calibrationPanel.OnFilterMinCutoffChanged += (value) => { filterMinCutoff = value; };
-                    calibrationPanel.OnFilterBetaChanged += (value) => { filterBeta = value; };
+                    calibrationPanel.OnFilterMinCutoffChanged += (value) => {
+                        filterMinCutoff = value;
+                        if (jointFilter != null) {
+                            jointFilter.SetParameters(filterMinCutoff, filterBeta);
+                        }
+                    };
+                    calibrationPanel.OnFilterBetaChanged += (value) => {
+                        filterBeta = value;
+                        if (jointFilter != null) {
+                            jointFilter.SetParameters(filterMinCutoff, filterBeta);
+                        }
+                    };
                     logService.Log(LogLevel.Info, "Calibration settings panel wired.");
                     return;
                 }
