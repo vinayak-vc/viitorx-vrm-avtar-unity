@@ -394,7 +394,15 @@ namespace VirtualMirror.App {
                 logService.Log(LogLevel.Info, "Face tracking started.");
             }
             if (useHandTracking) {
-                if (useMediaPipeHand) {
+                if (bodyProvider is OakDUdpPoseProvider) {
+                    // The OAK-D sidecar streams fingers (lh/rh) alongside the body in one datagram, so drive
+                    // the hands from that same stream via a facade over the pose provider's socket — no
+                    // separate MediaPipe RGB webcam needed (which is unavailable in the OAK setup anyway).
+                    OakDUdpPoseProvider oakBody = (OakDUdpPoseProvider)bodyProvider;
+                    handProvider = new OakDUdpHandProvider(oakBody);
+                    handProvider.StartTracking();
+                    logService.Log(LogLevel.Info, "Hand tracking source: OAK-D UDP (fingers from the whole-body stream).");
+                } else if (useMediaPipeHand) {
                     string handModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", handModelFileName);
                     PoseSpaceConverter handConverter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
                     MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath, handConverter);

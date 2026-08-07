@@ -5,6 +5,30 @@ Purpose: next agent can continue without re-deriving context.
 
 ---
 
+## ⚠️ Python sidecar relocated to a submodule (2026-08-07)
+
+The OAK-D / model Python sidecar now lives in its **own repo** `vinayak-vc/viitorx-vrm-model-python`,
+consumed as a **git submodule** of this repo at `python-sidecar~/` (trailing `~` → Unity ignores the
+folder, so the model blobs + `.venv` are never imported; venv is `.venv`, Python 3.10). **The old
+`oak_sidecar/` at the Unity-project root is DEPRECATED — use the submodule from now on.** Run:
+`cd "Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/depthai_blazepose" && ..\.venv\Scripts\python udp_pose_sender.py`.
+The submodule hosts the new **whole-body + measured-depth path (ADR-018), Stage B+C DONE +
+hardware-verified 2026-08-07**: `wholebody_udp_sender.py` runs RTMW3D-x on the RTX 3060
+(onnxruntime-directml, ~40 ms) over the OAK RGB, fuses OAK stereo depth per keypoint (`oak_depth.py`
+back-projection), and streams 33 body + 2×21 hand landmarks (measured metric, hip-relative) + mid-hip
+root over UDP at **~30 fps** (551 datagrams / 0 errors, contract-validated). Body + root already drive
+the avatar via the **unchanged** `OakDUdpPoseProvider` — just run the new sender instead of the
+Phase-1 one. **Unity finger consumption — CODE DONE 2026-08-07** (needs in-editor verify; MCP not bound
+here): `OakDUdpPoseProvider` also parses `lh`/`rh` → `HandFrame` (`TryGetHandFrame`); new
+`OakDUdpHandProvider` facade; `AppBootstrap` auto-uses OAK hands when the OAK body provider is active.
+Verify: `useOakUdpTracking`+`useHandTracking` on, run `wholebody_udp_sender.py`, watch fingers curl
+(left/right + wrist axis may need a live tune). **Still TODO:** MediaPipe face blendshapes (needs a
+working RGB webcam); live axis/mirror + depth-scale tuning; guide user to ~2 m (depth coarse at 3.5 m). Model ONNX
+at `Assets/SentisModel/rtmw3d-x.onnx` (git-ignored, 369 MB). Validation tools: `validate_rtmw3d.py`,
+`validate_depth.py`.
+
+---
+
 ## Current state
 
 - **Milestone:** **M0 ✅. M1 ✅ (VRM load/swap/persist + UI). M2 ✅ core (capture → MediaPipe pose → filter → torso FK + limb IK → avatar; live). M3 ✅ face + hands REAL (MediaPipe Face/Hand Landmarker → VRM expressions / finger curls). M4 ✅ calibration/HUD. M5 ✅ ship (built-ins, file picker, notices).**

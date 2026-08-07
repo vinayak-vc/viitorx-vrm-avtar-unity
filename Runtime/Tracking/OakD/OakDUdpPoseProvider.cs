@@ -27,6 +27,17 @@ namespace VirtualMirror.Tracking.OakD {
     public sealed class OakDUdpPoseProvider : IBodyTrackingProvider {
         private const int NumKeypoints = 33;
 
+        // Per-hand finger joint triples [proximal, middle, tip] for the curl angle, and the palm-basis
+        // indices — the sidecar's lh/rh arrays are MediaPipe/COCO-WholeBody hand order (0 wrist,
+        // 1-4 thumb, 5-8 index, 9-12 middle, 13-16 ring, 17-20 pinky), so this matches MediaPipeHandProvider.
+        private static readonly int[] ThumbJoints = new int[] { 2, 3, 4 };
+        private static readonly int[] IndexJoints = new int[] { 5, 6, 8 };
+        private static readonly int[] MiddleJoints = new int[] { 9, 10, 12 };
+        private static readonly int[] RingJoints = new int[] { 13, 14, 16 };
+        private static readonly int[] LittleJoints = new int[] { 17, 18, 20 };
+        private const int HandLandmarkCount = 21;
+        private const float MaxBendAngle = 160f;
+
         private readonly ILogService logService;
         private readonly PoseSpaceConverter converter;
         private readonly int port;
@@ -39,6 +50,12 @@ namespace VirtualMirror.Tracking.OakD {
         private PoseFrame mainFrame;
         private bool hasNewFrame;
         private bool hasAnyFrame;
+        // Hand frames from the same datagram (lh/rh) — one socket feeds both body and hands. Published
+        // to a companion OakDUdpHandProvider facade via TryGetHandFrame. Double-buffered like the pose.
+        private HandFrame workerHandFrame;
+        private HandFrame mainHandFrame;
+        private bool hasNewHand;
+        private bool hasAnyHand;
         private long frameCounter;
         private long framesReceived;
         private long parseErrors;
@@ -87,6 +104,10 @@ namespace VirtualMirror.Tracking.OakD {
                 mainFrame = new PoseFrame();
                 hasNewFrame = false;
                 hasAnyFrame = false;
+                workerHandFrame = new HandFrame();
+                mainHandFrame = new HandFrame();
+                hasNewHand = false;
+                hasAnyHand = false;
                 running = true;
                 receiveThread = new Thread(ReceiveLoop);
                 receiveThread.IsBackground = true;
@@ -120,6 +141,7 @@ namespace VirtualMirror.Tracking.OakD {
                     ParseInto(workerFrame, json, frameCounter * 0.033);
                     lock (gate) {
                         hasNewFrame = true;
+                        hasNewHand = true;
                     }
                     if (received <= 3 || received % LogEveryFrames == 0) {
                         logService.Log(LogLevel.Info, "OAK-D UDP rx=" + received + " parseErr=" + Interlocked.Read(ref parseErrors) + " (port " + port + ").");
@@ -151,6 +173,24 @@ namespace VirtualMirror.Tracking.OakD {
             return available;
         }
 
+        // Companion hand stream (fingers) parsed from the same datagram's lh/rh arrays. The
+        // OakDUdpHandProvider facade delegates here so a single socket feeds body + hands.
+        public bool TryGetHandFrame(out HandFrame latest) {
+            bool available;
+            lock (gate) {
+                if (hasNewHand) {
+                    HandFrame temp = mainHandFrame;
+                    mainHandFrame = workerHandFrame;
+                    workerHandFrame = temp;
+                    hasNewHand = false;
+                    hasAnyHand = true;
+                }
+                available = hasAnyHand;
+            }
+            latest = mainHandFrame;
+            return available;
+        }
+
         public void Dispose() {
             running = false;
             if (udpClient != null) {
@@ -168,12 +208,14 @@ namespace VirtualMirror.Tracking.OakD {
         private void ParseInto(PoseFrame target, string json, double timestampSeconds) {
             if (string.IsNullOrEmpty(json)) {
                 target.MarkInvalid(timestampSeconds);
+                workerHandFrame.MarkInvalid(timestampSeconds);
                 return;
             }
             JObject root = JObject.Parse(json);
             JArray landmarks = root["lm"] as JArray;
             if (landmarks == null || landmarks.Count == 0) {
                 target.MarkInvalid(timestampSeconds);
+                workerHandFrame.MarkInvalid(timestampSeconds);
                 return;
             }
 
@@ -218,6 +260,102 @@ namespace VirtualMirror.Tracking.OakD {
             } else {
                 target.MarkInvalid(timestampSeconds);
             }
+
+            ParseHands(root, timestampSeconds);
+        }
+
+        // Parse the sidecar's lh/rh arrays (21 x [x,y,z] hip-relative metres each) into the hand frame:
+        // per-finger curl from the bend angle at each finger's middle joint (angle is invariant to the
+        // converter's axis flips, so raw points are used), and a palm orientation run through the shared
+        // PoseSpaceConverter for axis/mirror parity with the body (applied delta-from-neutral downstream).
+        private void ParseHands(JObject root, double timestampSeconds) {
+            Vector3[] left = ReadHand(root["lh"] as JArray);
+            Vector3[] right = ReadHand(root["rh"] as JArray);
+            if (left == null && right == null) {
+                workerHandFrame.MarkInvalid(timestampSeconds);
+                return;
+            }
+
+            float lThumb = 0f, lIndex = 0f, lMiddle = 0f, lRing = 0f, lLittle = 0f;
+            float rThumb = 0f, rIndex = 0f, rMiddle = 0f, rRing = 0f, rLittle = 0f;
+            Quaternion lWrist = Quaternion.identity;
+            Quaternion rWrist = Quaternion.identity;
+            bool lTracked = false;
+            bool rTracked = false;
+
+            if (left != null) {
+                lThumb = FingerCurl(left, ThumbJoints);
+                lIndex = FingerCurl(left, IndexJoints);
+                lMiddle = FingerCurl(left, MiddleJoints);
+                lRing = FingerCurl(left, RingJoints);
+                lLittle = FingerCurl(left, LittleJoints);
+                lWrist = PalmRotation(left);
+                lTracked = true;
+            }
+            if (right != null) {
+                rThumb = FingerCurl(right, ThumbJoints);
+                rIndex = FingerCurl(right, IndexJoints);
+                rMiddle = FingerCurl(right, MiddleJoints);
+                rRing = FingerCurl(right, RingJoints);
+                rLittle = FingerCurl(right, LittleJoints);
+                rWrist = PalmRotation(right);
+                rTracked = true;
+            }
+
+            workerHandFrame.SetCurls(lThumb, lIndex, lMiddle, lRing, lLittle, rThumb, rIndex, rMiddle, rRing, rLittle);
+            // Wrist rotation DISABLED (tracked=false): the palm basis from RTMW3D hand landmarks at a
+            // distance is too noisy and made the avatar wrist spin continuously. Fingers still curl. The
+            // palm is still computed above so this can be re-enabled (pass lTracked/rTracked) once hand
+            // landmarks are stable — close framing + measured hand depth.
+            workerHandFrame.SetWristRotations(lWrist, false, rWrist, false);
+            workerHandFrame.SetMeta(timestampSeconds, lTracked || rTracked);
+        }
+
+        // Read 21 [x,y,z] hand landmarks; null if absent/short.
+        private static Vector3[] ReadHand(JArray hand) {
+            if (hand == null || hand.Count < HandLandmarkCount) {
+                return null;
+            }
+            Vector3[] points = new Vector3[HandLandmarkCount];
+            int i = 0;
+            while (i < HandLandmarkCount) {
+                JArray point = hand[i] as JArray;
+                if (point == null || point.Count < 3) {
+                    return null;
+                }
+                points[i] = new Vector3(point[0].Value<float>(), point[1].Value<float>(), point[2].Value<float>());
+                i = i + 1;
+            }
+            return points;
+        }
+
+        private static float FingerCurl(Vector3[] points, int[] joints) {
+            Vector3 lower = points[joints[1]] - points[joints[0]];
+            Vector3 upper = points[joints[2]] - points[joints[1]];
+            if (lower.sqrMagnitude < 1e-10f || upper.sqrMagnitude < 1e-10f) {
+                return 0f;
+            }
+            float angle = Vector3.Angle(lower, upper);
+            return Mathf.Clamp01(angle / MaxBendAngle);
+        }
+
+        // Palm basis: forward = wrist(0) -> middleMcp(9), up = forward x (indexMcp(5) -> pinkyMcp(17)).
+        // Points converted with the shared PoseSpaceConverter so the palm quaternion matches the body axes.
+        private Quaternion PalmRotation(Vector3[] points) {
+            Vector3 wrist = converter.ToUnity(points[0].x, points[0].y, points[0].z);
+            Vector3 indexMcp = converter.ToUnity(points[5].x, points[5].y, points[5].z);
+            Vector3 middleMcp = converter.ToUnity(points[9].x, points[9].y, points[9].z);
+            Vector3 pinkyMcp = converter.ToUnity(points[17].x, points[17].y, points[17].z);
+            Vector3 forward = middleMcp - wrist;
+            Vector3 across = indexMcp - pinkyMcp;
+            if (forward.sqrMagnitude < 1e-10f || across.sqrMagnitude < 1e-10f) {
+                return Quaternion.identity;
+            }
+            Vector3 normal = Vector3.Cross(forward, across);
+            if (normal.sqrMagnitude < 1e-10f) {
+                return Quaternion.identity;
+            }
+            return Quaternion.LookRotation(forward.normalized, normal.normalized);
         }
     }
 }
