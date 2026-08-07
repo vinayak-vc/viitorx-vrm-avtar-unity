@@ -164,13 +164,17 @@ MonoBehaviour:
   filterDerivativeCutoff: 1
   useMediaPipeTracking: 1
   poseModelFileName: pose_landmarker_heavy.bytes
-  poseFlipX: 1
+  poseFlipX: 0
   poseFlipY: 1
-  poseFlipZ: 1
+  poseFlipZ: 0
   retargetMinConfidence: 0.5
   retargetExitConfidence: 0.3
   poseStaleSeconds: 0.5
-  useIkDriver: 1
+  useIkDriver: 0
+  trackLegs: 1
+  trackPosition: 1
+  positionScale: 1
+  positionSmoothing: 12
   useFaceTracking: 1
   useMediaPipeFace: 1
   faceModelFileName: face_landmarker.bytes
@@ -186,10 +190,8 @@ MonoBehaviour:
   sentisPersonCrop: 1
   sentisFilterBeta: 0.6
   sentisFilterMinCutoff: 1.5
-  useOakDTracking: 0
-  oakModelFileName: movenet_singlepose_lightning_3.blob
-  oakDeviceNum: 0
-  oakLandmarkThreshold: 0.3
+  useOakUdpTracking: 1
+  oakUdpPort: 8899
 --- !u!4 &375600628
 Transform:
   m_ObjectHideFlags: 0

@@ -48,16 +48,18 @@ namespace VirtualMirror.Retargeting {
             public readonly JointId[] FromJoints;
             public readonly JointId[] ToJoints;
             public readonly bool IsLimb;
+            public readonly bool IsLeg;
 
             public bool Active;
 
-            public BoundSegment(Transform bone, Quaternion restRotation, Vector3 restDirection, JointId[] fromJoints, JointId[] toJoints, bool isLimb) {
+            public BoundSegment(Transform bone, Quaternion restRotation, Vector3 restDirection, JointId[] fromJoints, JointId[] toJoints, bool isLimb, bool isLeg) {
                 Bone = bone;
                 RestRotation = restRotation;
                 RestDirection = restDirection;
                 FromJoints = fromJoints;
                 ToJoints = toJoints;
                 IsLimb = isLimb;
+                IsLeg = isLeg;
                 Active = false;
             }
         }
@@ -94,6 +96,7 @@ namespace VirtualMirror.Retargeting {
 
         private bool torsoActive;
         private bool armsLegsDrivenExternally;
+        private bool trackLegs = true;
         private int neutralWarmupFrames;
         private bool bound;
 
@@ -134,6 +137,15 @@ namespace VirtualMirror.Retargeting {
         /// </summary>
         public void SetArmsLegsDrivenExternally(bool value) {
             armsLegsDrivenExternally = value;
+        }
+
+        /// <summary>
+        /// Enable/disable driving the leg bones from pose landmarks. When false the legs are held at their
+        /// bind (straight standing) pose — used when the lower body is occluded / out of frame, where
+        /// BlazePose hallucinates the legs and would otherwise bend or splay the avatar.
+        /// </summary>
+        public void SetTrackLegs(bool value) {
+            trackLegs = value;
         }
 
         /// <summary>Re-capture the tracked neutral pose on the next confident frame.</summary>
@@ -179,7 +191,13 @@ namespace VirtualMirror.Retargeting {
             } else {
                 neutralWarmupFrames = 0;
             }
-            bool canCaptureNeutral = strongUp && neutralWarmupFrames >= NeutralWarmupRequired;
+            // Only lock the neutral facing while the user is roughly FACING the camera (the shoulder line runs
+            // across X, not into Z). This auto-calibrates without the C key: the neutral is captured the moment
+            // you face the camera, so a turned/back-facing start no longer locks a bad neutral (which looked
+            // like "flipped hands" until C was pressed). Until then the torso simply rests front-facing.
+            Vector3 shoulderLine = frame.GetLandmark(JointId.LeftShoulder).Position - frame.GetLandmark(JointId.RightShoulder).Position;
+            bool frontFacing = Mathf.Abs(shoulderLine.x) >= Mathf.Abs(shoulderLine.z);
+            bool canCaptureNeutral = strongUp && neutralWarmupFrames >= NeutralWarmupRequired && frontFacing;
             int index = 0;
             while (index < basisBones.Count) {
                 BasisBone basisBone = basisBones[index];
@@ -188,11 +206,22 @@ namespace VirtualMirror.Retargeting {
                 if (right.magnitude < MinTorsoVectorMagnitude) {
                     continue;
                 }
-                // Hips use a stable vertical up (no forward pitch → no rigid whole-body tilt on a waist bend);
-                // the spine uses the live torso-up so it carries the bend. See BasisBone.StableUp.
-                Vector3 boneUp = basisBone.StableUp ? Vector3.up : up;
+                // Hips use a stable vertical up AND a horizontally-projected hip-line, so they track only
+                // facing (yaw): any vertical component of the tracked hip line (sensor noise / off-centre
+                // body-orientation error) can no longer roll the whole avatar → no rigid whole-body tilt,
+                // and uprightness no longer depends on a good neutral calibration. The spine keeps the live
+                // torso-up + shoulder line so it still carries real lean/bend. See BasisBone.StableUp.
+                Vector3 boneUp;
+                Vector3 boneRight;
+                if (basisBone.StableUp) {
+                    boneUp = Vector3.up;
+                    boneRight = new Vector3(right.x, 0f, right.z);
+                } else {
+                    boneUp = up;
+                    boneRight = right;
+                }
                 Quaternion currentBasis;
-                if (!RotationFromVectors.TryBasis(right, boneUp, out currentBasis)) {
+                if (!RotationFromVectors.TryBasis(boneRight, boneUp, out currentBasis)) {
                     continue;
                 }
                 if (!basisBone.HasNeutral) {
@@ -212,6 +241,13 @@ namespace VirtualMirror.Retargeting {
             while (index < boundSegments.Count) {
                 BoundSegment segment = boundSegments[index];
                 index = index + 1;
+                if (!trackLegs && segment.IsLeg) {
+                    // Lower body occluded/out of frame: hold the leg at its bind (straight) pose instead of
+                    // following BlazePose's hallucinated leg landmarks (which bend/splay the avatar).
+                    segment.Active = false;
+                    segment.Bone.rotation = segment.RestRotation;
+                    continue;
+                }
                 if (armsLegsDrivenExternally && segment.IsLimb) {
                     segment.Active = false;
                     continue;
@@ -230,6 +266,11 @@ namespace VirtualMirror.Retargeting {
                 Quaternion delta = RotationFromVectors.Delta(segment.RestDirection, targetDirection, rollReference);
                 segment.Bone.rotation = delta * segment.RestRotation;
             }
+        }
+
+        private static bool IsLegBone(HumanBodyBones bone) {
+            return bone == HumanBodyBones.LeftUpperLeg || bone == HumanBodyBones.LeftLowerLeg
+                || bone == HumanBodyBones.RightUpperLeg || bone == HumanBodyBones.RightLowerLeg;
         }
 
         private Vector3 ComputeBodyForward(PoseFrame frame) {
@@ -258,7 +299,7 @@ namespace VirtualMirror.Retargeting {
                 if (restDirection.sqrMagnitude < 1e-8f) {
                     continue;
                 }
-                boundSegments.Add(new BoundSegment(bone, bone.rotation, restDirection, definition.FromJoints, definition.ToJoints, definition.IsLimb));
+                boundSegments.Add(new BoundSegment(bone, bone.rotation, restDirection, definition.FromJoints, definition.ToJoints, definition.IsLimb, IsLegBone(definition.Bone)));
             }
         }
 

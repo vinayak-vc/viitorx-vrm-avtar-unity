@@ -14,6 +14,8 @@ namespace VirtualMirror.Core {
         private readonly PoseLandmark[] landmarks;
         private double timestampSeconds;
         private bool isValid;
+        private Vector3 rootPositionMetres;
+        private bool hasRootPosition;
 
         public PoseFrame() {
             landmarks = new PoseLandmark[LandmarkCount];
@@ -23,6 +25,30 @@ namespace VirtualMirror.Core {
             get {
                 return isValid;
             }
+        }
+
+        // Measured world position of the body anchor (mid-hip) in Unity metres, when the provider supplies
+        // it (e.g. the OAK-D depth camera's spatial hip location). Lets the avatar translate with the user
+        // (walk/jump), which the hip-CENTRED landmarks alone cannot do. False when unavailable (RGB paths).
+        public Vector3 RootPositionMetres {
+            get {
+                return rootPositionMetres;
+            }
+        }
+
+        public bool HasRootPosition {
+            get {
+                return hasRootPosition;
+            }
+        }
+
+        public void SetRootPosition(Vector3 metres) {
+            rootPositionMetres = metres;
+            hasRootPosition = true;
+        }
+
+        public void ClearRootPosition() {
+            hasRootPosition = false;
         }
 
         public double TimestampSeconds {
@@ -54,6 +80,7 @@ namespace VirtualMirror.Core {
         public void MarkInvalid(double timestampSeconds) {
             this.timestampSeconds = timestampSeconds;
             isValid = false;
+            hasRootPosition = false;
         }
     }
 }

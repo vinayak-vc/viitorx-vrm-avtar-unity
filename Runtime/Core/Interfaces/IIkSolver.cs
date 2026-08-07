@@ -10,6 +10,7 @@ namespace VirtualMirror.Core {
         bool IsBound { get; }
         void Bind(Animator animator, Transform targetParent);
         void SetActive(bool active);
+        void SetLegTracking(bool enabled);
         void Apply(PoseFrame frame, float minConfidence);
         void Unbind();
     }

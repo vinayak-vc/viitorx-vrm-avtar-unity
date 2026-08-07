@@ -201,6 +201,19 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             if (mapped > 0) {
+                // "xyz" = the OAK-D SpatialLocationCalculator's measured mid-hip position (millimetres, camera
+                // space: X right, Y down, Z forward). Run it through the same converter (axis/mirror parity)
+                // and hand it to the frame as a world anchor so the avatar can translate with the user.
+                JArray xyz = root["xyz"] as JArray;
+                if (xyz != null && xyz.Count >= 3) {
+                    float hipX = xyz[0].Value<float>();
+                    float hipY = xyz[1].Value<float>();
+                    float hipZ = xyz[2].Value<float>();
+                    Vector3 rootMetres = converter.ToUnityPosition(hipX / 1000f, hipY / 1000f, hipZ / 1000f);
+                    target.SetRootPosition(rootMetres);
+                } else {
+                    target.ClearRootPosition();
+                }
                 target.SetMeta(timestampSeconds, true);
             } else {
                 target.MarkInvalid(timestampSeconds);

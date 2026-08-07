@@ -52,6 +52,16 @@ namespace VirtualMirror.App {
         [SerializeField] private float retargetExitConfidence = 0.3f;
         [SerializeField] private float poseStaleSeconds = 0.5f;
         [SerializeField] private bool useIkDriver = true;
+        // Lower-body IK. Default off: in the OAK-D webcam setup the legs are typically desk-occluded / out of
+        // the narrow color FOV, and BlazePose hallucinates the occluded legs → folded avatar legs. Off keeps
+        // legs straight at rest. Turn on only when the full lower body is reliably framed.
+        [SerializeField] private bool trackLegs = false;
+        // Root translation from the OAK-D's measured hip position, so the avatar walks/jumps with the user
+        // (a webcam mono path cannot do this reliably; the depth camera can). Movement is neutral-relative
+        // and scaled; smoothing damps depth jitter. positionScale 1 = 1:1 metres.
+        [SerializeField] private bool trackPosition = true;
+        [SerializeField] private float positionScale = 1f;
+        [SerializeField] private float positionSmoothing = 12f;
         [SerializeField] private bool useFaceTracking = true;
         [SerializeField] private bool useMediaPipeFace = true;
         [SerializeField] private string faceModelFileName = "face_landmarker.bytes";
@@ -76,6 +86,7 @@ namespace VirtualMirror.App {
         private AvatarSessionController avatarSession;
         private ICameraCapture cameraCapture;
         private IBodyTrackingProvider bodyProvider;
+        private PoseSpaceConverter converter;
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
         private IIkSolver ikSolver;
@@ -90,6 +101,11 @@ namespace VirtualMirror.App {
         private MirrorCameraController cameraController;
         private double lastFrameTimestamp;
         private float lastFreshTime;
+        private Transform avatarRootTransform;
+        private Vector3 avatarRootInitialPosition;
+        private bool hasPositionNeutral;
+        private Vector3 positionNeutralHip;
+        private Vector3 positionCurrentOffset;
 
         public ServiceRegistry Services {
             get {
@@ -166,6 +182,7 @@ namespace VirtualMirror.App {
             bodyProvider.Tick(deltaSeconds);
             if (Input.GetKeyDown(KeyCode.C)) {
                 retargeter.Recalibrate();
+                hasPositionNeutral = false;
                 if (handRetargeter != null) {
                     handRetargeter.Recalibrate();
                 }
@@ -180,9 +197,17 @@ namespace VirtualMirror.App {
             }
             if (animator != boundAnimator) {
                 retargeter.Bind(animator);
+                retargeter.SetTrackLegs(trackLegs);
+                Transform avatarRoot = avatarSession.Current.Root != null ? avatarSession.Current.Root.transform : null;
+                avatarRootTransform = avatarRoot;
+                if (avatarRootTransform != null) {
+                    avatarRootInitialPosition = avatarRootTransform.position;
+                }
+                hasPositionNeutral = false;
+                positionCurrentOffset = Vector3.zero;
                 if (ikSolver != null) {
-                    Transform avatarRoot = avatarSession.Current.Root != null ? avatarSession.Current.Root.transform : null;
                     ikSolver.Bind(animator, avatarRoot);
+                    ikSolver.SetLegTracking(trackLegs);
                 }
                 boundAnimator = animator;
             }
@@ -201,6 +226,19 @@ namespace VirtualMirror.App {
                     retargeter.Apply(filtered, retargetMinConfidence, retargetExitConfidence);
                     if (ikActive) {
                         ikSolver.Apply(filtered, retargetMinConfidence);
+                    }
+                    // World translation from the measured hip anchor (unfiltered `frame` carries it; the joint
+                    // filter only smooths landmarks). Neutral-relative + scaled + exponentially smoothed so the
+                    // avatar walks/jumps with the user without inheriting depth jitter.
+                    if (trackPosition && avatarRootTransform != null && frame.HasRootPosition) {
+                        if (!hasPositionNeutral) {
+                            positionNeutralHip = frame.RootPositionMetres;
+                            hasPositionNeutral = true;
+                        }
+                        Vector3 targetOffset = (frame.RootPositionMetres - positionNeutralHip) * positionScale;
+                        float lerpT = 1f - Mathf.Exp(-positionSmoothing * deltaSeconds);
+                        positionCurrentOffset = Vector3.Lerp(positionCurrentOffset, targetOffset, lerpT);
+                        avatarRootTransform.position = avatarRootInitialPosition + positionCurrentOffset;
                     }
                 }
             }
@@ -296,7 +334,7 @@ namespace VirtualMirror.App {
             if (useIkDriver) {
                 ikSolver = new AnimationRiggingIkDriver();
             }
-            PoseSpaceConverter converter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
+            converter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
             // OAK-D via the Python sidecar over UDP (B2, ADR-016) takes top priority. No native DLL in-process
             // → cannot crash Unity. Binds a UDP socket; if the port is free it "starts" and waits for the
             // sidecar's datagrams (avatar rests until the sidecar streams). Run udp_pose_sender.py separately.
@@ -457,7 +495,12 @@ namespace VirtualMirror.App {
                     calibrationPanel = panel;
                     calibrationPanel.SetInitialValues(poseFlipX, useIkDriver, useFaceTracking, useHandTracking, filterMinCutoff, filterBeta);
                     calibrationPanel.OnCameraDeviceChanged += HandleCameraDeviceChanged;
-                    calibrationPanel.OnMirrorFlipToggled += (value) => { poseFlipX = value; };
+                    calibrationPanel.OnMirrorFlipToggled += (value) => {
+                        poseFlipX = value;
+                        if (converter != null) {
+                            converter.SetFlipX(value);
+                        }
+                    };
                     calibrationPanel.OnIkToggled += (value) => { useIkDriver = value; };
                     calibrationPanel.OnFaceToggled += (value) => { useFaceTracking = value; };
                     calibrationPanel.OnHandToggled += (value) => { useHandTracking = value; };

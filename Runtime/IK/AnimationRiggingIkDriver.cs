@@ -51,6 +51,10 @@ namespace VirtualMirror.IK {
 
         private bool bound;
         private bool active;
+        // When false, the leg constraints are held at rest (straight legs). Defaults true to preserve the
+        // prior full-body behavior; the composition root turns it off when the lower body cannot be framed
+        // (desk-occluded / narrow FOV), because BlazePose still hallucinates occluded legs and would fold them.
+        private bool legTracking = true;
 
         public bool IsBound {
             get {
@@ -90,6 +94,18 @@ namespace VirtualMirror.IK {
             if (!active) {
                 SetConstraintWeight(leftArmConstraint, 0f);
                 SetConstraintWeight(rightArmConstraint, 0f);
+                SetConstraintWeight(leftLegConstraint, 0f);
+                SetConstraintWeight(rightLegConstraint, 0f);
+            }
+        }
+
+        /// <summary>
+        /// Enable/disable leg IK. When disabled the legs rest straight (occluded/out-of-frame lower body),
+        /// avoiding the folded-leg artifact from BlazePose's hallucinated occluded landmarks.
+        /// </summary>
+        public void SetLegTracking(bool value) {
+            legTracking = value;
+            if (!legTracking) {
                 SetConstraintWeight(leftLegConstraint, 0f);
                 SetConstraintWeight(rightLegConstraint, 0f);
             }
@@ -265,6 +281,10 @@ namespace VirtualMirror.IK {
 
         private void UpdateLeg(PoseFrame frame, HumanBodyBones rootBone, JointId hipJoint, JointId kneeJoint, JointId ankleJoint, Transform target, Transform hint, TwoBoneIKConstraint constraint, float minConfidence, float avatarLength) {
             if (constraint == null) {
+                return;
+            }
+            if (!legTracking) {
+                constraint.weight = 0f;
                 return;
             }
             PoseLandmark ankleLandmark = frame.GetLandmark(ankleJoint);
