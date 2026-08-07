@@ -67,10 +67,6 @@ namespace VirtualMirror.App {
         [SerializeField] private bool sentisPersonCrop = true;
         [SerializeField] private float sentisFilterBeta = 0.6f;
         [SerializeField] private float sentisFilterMinCutoff = 1.5f;
-        [SerializeField] private bool useOakDTracking = false; // B1 (in-Unity native plugin) — abandoned, keep off
-        [SerializeField] private string oakModelFileName = "movenet_singlepose_lightning_3.blob";
-        [SerializeField] private int oakDeviceNum = 0;
-        [SerializeField] private float oakLandmarkThreshold = 0.3f;
         [SerializeField] private bool useOakUdpTracking = false; // B2 (Python sidecar over UDP) — ADR-016
         [SerializeField] private int oakUdpPort = 8899;
 
@@ -314,18 +310,6 @@ namespace VirtualMirror.App {
                     oakUdp.Dispose();
                 }
             }
-            // OAK-D in-Unity native plugin (B1) — abandoned as too crash-prone; kept behind the flag (OFF).
-            if (bodyProvider == null && useOakDTracking) {
-                string oakModelPath = Path.Combine(Application.dataPath, "Plugins", "OAKForUnity", "Models", oakModelFileName);
-                OakDPoseProvider oakProvider = new OakDPoseProvider(logService, converter, oakModelPath, oakDeviceNum, oakLandmarkThreshold);
-                oakProvider.StartTracking();
-                if (oakProvider.IsRunning) {
-                    bodyProvider = oakProvider;
-                } else {
-                    logService.Log(LogLevel.Warning, "OAK-D provider failed to start; falling back to RGB tracking.");
-                    oakProvider.Dispose();
-                }
-            }
             if (bodyProvider == null) {
                 if (useSentis3dTracking && sentisModel != null) {
                     bodyProvider = new SentisPoseProvider(logService, cameraCapture, converter, sentisModel, sentisImageNetNorm, sentisMetreScale, sentisDepthScale, sentisPersonCrop);
@@ -437,9 +421,6 @@ namespace VirtualMirror.App {
         private string DescribeActiveTracking() {
             if (bodyProvider is OakDUdpPoseProvider) {
                 return "OAK-D 3D (UDP sidecar)";
-            }
-            if (bodyProvider is OakDPoseProvider) {
-                return "OAK-D 3D (on-device)";
             }
             if (bodyProvider is SentisPoseProvider) {
                 return "Sentis RTMW3D (GPU)";

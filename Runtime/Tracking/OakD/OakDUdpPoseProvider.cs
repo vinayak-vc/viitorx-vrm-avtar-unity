@@ -40,6 +40,9 @@ namespace VirtualMirror.Tracking.OakD {
         private bool hasNewFrame;
         private bool hasAnyFrame;
         private long frameCounter;
+        private long framesReceived;
+        private long parseErrors;
+        private const int LogEveryFrames = 90;
 
         public OakDUdpPoseProvider(ILogService logService, PoseSpaceConverter converter, int port) {
             if (logService == null) {
@@ -56,6 +59,20 @@ namespace VirtualMirror.Tracking.OakD {
         public bool IsRunning {
             get {
                 return running;
+            }
+        }
+
+        // Diagnostics for live bring-up: datagrams received and parse failures. Read on the main thread
+        // (e.g. HUD) while the worker updates them via Interlocked.
+        public long ReceivedCount {
+            get {
+                return Interlocked.Read(ref framesReceived);
+            }
+        }
+
+        public long ParseErrorCount {
+            get {
+                return Interlocked.Read(ref parseErrors);
             }
         }
 
@@ -98,22 +115,28 @@ namespace VirtualMirror.Tracking.OakD {
                         continue;
                     }
                     string json = Encoding.UTF8.GetString(data);
+                    long received = Interlocked.Increment(ref framesReceived);
                     frameCounter = frameCounter + 1;
                     ParseInto(workerFrame, json, frameCounter * 0.033);
                     lock (gate) {
                         hasNewFrame = true;
+                    }
+                    if (received <= 3 || received % LogEveryFrames == 0) {
+                        logService.Log(LogLevel.Info, "OAK-D UDP rx=" + received + " parseErr=" + Interlocked.Read(ref parseErrors) + " (port " + port + ").");
                     }
                 } catch (SocketException) {
                     // Receive timeout (no sidecar data yet) — keep waiting.
                 } catch (ObjectDisposedException) {
                     return; // socket closed on Dispose
                 } catch (Exception exception) {
+                    Interlocked.Increment(ref parseErrors);
                     logService.LogException(exception, "OAK-D UDP receive/parse failed");
                 }
             }
         }
 
         public bool TryGetLatestFrame(out PoseFrame latest) {
+            bool available;
             lock (gate) {
                 if (hasNewFrame) {
                     PoseFrame temp = mainFrame;
@@ -122,9 +145,10 @@ namespace VirtualMirror.Tracking.OakD {
                     hasNewFrame = false;
                     hasAnyFrame = true;
                 }
+                available = hasAnyFrame;
             }
             latest = mainFrame;
-            return hasAnyFrame;
+            return available;
         }
 
         public void Dispose() {
