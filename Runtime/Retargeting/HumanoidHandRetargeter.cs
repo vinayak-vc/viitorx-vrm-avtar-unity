@@ -13,12 +13,14 @@ namespace VirtualMirror.Retargeting {
             public readonly Quaternion restLocalRotation;
             public readonly Vector3 bendAxis;
             public readonly float maxDegrees;
+            public readonly int fingerIndex; // M12: 0=thumb..4=little, so a missing bone can't shift curls
 
-            public FingerJointPair(Transform transform, Vector3 bendAxis, float maxDegrees) {
+            public FingerJointPair(Transform transform, Vector3 bendAxis, float maxDegrees, int fingerIndex) {
                 this.transform = transform;
                 this.restLocalRotation = transform != null ? transform.localRotation : Quaternion.identity;
                 this.bendAxis = bendAxis;
                 this.maxDegrees = maxDegrees;
+                this.fingerIndex = fingerIndex;
             }
         }
 
@@ -53,6 +55,32 @@ namespace VirtualMirror.Retargeting {
         public void Recalibrate() {
             leftHasNeutral = false;
             rightHasNeutral = false;
+        }
+
+        /// <summary>
+        /// LOW-A: reset all finger joints to their rest (open) pose and clear the wrist neutral. Called
+        /// when hand tracking is toggled off so the fingers relax to open instead of freezing mid-curl.
+        /// </summary>
+        public void ResetToOpen() {
+            if (!bound) {
+                return;
+            }
+            ResetFingers(leftFingerJoints);
+            ResetFingers(rightFingerJoints);
+            leftHasNeutral = false;
+            rightHasNeutral = false;
+        }
+
+        private static void ResetFingers(List<FingerJointPair> list) {
+            int i = 0;
+            int count = list.Count;
+            while (i < count) {
+                FingerJointPair joint = list[i];
+                i = i + 1;
+                if (joint.transform != null) {
+                    joint.transform.localRotation = joint.restLocalRotation;
+                }
+            }
         }
 
         public void Bind(Animator animator) {
@@ -117,7 +145,11 @@ namespace VirtualMirror.Retargeting {
 
         private void BindHandFingers(Animator animator, bool isLeft) {
             List<FingerJointPair> jointsList = isLeft ? leftFingerJoints : rightFingerJoints;
-            Vector3 bendAxis = Vector3.right;
+            Vector3 fingerBendAxis = Vector3.right;
+            // LOW-B: the thumb's anatomical curl plane differs from the four fingers; bending it about the
+            // same +X axis flexes it in the wrong plane. Use a distinct axis for the thumb. (Heuristic —
+            // convention-sensitive per VRM rig; tune against a real avatar if the thumb looks off.)
+            Vector3 thumbBendAxis = Vector3.up;
 
             HumanBodyBones[] proximalBones = isLeft ? new HumanBodyBones[] {
                 HumanBodyBones.LeftThumbProximal, HumanBodyBones.LeftIndexProximal, HumanBodyBones.LeftMiddleProximal, HumanBodyBones.LeftRingProximal, HumanBodyBones.LeftLittleProximal
@@ -139,33 +171,37 @@ namespace VirtualMirror.Retargeting {
 
             int i = 0;
             while (i < 5) {
-                AddBoneIfPresent(jointsList, animator, proximalBones[i], bendAxis, 50f);
-                AddBoneIfPresent(jointsList, animator, intermediateBones[i], bendAxis, 60f);
-                AddBoneIfPresent(jointsList, animator, distalBones[i], bendAxis, 40f);
+                Vector3 bendAxis = i == 0 ? thumbBendAxis : fingerBendAxis;
+                AddBoneIfPresent(jointsList, animator, proximalBones[i], bendAxis, 50f, i);
+                AddBoneIfPresent(jointsList, animator, intermediateBones[i], bendAxis, 60f, i);
+                AddBoneIfPresent(jointsList, animator, distalBones[i], bendAxis, 40f, i);
                 i = i + 1;
             }
         }
 
-        private static void AddBoneIfPresent(List<FingerJointPair> list, Animator animator, HumanBodyBones boneId, Vector3 bendAxis, float maxDegrees) {
+        private static void AddBoneIfPresent(List<FingerJointPair> list, Animator animator, HumanBodyBones boneId, Vector3 bendAxis, float maxDegrees, int fingerIndex) {
             Transform boneTransform = animator.GetBoneTransform(boneId);
             if (boneTransform != null) {
-                list.Add(new FingerJointPair(boneTransform, bendAxis, maxDegrees));
+                list.Add(new FingerJointPair(boneTransform, bendAxis, maxDegrees, fingerIndex));
             }
         }
 
         private static void ApplyHandFingers(List<FingerJointPair> list, float thumbCurl, float indexCurl, float middleCurl, float ringCurl, float littleCurl) {
-            float[] curls = new float[] { thumbCurl, thumbCurl, thumbCurl, indexCurl, indexCurl, indexCurl, middleCurl, middleCurl, middleCurl, ringCurl, ringCurl, ringCurl, littleCurl, littleCurl, littleCurl };
+            // M12: select each joint's curl by its stored fingerIndex, NOT by list position. A VRM avatar
+            // missing an optional finger bone (e.g. an intermediate) makes the list shorter; positional
+            // indexing then fed every later joint the wrong finger's curl.
+            float[] curlsByFinger = new float[] { thumbCurl, indexCurl, middleCurl, ringCurl, littleCurl };
             int i = 0;
             int count = list.Count;
-            while (i < count && i < curls.Length) {
+            while (i < count) {
                 FingerJointPair joint = list[i];
-                if (joint.transform != null)
-                {
-                    float curlAmount = Mathf.Clamp01(curls[i]);
-                    Quaternion curlRotation = Quaternion.AngleAxis(curlAmount * joint.maxDegrees, joint.bendAxis);
-                    joint.transform.localRotation = joint.restLocalRotation * curlRotation;
-                }
                 i = i + 1;
+                if (joint.transform == null) {
+                    continue;
+                }
+                float curlAmount = Mathf.Clamp01(curlsByFinger[joint.fingerIndex]);
+                Quaternion curlRotation = Quaternion.AngleAxis(curlAmount * joint.maxDegrees, joint.bendAxis);
+                joint.transform.localRotation = joint.restLocalRotation * curlRotation;
             }
         }
     }

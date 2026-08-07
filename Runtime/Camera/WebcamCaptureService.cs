@@ -82,9 +82,22 @@ namespace VirtualMirror.Camera {
             }
             string deviceName = ResolveDeviceName(request.DeviceName, devices);
             StopCapture();
-            webCamTexture = new WebCamTexture(deviceName, request.RequestedWidth, request.RequestedHeight, request.RequestedFps);
-            webCamTexture.Play();
-            logService.Log(LogLevel.Info, "Webcam started: '" + deviceName + "' requested " + request.RequestedWidth + "x" + request.RequestedHeight + "@" + request.RequestedFps + "fps.");
+            // M7: report the real state. new WebCamTexture / Play() throw on an invalid or busy device;
+            // catch that and return false instead of the old unconditional true. (Play() is async, so
+            // permission-denied may not surface here — the caller should also poll IsRunning; see note.)
+            try {
+                webCamTexture = new WebCamTexture(deviceName, request.RequestedWidth, request.RequestedHeight, request.RequestedFps);
+                webCamTexture.Play();
+            } catch (Exception exception) {
+                logService.LogException(exception, "Webcam failed to open: '" + deviceName + "'");
+                StopCapture();
+                return false;
+            }
+            if (webCamTexture == null) {
+                logService.Log(LogLevel.Warning, "Webcam '" + deviceName + "' did not initialize.");
+                return false;
+            }
+            logService.Log(LogLevel.Info, "Webcam start requested: '" + deviceName + "' " + request.RequestedWidth + "x" + request.RequestedHeight + "@" + request.RequestedFps + "fps (opening asynchronously; verify via IsRunning).");
             return true;
         }
 

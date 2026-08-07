@@ -5,6 +5,43 @@ Purpose: next agent can continue without re-deriving context.
 
 ---
 
+## ✅ Full-codebase audit + fix pass — CODE COMPLETE (2026-08-07 session 2); PLAY verify pending
+
+A 5-track read-only audit produced [`docs/AUDIT_2026-08-07.md`](AUDIT_2026-08-07.md) (findings + `file:line`
++ fixes + a **Progress** section) and a verification plan
+[`docs/AUDIT_TESTPLAN_2026-08-07.md`](AUDIT_TESTPLAN_2026-08-07.md). **Root cause of the recurring
+twist/jitter/leg/mirror/finger bugs: the same responsibility is duplicated across the Unity app and the
+Python sidecar** (mirror ×2, smoothing ×2, uprightness ×3, config ×2) + a dead IK path. Core remedy:
+single-owner-per-transform.
+
+**✅ ALL 27 fix tasks now CODE-COMPLETE + automated-verified (2026-08-07 session 2, Unity MCP on port 6400).**
+Session 1 wrote the Unity C# blind (no MCP bound). Session 2: (1) fixed the one compile blocker —
+`RotationFromVectors.cs` called `SharedUp(...)` but only `SafeUp` existed; wrote the missing helper (one
+up well-separated from BOTH directions). (2) Finished every REMAINING item: **H2** config single-source
+(removed the dead, divergent `AppSettings` schema so the `[SerializeField]` fields are the sole source),
+**H5** IK toggle (`EnsureIkSolver` builds+binds on enable), **M1** lazy face/hand toggles
+(`EnsureFaceProvider`/`EnsureHandProvider`), **M10** filter-dt gate (filter once per NEW frame via
+`TimestampSeconds`), **M16** sidecar `zrel` depth-hole fallback (bench-verified), and all **LOW-A/C/D**
+remainders (HUD real fields, shared converter, `PoseSpaceConverter` volatile, Sentis input-dispose +
+output-by-index, hands-reset-on-toggle-off, camera dropdown hidden off-webcam, `KeypointSmoother`
+default, fps counter, SimCC conf note). **Mirror single-owner = resolved-by-design** (sidecar `--mirror`
+off + Unity owns the live flip; the audit's "gate the Unity toggle off" was deliberately NOT done — it
+would kill the only live control).
+
+**Verification done (automated):** Unity **compile 0 errors / 0 warnings**; **EditMode 21/21**; sidecar
+**`py_compile` clean** (7 files); **`bench_m16.py`** passes (zrel fallback + H7 gate). See the test plan's
+**Results** + **Sign-off** sections.
+
+**⏳ What remains = PLAY verification (the user's — needs the OAK-D attached + eyes on the avatar).** Not
+runnable headless (MCP Play-mode freezes unfocused + can orphan the `DontDestroyOnLoad` AppBootstrap).
+Steps for the user:
+1. Run the whole-body sidecar: `cd python-sidecar~ && .venv\Scripts\python wholebody_udp_sender.py --model <path-to>\rtmw3d-x.onnx` (add `--show` for the OAK preview window). Confirm `[wb] frames=… sent=… fps~…` lines with a body in view.
+2. In Unity: tick `useOakUdpTracking` on AppBootstrap, Play → HUD "OAK-D 3D (UDP sidecar)", avatar tracks.
+3. Walk the test plan §B **PLAY** rows + §C symptom clip (upright/untwisted, stable-when-still, legs, fingers, arms, live FPS).
+4. **Live-tune (parameters, not code):** if occluded limbs poke the wrong way in depth, flip `ZREL_SIGN` in `wholebody_udp_sender.py` (or run `--no-zrel-fallback`); confirm mirror-X via the live checkbox; tune `positionScale`/`positionSmoothing`.
+
+---
+
 ## ⚠️ Python sidecar relocated to a submodule (2026-08-07)
 
 The OAK-D / model Python sidecar now lives in its **own repo** `vinayak-vc/viitorx-vrm-model-python`,

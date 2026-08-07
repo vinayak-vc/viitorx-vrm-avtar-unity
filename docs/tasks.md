@@ -4,6 +4,29 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## ⚠️ Full-codebase audit fix backlog (2026-08-07)
+
+A 5-track read-only audit found the recurring bugs stem from **duplicated responsibility across the
+Unity app and the Python sidecar** (mirror ×2, smoothing ×2, uprightness ×3, config ×2) plus a dead IK
+path. Full report + `file:line` + fixes: [`AUDIT_2026-08-07.md`](AUDIT_2026-08-07.md). Verification
+plan: [`AUDIT_TESTPLAN_2026-08-07.md`](AUDIT_TESTPLAN_2026-08-07.md). Tracked as session tasks
+(H1–H7, M-CONSOLIDATE, M1/M4/M5/M7–M18, LOW-A..D, TEST).
+
+Fix order: (1) single-owner consolidation of mirror/smoothing/uprightness → (2) H7+M12 finger twitch →
+(3) H6 leg gate → (4) H3+M4+M8 hot-swap stability → (5) H1+H2 diagnostics/persistence →
+(6) H4/M5/M9/M10 leak/race/teardown → (7) LOW batches via the consolidation refactors.
+
+**Progress:** ✅ **ALL AUDIT CODE FIXES COMPLETE (2026-08-07 session 2, Unity MCP on port 6400).** Every
+H/M/LOW item is implemented + **compile-verified 0 errors/0 warnings + EditMode 21/21 + sidecar
+`py_compile` clean + M16 bench**. Session-1 wrote the Unity C# blind (no MCP); session-2 fixed the
+`SharedUp` compile blocker, then finished the REMAINING items (H2 config single-source via dead-schema
+removal, H5 IK toggle, M1 lazy face/hand toggles, M10 filter-dt gate, M16 zrel fallback, and the
+LOW-A/C/D remainders), re-verifying compile + tests after each batch. Mirror single-owner is
+resolved-by-design (Unity owns; sidecar `--mirror` off). **Only PLAY verification (OAK-D + eyes on the
+avatar) remains — the user's, per `AUDIT_TESTPLAN_2026-08-07.md` §B PLAY + §C.**
+
+---
+
 ## Now (M0)
 
 - [x] Create Runtime/Editor/Tests folder scaffold per `02_ProjectStructure.md`  

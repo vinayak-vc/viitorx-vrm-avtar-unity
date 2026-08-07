@@ -7,9 +7,12 @@ namespace VirtualMirror.Core {
     /// handedness/mirror is empirically tuned per SDS-025 §3. Flipping X mirrors left/right.
     /// </summary>
     public sealed class PoseSpaceConverter {
-        private float signX;
-        private float signY;
-        private float signZ;
+        // LOW-C: volatile because SetFlip* is called from the main thread (the live "Mirror" panel toggle)
+        // while ToUnity/ToUnityPosition read these on the provider worker thread(s) — and the OAK/MediaPipe
+        // hand path now shares this single instance across two workers. volatile prevents torn/stale reads.
+        private volatile float signX;
+        private volatile float signY;
+        private volatile float signZ;
 
         public PoseSpaceConverter(bool flipX, bool flipY, bool flipZ) {
             signX = flipX ? -1f : 1f;

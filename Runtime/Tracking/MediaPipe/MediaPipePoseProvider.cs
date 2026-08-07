@@ -99,6 +99,7 @@ namespace VirtualMirror.Tracking.MediaPipe {
                 logService.Log(LogLevel.Info, "MediaPipe pose provider started (CPU, VIDEO, full model, async worker).");
             } catch (Exception exception) {
                 logService.LogException(exception, "Failed to start MediaPipe pose provider");
+                MediaPipeGlobalInit.Release(logService); // H4: pair the Acquire above so the refcount doesn't leak on failure
                 running = false;
             }
         }

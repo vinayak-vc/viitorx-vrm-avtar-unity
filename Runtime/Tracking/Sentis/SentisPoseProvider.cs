@@ -72,9 +72,15 @@ namespace VirtualMirror.Tracking.Sentis {
         private float[] inputBuffer;
         private TensorShape inputShape;
 
+        private Tensor<float> pendingInput; // LOW-C: kept alive until readback so the async GPU run can't read a freed input
         private Tensor<float> pendingX;
         private Tensor<float> pendingY;
         private Tensor<float> pendingZ;
+        // LOW-C: output tensor names resolved by INDEX at load (order = x,y,z) instead of the hardcoded
+        // ONNX node names "output"/"1554"/"1556", which silently break if the model is re-exported.
+        private string outputNameX;
+        private string outputNameY;
+        private string outputNameZ;
 
         private PoseFrame workerFrame;
         private PoseFrame mainFrame;
@@ -146,6 +152,16 @@ namespace VirtualMirror.Tracking.Sentis {
             }
             try {
                 model = ModelLoader.Load(modelAsset);
+                // LOW-C: resolve the three SimCC outputs by INDEX (x,y,z order per the confirmed RTMW3D
+                // I/O) so a model re-export with different node names doesn't silently yield null outputs.
+                if (model.outputs.Count < 3) {
+                    logService.Log(LogLevel.Error, "Sentis RTMW3D model must expose 3 outputs (x/y/z SimCC); found " + model.outputs.Count + ". Aborting Sentis start.");
+                    running = false;
+                    return;
+                }
+                outputNameX = model.outputs[0].name;
+                outputNameY = model.outputs[1].name;
+                outputNameZ = model.outputs[2].name;
                 worker = new Worker(model, BackendType.GPUCompute);
                 inputShape = new TensorShape(1, 3, InputHeight, InputWidth);
                 inputBuffer = new float[3 * InputHeight * InputWidth];
@@ -185,14 +201,22 @@ namespace VirtualMirror.Tracking.Sentis {
                 return;
             }
             frameCounter = frameCounter + 1;
-            Tensor<float> input = new Tensor<float>(inputShape, inputBuffer);
-            worker.Schedule(input);
-            input.Dispose();
+            // LOW-C: keep the input tensor alive until the async readback completes (disposed in
+            // PollReadback / on the null-output path below), rather than disposing it right after Schedule
+            // — the GPUCompute run reads it asynchronously, so an immediate dispose is a possible
+            // use-after-free.
+            pendingInput = new Tensor<float>(inputShape, inputBuffer);
+            worker.Schedule(pendingInput);
 
-            pendingX = worker.PeekOutput("output") as Tensor<float>;
-            pendingY = worker.PeekOutput("1554") as Tensor<float>;
-            pendingZ = worker.PeekOutput("1556") as Tensor<float>;
+            pendingX = worker.PeekOutput(outputNameX) as Tensor<float>;
+            pendingY = worker.PeekOutput(outputNameY) as Tensor<float>;
+            pendingZ = worker.PeekOutput(outputNameZ) as Tensor<float>;
             if (pendingX == null || pendingY == null || pendingZ == null) {
+                // LOW-C: was a silent return — log so an output-name/model mismatch is visible instead of
+                // a mysteriously dead avatar. Dispose the held input and retry next frame.
+                logService.Log(LogLevel.Warning, "Sentis outputs not resolvable (x/y/z null); skipping frame.");
+                pendingInput.Dispose();
+                pendingInput = null;
                 return;
             }
             pendingX.ReadbackRequest();
@@ -215,6 +239,10 @@ namespace VirtualMirror.Tracking.Sentis {
 
         public void Dispose() {
             running = false;
+            if (pendingInput != null) { // LOW-C: free a held input if we tear down mid-inference
+                pendingInput.Dispose();
+                pendingInput = null;
+            }
             if (worker != null) {
                 worker.Dispose();
                 worker = null;
@@ -246,6 +274,10 @@ namespace VirtualMirror.Tracking.Sentis {
                 cpuX.Dispose();
                 cpuY.Dispose();
                 cpuZ.Dispose();
+                if (pendingInput != null) { // LOW-C: safe to free the input now that the run has read back
+                    pendingInput.Dispose();
+                    pendingInput = null;
+                }
                 inFlight = false;
             }
         }

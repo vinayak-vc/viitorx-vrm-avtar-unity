@@ -29,9 +29,16 @@ namespace VirtualMirror.Rendering {
             float horizontalFovRad = Mathf.Atan(Mathf.Tan(verticalFovRad) * activeCamera.aspect);
             float distanceForWidth = bounds.extents.x / Mathf.Tan(horizontalFovRad);
             float distance = Mathf.Max(distanceForHeight, distanceForWidth) * paddingFactor + bounds.extents.z;
+            // Guard the degenerate zero-bounds avatar: distance 0 puts the camera inside the model and
+            // gives LookRotation a ~zero direction (Unity warns, yields identity). Clamp to a minimum.
+            distance = Mathf.Max(distance, 0.5f);
             Vector3 cameraPosition = new Vector3(lookTarget.x, lookTarget.y, bounds.center.z - distance);
+            Vector3 lookDirection = lookTarget - cameraPosition;
+            if (lookDirection.sqrMagnitude < 1e-6f) {
+                return;
+            }
             activeCamera.transform.position = cameraPosition;
-            activeCamera.transform.rotation = Quaternion.LookRotation(lookTarget - cameraPosition, Vector3.up);
+            activeCamera.transform.rotation = Quaternion.LookRotation(lookDirection, Vector3.up);
         }
 
         private static bool TryComputeBounds(Transform root, out Bounds bounds) {

@@ -278,14 +278,15 @@ namespace VirtualMirror.Tracking.MediaPipe {
                 float middle = FingerCurl(landmarks, MiddleJoints);
                 float ring = FingerCurl(landmarks, RingJoints);
                 float little = FingerCurl(landmarks, LittleJoints);
-                Quaternion wrist = PalmRotation(landmarks);
+                // LOW-C: PalmRotation is NOT computed here — wrist rotation is disabled project-wide (M14),
+                // so leftWrist/rightWrist stay identity and are passed untracked below. The PalmRotation
+                // helper is retained (unused) for an easy re-enable once the palm basis is stabilized.
                 if (isLeft) {
                     leftThumb = thumb;
                     leftIndex = index;
                     leftMiddle = middle;
                     leftRing = ring;
                     leftLittle = little;
-                    leftWrist = wrist;
                     leftTracked = true;
                 } else {
                     rightThumb = thumb;
@@ -293,7 +294,6 @@ namespace VirtualMirror.Tracking.MediaPipe {
                     rightMiddle = middle;
                     rightRing = ring;
                     rightLittle = little;
-                    rightWrist = wrist;
                     rightTracked = true;
                 }
                 handIndex = handIndex + 1;
@@ -302,7 +302,11 @@ namespace VirtualMirror.Tracking.MediaPipe {
             workerFrame.SetCurls(
                 leftThumb, leftIndex, leftMiddle, leftRing, leftLittle,
                 rightThumb, rightIndex, rightMiddle, rightRing, rightLittle);
-            workerFrame.SetWristRotations(leftWrist, leftTracked, rightWrist, rightTracked);
+            // M14: wrist rotation is DISABLED project-wide — the palm basis from hand landmarks is too
+            // noisy and spun the avatar wrist (see the OAK path). Pass tracked=false so ApplyWrist stays
+            // inert on this MediaPipe fallback too, and its ungated neutral capture never runs. Fingers
+            // still curl. (leftWrist/rightWrist stay identity; PalmRotation is no longer computed — LOW-C.)
+            workerFrame.SetWristRotations(leftWrist, false, rightWrist, false);
             workerFrame.SetMeta(timestamp * 0.001, true);
         }
 

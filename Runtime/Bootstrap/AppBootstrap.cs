@@ -101,6 +101,8 @@ namespace VirtualMirror.App {
         private MirrorCameraController cameraController;
         private double lastFrameTimestamp;
         private float lastFreshTime;
+        private double lastFilterTimestamp; // M10: timestamp of the last frame actually pushed through jointFilter
+        private PoseFrame lastFilteredFrame; // M10: reused on repeat Updates so the filter runs once per NEW frame
         private Transform avatarRootTransform;
         private Vector3 avatarRootInitialPosition;
         private bool hasPositionNeutral;
@@ -151,6 +153,9 @@ namespace VirtualMirror.App {
             if (settingsStore != null) {
                 settingsStore.Tick(Time.unscaledDeltaTime);
             }
+            if (performanceMonitor != null) {
+                performanceMonitor.Tick(Time.unscaledDeltaTime); // H1: drive the FPS/frame-time HUD
+            }
         }
 
         private void LateUpdate() {
@@ -198,6 +203,14 @@ namespace VirtualMirror.App {
             if (animator != boundAnimator) {
                 retargeter.Bind(animator);
                 retargeter.SetTrackLegs(trackLegs);
+                // H3: the avatar was hot-swapped — unbind the face + hand retargeters too so the guarded
+                // `!IsBound` rebinds below re-target the NEW avatar's rig instead of the disposed one.
+                if (handRetargeter != null) {
+                    handRetargeter.Unbind();
+                }
+                if (expressionRetargeter != null) {
+                    expressionRetargeter.Unbind();
+                }
                 Transform avatarRoot = avatarSession.Current.Root != null ? avatarSession.Current.Root.transform : null;
                 avatarRootTransform = avatarRoot;
                 if (avatarRootTransform != null) {
@@ -213,7 +226,29 @@ namespace VirtualMirror.App {
             }
             PoseFrame frame;
             if (bodyProvider.TryGetLatestFrame(out frame)) {
-                PoseFrame filtered = jointFilter.Filter(frame, deltaSeconds);
+                // M3/M18: the OAK sidecar already smooths (One-Euro + outlier gate) at the source, so
+                // running Unity's One-Euro again would double-filter and add lag. Smoothing is single-owned
+                // by the sidecar for the OAK path; pass the frame through unfiltered here.
+                // M10: for the MediaPipe/Sentis paths TryGetLatestFrame returns the SAME cached frame on
+                // every render tick, so filtering each Update (~60 Hz) over ~30 Hz data mistuned the
+                // One-Euro derivative (dt = render delta, not the inter-sample delta). Filter ONLY on a
+                // genuinely-new frame (timestamp changed), using the timestamp delta, and reuse the last
+                // filtered buffer on repeats.
+                PoseFrame filtered;
+                if (bodyProvider is OakDUdpPoseProvider) {
+                    filtered = frame;
+                } else {
+                    double frameTimestamp = frame.TimestampSeconds;
+                    if (lastFilteredFrame == null || frameTimestamp != lastFilterTimestamp) {
+                        float sampleDelta = deltaSeconds;
+                        if (lastFilteredFrame != null && frameTimestamp > lastFilterTimestamp) {
+                            sampleDelta = (float)(frameTimestamp - lastFilterTimestamp);
+                        }
+                        lastFilteredFrame = jointFilter.Filter(frame, sampleDelta);
+                        lastFilterTimestamp = frameTimestamp;
+                    }
+                    filtered = lastFilteredFrame;
+                }
                 // FK and IK are mutually exclusive on the arm/leg bones: when the IK solver is active and
                 // bound it owns the limbs, so FK drives only torso (hips/spine) + neck. Otherwise FK drives
                 // everything and the solver is released so the rig stops deforming the limbs.
@@ -269,10 +304,31 @@ namespace VirtualMirror.App {
                 if (handProvider.TryGetFrame(out handFrame)) {
                     handRetargeter.Apply(handFrame);
                 }
+            } else if (handRetargeter != null && handRetargeter.IsBound) {
+                // LOW-A: hand tracking toggled off — relax fingers to the open rest pose so they don't
+                // freeze mid-curl (mirrors the face-tracking reset above).
+                handRetargeter.ResetToOpen();
             }
         }
 
+        private bool servicesTornDown;
+
         private void OnApplicationQuit() {
+            TeardownServices();
+        }
+
+        // M5: also tear down on OnDestroy so an Editor domain reload / script recompile while playing
+        // releases the OAK-D UDP socket + receive thread. Without it the socket leaks and the next Play
+        // hits "port 8899 in use" and silently falls back off the OAK path. Idempotent (servicesTornDown).
+        private void OnDestroy() {
+            TeardownServices();
+        }
+
+        private void TeardownServices() {
+            if (servicesTornDown) {
+                return;
+            }
+            servicesTornDown = true;
             if (faceProvider != null) {
                 faceProvider.Dispose();
             }
@@ -310,6 +366,7 @@ namespace VirtualMirror.App {
             settingsStore.Load();
             UniVrmAvatarLoader avatarLoader = new UniVrmAvatarLoader(logService, maxAvatarFileBytes);
             services = new ServiceRegistry(pathProvider, logService, settingsStore, avatarLoader);
+            performanceMonitor = new PerformanceMonitor(); // H1: was never instantiated → HUD FPS stayed blank
             StartCameraCapture();
             StartTracking();
             logService.Log(LogLevel.Info, "Core services ready.");
@@ -320,6 +377,14 @@ namespace VirtualMirror.App {
                 cameraCapture = new VideoFileCaptureService(logService, sampleVideoPath);
             } else {
                 cameraCapture = new WebcamCaptureService(logService);
+            }
+            if (useOakUdpTracking) {
+                // LOW-A: the OAK-D path streams its own frames from the Python sidecar over UDP; the local
+                // webcam (often a virtual cam that fails to open in this setup) is not needed and only logs
+                // a scary "camera failed" warning. Keep the service object (so any fallback still has one)
+                // but do not open a device.
+                logService.Log(LogLevel.Info, "OAK-D path active; skipping local camera open.");
+                return;
             }
             CameraCaptureRequest request = new CameraCaptureRequest(string.Empty, cameraWidth, cameraHeight, cameraFps);
             bool started = cameraCapture.StartCapture(request);
@@ -332,7 +397,7 @@ namespace VirtualMirror.App {
             jointFilter = new JointFilterPipeline(filterMinCutoff, filterBeta, filterDerivativeCutoff);
             retargeter = new HumanoidPoseRetargeter();
             if (useIkDriver) {
-                ikSolver = new AnimationRiggingIkDriver();
+                EnsureIkSolver();
             }
             converter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
             // OAK-D via the Python sidecar over UDP (B2, ADR-016) takes top priority. No native DLL in-process
@@ -367,61 +432,111 @@ namespace VirtualMirror.App {
             }
             if (bodyProvider is SentisPoseProvider) {
                 // The 3D path (fast dance, true depth) needs a snappier filter than the calm-webcam default,
-                // or fast motion gets damped into the "under-responsive" look. Live-tunable via the sliders.
-                filterMinCutoff = sentisFilterMinCutoff;
-                filterBeta = sentisFilterBeta;
+                // or fast motion gets damped into the "under-responsive" look. LOW-A: apply the Sentis
+                // profile to the LIVE filter WITHOUT overwriting the serialized filterMinCutoff/Beta fields
+                // — those stay the single source for the calibration sliders and the other providers.
                 jointFilter.SetParameters(sentisFilterMinCutoff, sentisFilterBeta);
             }
             logService.Log(LogLevel.Info, "Body tracking started.");
 
             if (useFaceTracking) {
-                if (useMediaPipeFace) {
-                    string faceModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", faceModelFileName);
-                    MediaPipeFaceProvider mediaPipeFace = new MediaPipeFaceProvider(logService, cameraCapture, faceModelPath);
-                    if (mediaPipeFace.StartTracking()) {
-                        faceProvider = mediaPipeFace;
-                    } else {
-                        logService.Log(LogLevel.Warning, "MediaPipe face provider failed to start; falling back to fake face tracking.");
-                        mediaPipeFace.Dispose();
-                        faceProvider = new FakeFaceTrackingProvider();
-                        faceProvider.StartTracking();
-                    }
+                EnsureFaceProvider();
+            }
+            if (useHandTracking) {
+                EnsureHandProvider();
+            }
+        }
+
+        // H5: the IK solver used to be constructed only at startup and only when useIkDriver was already
+        // true; the scene ships it off, so ticking "IK Arm/Leg Driver" at runtime just flipped a bool and
+        // nothing ever bound → the whole IK driver was dead as shipped. Build on demand and bind
+        // immediately if an avatar is already loaded (UpdateTracking's animator-changed block only binds a
+        // solver that already exists). Idempotent.
+        private void EnsureIkSolver() {
+            if (ikSolver == null) {
+                ikSolver = new AnimationRiggingIkDriver();
+            }
+            if (!ikSolver.IsBound && boundAnimator != null) {
+                Transform avatarRoot = null;
+                if (avatarSession != null && avatarSession.Current != null && avatarSession.Current.Root != null) {
+                    avatarRoot = avatarSession.Current.Root.transform;
+                }
+                ikSolver.Bind(boundAnimator, avatarRoot);
+                ikSolver.SetLegTracking(trackLegs);
+            }
+        }
+
+        // M1: extracted from StartTracking so the face toggle can lazily construct the provider when it is
+        // enabled at runtime. The old code built providers once behind the start-time bool, so toggling a
+        // feature on later did nothing (the provider stayed null). Idempotent.
+        private void EnsureFaceProvider() {
+            if (faceProvider != null) {
+                return;
+            }
+            if (bodyProvider is OakDUdpPoseProvider) {
+                // LOW-A: the OAK-D setup feeds no RGB webcam into Unity (the OAK color sensor stays on the
+                // sidecar) and the OAK stream carries no face data, so a MediaPipe face provider here would
+                // only poll a dead capture. Skip it; face tracking is unavailable on the OAK path.
+                logService.Log(LogLevel.Info, "Face tracking unavailable on the OAK-D path (no RGB webcam); skipping face provider.");
+                return;
+            }
+            if (useMediaPipeFace) {
+                string faceModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", faceModelFileName);
+                MediaPipeFaceProvider mediaPipeFace = new MediaPipeFaceProvider(logService, cameraCapture, faceModelPath);
+                if (mediaPipeFace.StartTracking()) {
+                    faceProvider = mediaPipeFace;
                 } else {
+                    logService.Log(LogLevel.Warning, "MediaPipe face provider failed to start; falling back to fake face tracking.");
+                    mediaPipeFace.Dispose();
                     faceProvider = new FakeFaceTrackingProvider();
                     faceProvider.StartTracking();
                 }
-                expressionRetargeter = new VrmExpressionRetargeter();
-                logService.Log(LogLevel.Info, "Face tracking started.");
+            } else {
+                faceProvider = new FakeFaceTrackingProvider();
+                faceProvider.StartTracking();
             }
-            if (useHandTracking) {
-                if (bodyProvider is OakDUdpPoseProvider) {
-                    // The OAK-D sidecar streams fingers (lh/rh) alongside the body in one datagram, so drive
-                    // the hands from that same stream via a facade over the pose provider's socket — no
-                    // separate MediaPipe RGB webcam needed (which is unavailable in the OAK setup anyway).
-                    OakDUdpPoseProvider oakBody = (OakDUdpPoseProvider)bodyProvider;
-                    handProvider = new OakDUdpHandProvider(oakBody);
-                    handProvider.StartTracking();
-                    logService.Log(LogLevel.Info, "Hand tracking source: OAK-D UDP (fingers from the whole-body stream).");
-                } else if (useMediaPipeHand) {
-                    string handModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", handModelFileName);
-                    PoseSpaceConverter handConverter = new PoseSpaceConverter(poseFlipX, poseFlipY, poseFlipZ);
-                    MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath, handConverter);
-                    if (mediaPipeHand.StartTracking()) {
-                        handProvider = mediaPipeHand;
-                    } else {
-                        logService.Log(LogLevel.Warning, "MediaPipe hand provider failed to start; falling back to fake hand tracking.");
-                        mediaPipeHand.Dispose();
-                        handProvider = new FakeHandTrackingProvider();
-                        handProvider.StartTracking();
-                    }
+            if (expressionRetargeter == null) {
+                expressionRetargeter = new VrmExpressionRetargeter();
+            }
+            logService.Log(LogLevel.Info, "Face tracking started.");
+        }
+
+        // M1: same lazy-construct treatment for the hand toggle. Idempotent.
+        private void EnsureHandProvider() {
+            if (handProvider != null) {
+                return;
+            }
+            if (bodyProvider is OakDUdpPoseProvider) {
+                // The OAK-D sidecar streams fingers (lh/rh) alongside the body in one datagram, so drive
+                // the hands from that same stream via a facade over the pose provider's socket — no
+                // separate MediaPipe RGB webcam needed (which is unavailable in the OAK setup anyway).
+                OakDUdpPoseProvider oakBody = (OakDUdpPoseProvider)bodyProvider;
+                handProvider = new OakDUdpHandProvider(oakBody);
+                handProvider.StartTracking();
+                logService.Log(LogLevel.Info, "Hand tracking source: OAK-D UDP (fingers from the whole-body stream).");
+            } else if (useMediaPipeHand) {
+                string handModelPath = Path.Combine(Application.streamingAssetsPath, "MediaPipe", handModelFileName);
+                // LOW-A: reuse the SINGLE shared converter so a live mirror-flip (SetFlipX) applies to the
+                // hands too. The old code built a SECOND converter that never received runtime flip changes,
+                // so a live mirror toggle mirrored the body but not the fingers.
+                MediaPipeHandProvider mediaPipeHand = new MediaPipeHandProvider(logService, cameraCapture, handModelPath, converter);
+                if (mediaPipeHand.StartTracking()) {
+                    handProvider = mediaPipeHand;
                 } else {
+                    logService.Log(LogLevel.Warning, "MediaPipe hand provider failed to start; falling back to fake hand tracking.");
+                    mediaPipeHand.Dispose();
                     handProvider = new FakeHandTrackingProvider();
                     handProvider.StartTracking();
                 }
+            } else {
+                handProvider = new FakeHandTrackingProvider();
+                handProvider.StartTracking();
+            }
+            if (handRetargeter == null) {
                 handRetargeter = new HumanoidHandRetargeter();
                 handRetargeter.SetWristWeight(wristRotationWeight);
-                logService.Log(LogLevel.Info, "Hand tracking started.");
             }
+            logService.Log(LogLevel.Info, "Hand tracking started.");
         }
 
         private void LoadMirrorScene() {
@@ -444,6 +559,15 @@ namespace VirtualMirror.App {
         }
 
         private void SetupAvatarSession(Scene scene) {
+            // M4: an additive Mirror-scene reload re-runs this. Dispose the previous session (and unsubscribe
+            // its event) first, or the old session + its loaded avatar GameObject leak and AvatarChanged
+            // handlers accumulate on orphaned sessions.
+            if (avatarSession != null) {
+                avatarSession.AvatarChanged -= FrameCameraOnAvatar;
+                avatarSession.Dispose();
+                avatarSession = null;
+                boundAnimator = null;
+            }
             Transform avatarRoot = FindAvatarRoot(scene);
             if (avatarRoot == null) {
                 logService.Log(LogLevel.Warning, "AvatarRoot '" + avatarRootName + "' not found in scene " + scene.name + ".");
@@ -486,7 +610,11 @@ namespace VirtualMirror.App {
                     diagnosticsHud = panel;
                     diagnosticsHud.Initialize(performanceMonitor);
                     diagnosticsHud.SetTrackingStatus(DescribeActiveTracking());
-                    diagnosticsHud.SetCameraInfo(useVideoSource ? "Sample Video MP4" : "Webcam 1280x720@30fps");
+                    // LOW-A: interpolate the real serialized camera fields instead of a hardcoded string
+                    // (the scene may run 640x400 for OAK / any webcam resolution, not always 1280x720@30).
+                    diagnosticsHud.SetCameraInfo(useVideoSource
+                        ? "Sample Video MP4"
+                        : ("Webcam " + cameraWidth + "x" + cameraHeight + "@" + cameraFps + "fps"));
                     logService.Log(LogLevel.Info, "Diagnostics HUD wired.");
                     return;
                 }
@@ -502,6 +630,8 @@ namespace VirtualMirror.App {
                 if (panel != null) {
                     calibrationPanel = panel;
                     calibrationPanel.SetInitialValues(poseFlipX, useIkDriver, useFaceTracking, useHandTracking, filterMinCutoff, filterBeta);
+                    // LOW-A: only show the webcam picker when a webcam is actually the source.
+                    calibrationPanel.SetCameraDropdownVisible(!useVideoSource && !useOakUdpTracking);
                     calibrationPanel.OnCameraDeviceChanged += HandleCameraDeviceChanged;
                     calibrationPanel.OnMirrorFlipToggled += (value) => {
                         poseFlipX = value;
@@ -509,9 +639,24 @@ namespace VirtualMirror.App {
                             converter.SetFlipX(value);
                         }
                     };
-                    calibrationPanel.OnIkToggled += (value) => { useIkDriver = value; };
-                    calibrationPanel.OnFaceToggled += (value) => { useFaceTracking = value; };
-                    calibrationPanel.OnHandToggled += (value) => { useHandTracking = value; };
+                    calibrationPanel.OnIkToggled += (value) => {
+                        useIkDriver = value;
+                        if (value) {
+                            EnsureIkSolver(); // H5: build + bind the solver on enable, not just flip the bool
+                        }
+                    };
+                    calibrationPanel.OnFaceToggled += (value) => {
+                        useFaceTracking = value;
+                        if (value) {
+                            EnsureFaceProvider(); // M1: construct the provider on enable
+                        }
+                    };
+                    calibrationPanel.OnHandToggled += (value) => {
+                        useHandTracking = value;
+                        if (value) {
+                            EnsureHandProvider(); // M1: construct the provider on enable
+                        }
+                    };
                     calibrationPanel.OnFilterMinCutoffChanged += (value) => {
                         filterMinCutoff = value;
                         if (jointFilter != null) {

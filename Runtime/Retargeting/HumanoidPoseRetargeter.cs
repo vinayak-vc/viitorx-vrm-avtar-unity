@@ -24,6 +24,11 @@ namespace VirtualMirror.Retargeting {
         private static readonly JointId[] TorsoJoints = new JointId[] { JointId.LeftHip, JointId.RightHip, JointId.LeftShoulder, JointId.RightShoulder };
         private const float MinTorsoVectorMagnitude = 0.08f;
         private const int NeutralWarmupRequired = 8;
+        // H6: a leg is only driven when its ankle sits at least this far BELOW the hips along torso-up.
+        // Occluded/out-of-frame lower bodies make BlazePose/RTMW3D hallucinate collapsed legs with
+        // pass-through confidence; without this the FK path folds/splays them (the IK path already gated
+        // on this, but the FK path — the shipping default — did not). Metres, hip-relative.
+        private const float MinLegDropMetres = 0.35f;
 
         private sealed class SegmentDefinition {
             public readonly HumanBodyBones Bone;
@@ -49,10 +54,11 @@ namespace VirtualMirror.Retargeting {
             public readonly JointId[] ToJoints;
             public readonly bool IsLimb;
             public readonly bool IsLeg;
+            public readonly bool IsLeftLeg;
 
             public bool Active;
 
-            public BoundSegment(Transform bone, Quaternion restRotation, Vector3 restDirection, JointId[] fromJoints, JointId[] toJoints, bool isLimb, bool isLeg) {
+            public BoundSegment(Transform bone, Quaternion restRotation, Vector3 restDirection, JointId[] fromJoints, JointId[] toJoints, bool isLimb, bool isLeg, bool isLeftLeg) {
                 Bone = bone;
                 RestRotation = restRotation;
                 RestDirection = restDirection;
@@ -60,6 +66,7 @@ namespace VirtualMirror.Retargeting {
                 ToJoints = toJoints;
                 IsLimb = isLimb;
                 IsLeg = isLeg;
+                IsLeftLeg = isLeftLeg;
                 Active = false;
             }
         }
@@ -226,6 +233,9 @@ namespace VirtualMirror.Retargeting {
                 }
                 if (!basisBone.HasNeutral) {
                     if (!canCaptureNeutral) {
+                        // LOW-B: rest front-facing until a new neutral is captured, rather than freezing at
+                        // the last written pose (which looked stuck after a mid-session Recalibrate).
+                        basisBone.Bone.rotation = basisBone.AvatarRestRotation;
                         continue;
                     }
                     basisBone.NeutralBasis = currentBasis;
@@ -237,16 +247,22 @@ namespace VirtualMirror.Retargeting {
         }
 
         private void ApplySegments(PoseFrame frame, float enterConfidence, float exitConfidence, Vector3 rollReference) {
+            bool leftLegOk;
+            bool rightLegOk;
+            ComputeLegPlausibility(frame, out leftLegOk, out rightLegOk);
             int index = 0;
             while (index < boundSegments.Count) {
                 BoundSegment segment = boundSegments[index];
                 index = index + 1;
-                if (!trackLegs && segment.IsLeg) {
-                    // Lower body occluded/out of frame: hold the leg at its bind (straight) pose instead of
-                    // following BlazePose's hallucinated leg landmarks (which bend/splay the avatar).
-                    segment.Active = false;
-                    segment.Bone.rotation = segment.RestRotation;
-                    continue;
+                if (segment.IsLeg) {
+                    // Hold the leg at its bind (straight) pose when leg tracking is off OR the leg is not
+                    // plausibly standing (H6: ankle not clearly below the hips → occluded/hallucinated).
+                    bool sideOk = segment.IsLeftLeg ? leftLegOk : rightLegOk;
+                    if (!trackLegs || !sideOk) {
+                        segment.Active = false;
+                        segment.Bone.rotation = segment.RestRotation;
+                        continue;
+                    }
                 }
                 if (armsLegsDrivenExternally && segment.IsLimb) {
                     segment.Active = false;
@@ -271,6 +287,28 @@ namespace VirtualMirror.Retargeting {
         private static bool IsLegBone(HumanBodyBones bone) {
             return bone == HumanBodyBones.LeftUpperLeg || bone == HumanBodyBones.LeftLowerLeg
                 || bone == HumanBodyBones.RightUpperLeg || bone == HumanBodyBones.RightLowerLeg;
+        }
+
+        private static bool IsLeftLegBone(HumanBodyBones bone) {
+            return bone == HumanBodyBones.LeftUpperLeg || bone == HumanBodyBones.LeftLowerLeg;
+        }
+
+        // H6: is a leg confidently "standing" — its ankle at least MinLegDropMetres below the hips along
+        // torso-up? If neither the torso basis nor the drop is present, returns false (hold the leg).
+        private void ComputeLegPlausibility(PoseFrame frame, out bool leftLegOk, out bool rightLegOk) {
+            leftLegOk = false;
+            rightLegOk = false;
+            Vector3 midHip = 0.5f * (frame.GetLandmark(JointId.LeftHip).Position + frame.GetLandmark(JointId.RightHip).Position);
+            Vector3 midShoulder = 0.5f * (frame.GetLandmark(JointId.LeftShoulder).Position + frame.GetLandmark(JointId.RightShoulder).Position);
+            Vector3 torsoUp = midShoulder - midHip;
+            if (torsoUp.magnitude < MinTorsoVectorMagnitude) {
+                return;
+            }
+            torsoUp = torsoUp.normalized;
+            float leftDrop = Vector3.Dot(-torsoUp, frame.GetLandmark(JointId.LeftAnkle).Position - midHip);
+            float rightDrop = Vector3.Dot(-torsoUp, frame.GetLandmark(JointId.RightAnkle).Position - midHip);
+            leftLegOk = leftDrop >= MinLegDropMetres;
+            rightLegOk = rightDrop >= MinLegDropMetres;
         }
 
         private Vector3 ComputeBodyForward(PoseFrame frame) {
@@ -299,7 +337,7 @@ namespace VirtualMirror.Retargeting {
                 if (restDirection.sqrMagnitude < 1e-8f) {
                     continue;
                 }
-                boundSegments.Add(new BoundSegment(bone, bone.rotation, restDirection, definition.FromJoints, definition.ToJoints, definition.IsLimb, IsLegBone(definition.Bone)));
+                boundSegments.Add(new BoundSegment(bone, bone.rotation, restDirection, definition.FromJoints, definition.ToJoints, definition.IsLimb, IsLegBone(definition.Bone), IsLeftLegBone(definition.Bone)));
             }
         }
 

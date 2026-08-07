@@ -72,6 +72,15 @@ namespace VirtualMirror.App {
             CancellationToken token = loadCts.Token;
 
             AvatarLoadResult result = await loader.LoadAsync(request, avatarRoot, token);
+            // M8: a newer LoadAsync may have superseded this one while we awaited. The loader stops
+            // observing the token after instantiation, so guard here: drop the stale instance instead of
+            // disposing the newer `current` and installing the wrong avatar.
+            if (token.IsCancellationRequested) {
+                if (result.IsSuccess && result.Instance != null) {
+                    result.Instance.Dispose();
+                }
+                return AvatarLoadResult.Failure(AvatarLoadStatus.Error, "Avatar load superseded by a newer request.");
+            }
             if (!result.IsSuccess) {
                 logService.Log(LogLevel.Warning, "Avatar load failed (" + result.Status + "): " + result.Message);
                 return result;

@@ -13,16 +13,16 @@ using VirtualMirror.Core;
 namespace VirtualMirror.Tracking.OakD {
     /// <summary>
     /// <see cref="IBodyTrackingProvider"/> for the OAK-D depth camera via an EXTERNAL Python sidecar
-    /// (ADR-016, Option B2). The sidecar (<c>oak_sidecar/depthai_blazepose/udp_pose_sender.py</c>) runs
-    /// BlazePose on the OAK-D and streams the 33 body landmarks as JSON over local UDP. This provider only
-    /// reads that socket — there is NO native DepthAI DLL in the Unity process, so DepthAI instability can
-    /// never crash the editor (unlike the abandoned in-Unity plugin, which crashed on the native teardown).
+    /// (ADR-016/ADR-018, Option B2). The CANONICAL sidecar is
+    /// <c>python-sidecar~/wholebody_udp_sender.py</c> (RTMW3D whole-body + measured depth): it streams JSON
+    /// <c>{ "lm":[[x,y,z,vis]×33], "lh":[[x,y,z]×21]?, "rh":[…]?, "xyz":[mm×3], "src":[…] }</c> over local
+    /// UDP. (<c>depthai_blazepose/udp_pose_sender.py</c> is the DEPRECATED body-only BlazePose fallback —
+    /// it sends only <c>lm</c>+<c>xyz</c>, so hands never track with it.) This provider only reads the
+    /// socket — no native DepthAI DLL in-process, so DepthAI instability can never crash the editor.
     ///
-    /// The 33 landmarks are BlazePose order == our <see cref="JointId"/> order, so index maps 1:1. The
-    /// sidecar sends <c>landmarks_world</c> (metres, hip-relative, GHUM) — the same convention as the
-    /// MediaPipe world-landmark path — so they run through the shared <see cref="PoseSpaceConverter"/> and
-    /// the retargeter consumes them exactly like the MediaPipe provider. Reads happen on a background thread;
-    /// the <see cref="PoseFrame"/> is double-buffered like <c>MediaPipePoseProvider</c>.
+    /// <c>lm</c> is JointId order (index maps 1:1); optional <c>lh</c>/<c>rh</c> feed the companion
+    /// <see cref="OakDUdpHandProvider"/>. Landmarks are hip-relative metres run through the shared
+    /// <see cref="PoseSpaceConverter"/>. Reads happen on a background thread; frames are double-buffered.
     /// </summary>
     public sealed class OakDUdpPoseProvider : IBodyTrackingProvider {
         private const int NumKeypoints = 33;
@@ -46,19 +46,23 @@ namespace VirtualMirror.Tracking.OakD {
         private UdpClient udpClient;
         private Thread receiveThread;
         private volatile bool running;
-        private PoseFrame workerFrame;
-        private PoseFrame mainFrame;
+        private readonly System.Diagnostics.Stopwatch clock = new System.Diagnostics.Stopwatch();
+        // M9: volatile so the worker's ParseInto writes and the consumer's lock-guarded reference swap of
+        // these buffers have consistent cross-thread visibility (no torn read of the in-flight frame).
+        private volatile PoseFrame workerFrame;
+        private volatile PoseFrame mainFrame;
         private bool hasNewFrame;
         private bool hasAnyFrame;
         // Hand frames from the same datagram (lh/rh) — one socket feeds both body and hands. Published
         // to a companion OakDUdpHandProvider facade via TryGetHandFrame. Double-buffered like the pose.
-        private HandFrame workerHandFrame;
-        private HandFrame mainHandFrame;
+        private volatile HandFrame workerHandFrame;
+        private volatile HandFrame mainHandFrame;
         private bool hasNewHand;
         private bool hasAnyHand;
-        private long frameCounter;
         private long framesReceived;
         private long parseErrors;
+        private bool handsSeen;      // M17: warn once if the stream never carries lh/rh (old body-only sender?)
+        private bool handsWarned;
         private const int LogEveryFrames = 90;
 
         public OakDUdpPoseProvider(ILogService logService, PoseSpaceConverter converter, int port) {
@@ -108,6 +112,7 @@ namespace VirtualMirror.Tracking.OakD {
                 mainHandFrame = new HandFrame();
                 hasNewHand = false;
                 hasAnyHand = false;
+                clock.Restart(); // LOW-C: real monotonic arrival timestamps (was a fixed 33 ms/frame assumption)
                 running = true;
                 receiveThread = new Thread(ReceiveLoop);
                 receiveThread.IsBackground = true;
@@ -120,7 +125,9 @@ namespace VirtualMirror.Tracking.OakD {
         }
 
         public void StopTracking() {
-            running = false;
+            // LOW-C: close the socket + join the thread (not just running=false) so a Stop→Start cycle
+            // without Dispose does not hit "port in use" / two receive loops. Idempotent with Dispose.
+            Teardown();
         }
 
         public void Tick(float deltaSeconds) {
@@ -137,8 +144,7 @@ namespace VirtualMirror.Tracking.OakD {
                     }
                     string json = Encoding.UTF8.GetString(data);
                     long received = Interlocked.Increment(ref framesReceived);
-                    frameCounter = frameCounter + 1;
-                    ParseInto(workerFrame, json, frameCounter * 0.033);
+                    ParseInto(workerFrame, json, clock.Elapsed.TotalSeconds);
                     lock (gate) {
                         hasNewFrame = true;
                         hasNewHand = true;
@@ -146,13 +152,21 @@ namespace VirtualMirror.Tracking.OakD {
                     if (received <= 3 || received % LogEveryFrames == 0) {
                         logService.Log(LogLevel.Info, "OAK-D UDP rx=" + received + " parseErr=" + Interlocked.Read(ref parseErrors) + " (port " + port + ").");
                     }
+                    // M17: healthy stream but NEVER any hand data → warn once (likely the deprecated
+                    // body-only BlazePose sender, or hands simply never in view).
+                    if (!handsSeen && !handsWarned && received >= 150) {
+                        handsWarned = true;
+                        logService.Log(LogLevel.Warning, "OAK-D UDP: 150+ datagrams with no lh/rh — fingers will not track. Run wholebody_udp_sender.py (not the deprecated blazepose sender) and keep hands in view.");
+                    }
                 } catch (SocketException) {
                     // Receive timeout (no sidecar data yet) — keep waiting.
                 } catch (ObjectDisposedException) {
-                    return; // socket closed on Dispose
+                    return; // socket closed on Teardown
                 } catch (Exception exception) {
-                    Interlocked.Increment(ref parseErrors);
-                    logService.LogException(exception, "OAK-D UDP receive/parse failed");
+                    long errs = Interlocked.Increment(ref parseErrors);
+                    if (errs <= 3 || errs % LogEveryFrames == 0) {
+                        logService.LogException(exception, "OAK-D UDP receive/parse failed (parseErr=" + errs + ")");
+                    }
                 }
             }
         }
@@ -192,12 +206,16 @@ namespace VirtualMirror.Tracking.OakD {
         }
 
         public void Dispose() {
+            Teardown();
+        }
+
+        private void Teardown() {
             running = false;
             if (udpClient != null) {
                 udpClient.Close(); // unblocks a Receive parked in the worker
                 udpClient = null;
             }
-            if (receiveThread != null) {
+            if (receiveThread != null && receiveThread != Thread.CurrentThread) {
                 receiveThread.Join(1000);
                 receiveThread = null;
             }
@@ -302,6 +320,7 @@ namespace VirtualMirror.Tracking.OakD {
                 rTracked = true;
             }
 
+            handsSeen = true; // M17: at least one hand carried data → the stream is the whole-body sender
             workerHandFrame.SetCurls(lThumb, lIndex, lMiddle, lRing, lLittle, rThumb, rIndex, rMiddle, rRing, rLittle);
             // Wrist rotation DISABLED (tracked=false): the palm basis from RTMW3D hand landmarks at a
             // distance is too noisy and made the avatar wrist spin continuously. Fingers still curl. The

@@ -26,7 +26,7 @@ namespace VirtualMirror.Camera {
                 lastMousePosition = Input.mousePosition;
             }
 
-            if (Input.GetMouseButtonUp(0) && Input.GetMouseButtonUp(1)) {
+            if (Input.GetMouseButtonUp(0) || Input.GetMouseButtonUp(1)) {
                 isDragging = false;
             }
 

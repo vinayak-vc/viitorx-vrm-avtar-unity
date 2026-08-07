@@ -14,8 +14,12 @@ namespace VirtualMirror.Retargeting {
             }
             Vector3 restDirection = restForward.normalized;
             Vector3 targetDirection = targetForward.normalized;
-            Quaternion restBasis = Quaternion.LookRotation(restDirection, SafeUp(restDirection, referenceUp));
-            Quaternion targetBasis = Quaternion.LookRotation(targetDirection, SafeUp(targetDirection, referenceUp));
+            // M13: use ONE shared up for both bases. The old code resolved the up independently for rest
+            // and target; when one direction was near-parallel to referenceUp it fell back to a different
+            // axis than the other, so targetBasis * inverse(restBasis) carried spurious roll (twist).
+            Vector3 up = SharedUp(restDirection, targetDirection, referenceUp);
+            Quaternion restBasis = Quaternion.LookRotation(restDirection, up);
+            Quaternion targetBasis = Quaternion.LookRotation(targetDirection, up);
             return targetBasis * Quaternion.Inverse(restBasis);
         }
 
@@ -33,15 +37,27 @@ namespace VirtualMirror.Retargeting {
             return true;
         }
 
-        private static Vector3 SafeUp(Vector3 forward, Vector3 referenceUp) {
+        // M13: resolve ONE up shared by both bases. It must be well-separated from BOTH the rest and
+        // the target direction; otherwise LookRotation for the near-parallel side falls back to a
+        // different internal axis and the delta carries spurious roll. Prefer referenceUp, then the
+        // world axes, picking the first that is usable against both directions.
+        private static Vector3 SharedUp(Vector3 restForward, Vector3 targetForward, Vector3 referenceUp) {
             Vector3 candidate = referenceUp.normalized;
-            if (candidate.sqrMagnitude > 1e-6f && Mathf.Abs(Vector3.Dot(forward, candidate)) < 0.99f) {
+            if (candidate.sqrMagnitude > 1e-6f && IsUsableUp(restForward, targetForward, candidate)) {
                 return candidate;
             }
-            if (Mathf.Abs(Vector3.Dot(forward, Vector3.up)) < 0.99f) {
+            if (IsUsableUp(restForward, targetForward, Vector3.up)) {
                 return Vector3.up;
             }
-            return Vector3.right;
+            if (IsUsableUp(restForward, targetForward, Vector3.right)) {
+                return Vector3.right;
+            }
+            return Vector3.forward;
+        }
+
+        private static bool IsUsableUp(Vector3 restForward, Vector3 targetForward, Vector3 up) {
+            return Mathf.Abs(Vector3.Dot(restForward, up)) < 0.99f
+                && Mathf.Abs(Vector3.Dot(targetForward, up)) < 0.99f;
         }
     }
 }

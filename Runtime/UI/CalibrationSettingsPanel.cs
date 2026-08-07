@@ -102,6 +102,16 @@ namespace VirtualMirror.UI {
             }
         }
 
+        /// <summary>
+        /// LOW-A: hide the webcam device dropdown when the app is not sourcing from a webcam (video file
+        /// or the OAK-D sidecar), where listing/selecting webcams is misleading and does nothing.
+        /// </summary>
+        public void SetCameraDropdownVisible(bool visible) {
+            if (cameraDropdown != null) {
+                cameraDropdown.gameObject.SetActive(visible);
+            }
+        }
+
         public void ShowPanel() {
             gameObject.SetActive(true);
         }
