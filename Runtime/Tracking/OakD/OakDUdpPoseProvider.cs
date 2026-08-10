@@ -282,6 +282,15 @@ namespace VirtualMirror.Tracking.OakD {
             ParseHands(root, timestampSeconds);
         }
 
+        // ADR-021: temporal smoothing state for the re-enabled wrist palm basis (worker-thread only). The
+        // raw palm quaternion from distant hand landmarks jitters/spins (ADR-018); slerp-smoothing it before
+        // streaming keeps the wrist responsive without the spin.
+        private const float WristSmoothing = 0.35f;
+        private Quaternion smoothedLeftWrist = Quaternion.identity;
+        private Quaternion smoothedRightWrist = Quaternion.identity;
+        private bool hasLeftWrist;
+        private bool hasRightWrist;
+
         // Parse the sidecar's lh/rh arrays (21 x [x,y,z] hip-relative metres each) into the hand frame:
         // per-finger curl from the bend angle at each finger's middle joint (angle is invariant to the
         // converter's axis flips, so raw points are used), and a palm orientation run through the shared
@@ -322,11 +331,23 @@ namespace VirtualMirror.Tracking.OakD {
 
             handsSeen = true; // M17: at least one hand carried data → the stream is the whole-body sender
             workerHandFrame.SetCurls(lThumb, lIndex, lMiddle, lRing, lLittle, rThumb, rIndex, rMiddle, rRing, rLittle);
-            // Wrist rotation DISABLED (tracked=false): the palm basis from RTMW3D hand landmarks at a
-            // distance is too noisy and made the avatar wrist spin continuously. Fingers still curl. The
-            // palm is still computed above so this can be re-enabled (pass lTracked/rTracked) once hand
-            // landmarks are stable — close framing + measured hand depth.
-            workerHandFrame.SetWristRotations(lWrist, false, rWrist, false);
+            // ADR-021: wrist rotation RE-ENABLED on the OAK path (was disabled in ADR-018 because the raw
+            // palm basis spun at a distance). The palm quaternion is temporally slerp-smoothed here so it
+            // stays responsive without spinning; downstream it is applied delta-from-neutral and blended by
+            // the live-tunable wristRotationWeight (set the slider/field to 0 to disable). Best ~2 m framing.
+            if (lTracked) {
+                smoothedLeftWrist = hasLeftWrist ? Quaternion.Slerp(smoothedLeftWrist, lWrist, WristSmoothing) : lWrist;
+                hasLeftWrist = true;
+            } else {
+                hasLeftWrist = false;
+            }
+            if (rTracked) {
+                smoothedRightWrist = hasRightWrist ? Quaternion.Slerp(smoothedRightWrist, rWrist, WristSmoothing) : rWrist;
+                hasRightWrist = true;
+            } else {
+                hasRightWrist = false;
+            }
+            workerHandFrame.SetWristRotations(smoothedLeftWrist, lTracked, smoothedRightWrist, rTracked);
             workerHandFrame.SetMeta(timestampSeconds, lTracked || rTracked);
         }
 

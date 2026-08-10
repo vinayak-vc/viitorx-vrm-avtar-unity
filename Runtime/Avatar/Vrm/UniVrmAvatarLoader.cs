@@ -21,6 +21,12 @@ namespace VirtualMirror.Avatar.Vrm {
         private readonly ILogService logService;
         private readonly long maxFileBytes;
 
+        // ADR-022: when true, load with the VRM1.0 normalized control rig generated so the Kalidokit
+        // whole-body driver can drive normalized bones. Default off (the FK/IK path drives raw bones and a
+        // generated control rig would fight it by forcing the T-pose each frame). Set BEFORE the avatar
+        // loads (a load-time decision — toggling at runtime does not retro-add the rig).
+        public bool GenerateControlRig { get; set; }
+
         public UniVrmAvatarLoader(ILogService logService, long maxFileBytes) {
             if (logService == null) {
                 throw new ArgumentNullException(nameof(logService));
@@ -47,10 +53,13 @@ namespace VirtualMirror.Avatar.Vrm {
                 }
                 cancellationToken.ThrowIfCancellationRequested();
 
+                ControlRigGenerationOption controlRigOption = GenerateControlRig
+                    ? ControlRigGenerationOption.Generate
+                    : ControlRigGenerationOption.None;
                 Vrm10Instance vrmInstance = await Vrm10.LoadBytesAsync(
                     bytes,
                     canLoadVrm0X: true,
-                    controlRigGenerationOption: ControlRigGenerationOption.None,
+                    controlRigGenerationOption: controlRigOption,
                     showMeshes: request.ShowMeshesOnLoad,
                     awaitCaller: new RuntimeOnlyAwaitCaller(),
                     ct: cancellationToken);

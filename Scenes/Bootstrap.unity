@@ -154,7 +154,7 @@ MonoBehaviour:
   settingsSaveDebounceSeconds: 0.4
   mirrorLogToConsole: 1
   maxAvatarFileBytes: 268435456
-  useVideoSource: 0
+  useVideoSource: 1
   sampleVideoPath: D:\Unity\viitorx-vrm-avtar-unity-base-project\Assets\StreamingAssets\vid.mp4
   cameraWidth: 1280
   cameraHeight: 720
@@ -182,7 +182,20 @@ MonoBehaviour:
   useMediaPipeHand: 1
   handModelFileName: hand_landmarker.bytes
   wristRotationWeight: 0.7
-  useSentis3dTracking: 1
+  useKalidokitArms: 1
+  kalidokitAxisSigns: {x: -1, y: -1, z: 1}
+  kalidokitLerp: 0.4
+  kalidokitDriveHand: 1
+  useKalidokitBody: 1
+  kalidokitBodyEulerSigns: {x: 1, y: 1, z: 1}
+  kalidokitBodyFlipQuat: 2
+  kalidokitBodyLerp: 0.5
+  kalidokitBodyLegs: 1
+  kalidokitBodyMirror: 1
+  kalidokitBodyTorsoRoll: 0
+  kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
+  kalidokitFingerWeight: 1
+  useSentis3dTracking: 0
   sentisModel: {fileID: 5022602860645237092, guid: 521045b5f9b746a44bdda694478d1c83, type: 3}
   sentisImageNetNorm: 1
   sentisMetreScale: 1.7
@@ -190,7 +203,7 @@ MonoBehaviour:
   sentisPersonCrop: 1
   sentisFilterBeta: 0.6
   sentisFilterMinCutoff: 1.5
-  useOakUdpTracking: 1
+  useOakUdpTracking: 0
   oakUdpPort: 8899
 --- !u!4 &375600628
 Transform:

@@ -69,6 +69,35 @@ namespace VirtualMirror.App {
         [SerializeField] private bool useMediaPipeHand = true;
         [SerializeField] private string handModelFileName = "hand_landmarker.bytes";
         [SerializeField] private float wristRotationWeight = 0.7f;
+        // ADR-022: Kalidokit-ported arm solver (derives limb roll from geometry → no forearm helicopter).
+        // Off by default so it can be A/B'd against the current FK. The axis signs map Kalidokit's Euler
+        // (right-handed, Y-up) onto Unity bone-local rotation and are the one convention that needs a live
+        // tuning pass — all four are Inspector-tunable during Play.
+        [SerializeField] private bool useKalidokitArms = false;
+        [SerializeField] private Vector3 kalidokitAxisSigns = new Vector3(-1f, -1f, 1f);
+        [SerializeField] private float kalidokitLerp = 0.4f;
+        [SerializeField] private bool kalidokitDriveHand = true;
+        // ADR-022 WHOLE-BODY path (recommended over the arms-only raw-bone path above): loads the VRM
+        // normalized control rig and drives the entire skeleton from the ported Kalidokit solver with ONE
+        // global convention, so there is no per-bone axis guessing. MUST be set BEFORE Play (the control rig
+        // is a load-time option). Tune the single convention live: kalidokitBodyFlipQuat (0..3) +
+        // kalidokitBodyEulerSigns; kalidokitBodyLerp = smoothing. When on, FK/IK + the hand-curl path are
+        // bypassed (the control rig owns the skeleton); face blendshapes still run.
+        [SerializeField] private bool useKalidokitBody = false;
+        [SerializeField] private Vector3 kalidokitBodyEulerSigns = Vector3.one;
+        [SerializeField] private int kalidokitBodyFlipQuat = 0;
+        [SerializeField] private float kalidokitBodyLerp = 0.5f;
+        [SerializeField] private bool kalidokitBodyLegs = true;
+        // Mirror the input so the avatar reflects the user like a real mirror (negate X + swap L/R) instead
+        // of copying same-side. Live-tunable.
+        [SerializeField] private bool kalidokitBodyMirror = true;
+        // Torso side-lean amount (0 = upright, no lean; 1 = full side-lean tracking). Default 0 fixes the
+        // constant "leaned right" from noisy shoulder tilt (ADR-019 no-unreliable-roll precedent). Live.
+        [SerializeField] private float kalidokitBodyTorsoRoll = 0f;
+        // Kalidokit fingers on the control rig (curl-based, from the hand provider). Curl axis is the
+        // normalized-bone flexion axis (tunable like flipQuat); weight 0 disables. Live-tunable.
+        [SerializeField] private Vector3 kalidokitFingerCurlAxis = new Vector3(0f, 0f, -1f);
+        [SerializeField] private float kalidokitFingerWeight = 1f;
         [SerializeField] private bool useSentis3dTracking = false;
         [SerializeField] private Unity.InferenceEngine.ModelAsset sentisModel;
         [SerializeField] private bool sentisImageNetNorm = true;
@@ -89,6 +118,8 @@ namespace VirtualMirror.App {
         private PoseSpaceConverter converter;
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
+        private KalidokitRetargeter kalidokitRetargeter;
+        private KalidokitControlRigDriver kalidokitControlRig;
         private IIkSolver ikSolver;
         private IFaceTrackingProvider faceProvider;
         private VrmExpressionRetargeter expressionRetargeter;
@@ -203,6 +234,14 @@ namespace VirtualMirror.App {
             if (animator != boundAnimator) {
                 retargeter.Bind(animator);
                 retargeter.SetTrackLegs(trackLegs);
+                if (kalidokitRetargeter != null) {
+                    kalidokitRetargeter.Bind(animator); // ADR-022 (arms-only raw-bone path)
+                }
+                if (kalidokitControlRig != null) {
+                    // ADR-022 whole-body: bind the normalized control rig (null unless loaded with it).
+                    UniVRM10.Vrm10Instance vrmForRig = avatarSession.Current.Root != null ? avatarSession.Current.Root.GetComponent<UniVRM10.Vrm10Instance>() : null;
+                    kalidokitControlRig.Bind(vrmForRig);
+                }
                 // H3: the avatar was hot-swapped — unbind the face + hand retargeters too so the guarded
                 // `!IsBound` rebinds below re-target the NEW avatar's rig instead of the disposed one.
                 if (handRetargeter != null) {
@@ -224,6 +263,10 @@ namespace VirtualMirror.App {
                 }
                 boundAnimator = animator;
             }
+            // ADR-022 whole-body: when on + the control rig is present, it owns the whole skeleton (FK/IK +
+            // hand-curl bypassed). Requires the avatar to have loaded WITH the control rig (useKalidokitBody
+            // set before Play).
+            bool kalidokitBodyActive = useKalidokitBody && kalidokitControlRig != null && kalidokitControlRig.IsBound;
             PoseFrame frame;
             if (bodyProvider.TryGetLatestFrame(out frame)) {
                 // M3/M18: the OAK sidecar already smooths (One-Euro + outlier gate) at the source, so
@@ -249,31 +292,55 @@ namespace VirtualMirror.App {
                     }
                     filtered = lastFilteredFrame;
                 }
-                // FK and IK are mutually exclusive on the arm/leg bones: when the IK solver is active and
-                // bound it owns the limbs, so FK drives only torso (hips/spine) + neck. Otherwise FK drives
-                // everything and the solver is released so the rig stops deforming the limbs.
-                bool ikActive = useIkDriver && ikSolver != null && ikSolver.IsBound;
-                retargeter.SetArmsLegsDrivenExternally(ikActive);
-                if (ikSolver != null && ikSolver.IsBound) {
-                    ikSolver.SetActive(useIkDriver);
-                }
-                if (!IsPoseStale(filtered)) {
-                    retargeter.Apply(filtered, retargetMinConfidence, retargetExitConfidence);
-                    if (ikActive) {
-                        ikSolver.Apply(filtered, retargetMinConfidence);
+                if (kalidokitBodyActive) {
+                    // ADR-022 whole-body: the normalized control rig owns the entire skeleton, so release
+                    // FK + IK (they must not write raw bones the control rig would overwrite each Process).
+                    retargeter.SetArmsLegsDrivenExternally(true);
+                    retargeter.SetArmsExternallyDriven(true);
+                    if (ikSolver != null && ikSolver.IsBound) {
+                        ikSolver.SetActive(false);
                     }
-                    // World translation from the measured hip anchor (unfiltered `frame` carries it; the joint
-                    // filter only smooths landmarks). Neutral-relative + scaled + exponentially smoothed so the
-                    // avatar walks/jumps with the user without inheriting depth jitter.
-                    if (trackPosition && avatarRootTransform != null && frame.HasRootPosition) {
-                        if (!hasPositionNeutral) {
-                            positionNeutralHip = frame.RootPositionMetres;
-                            hasPositionNeutral = true;
+                    if (!IsPoseStale(filtered)) {
+                        kalidokitControlRig.SetTuning(kalidokitBodyEulerSigns, kalidokitBodyFlipQuat, kalidokitBodyLerp, kalidokitBodyLegs, kalidokitBodyMirror, kalidokitBodyTorsoRoll);
+                        kalidokitControlRig.Apply(filtered);
+                    }
+                } else {
+                    // FK and IK are mutually exclusive on the arm/leg bones: when the IK solver is active and
+                    // bound it owns the limbs, so FK drives only torso (hips/spine) + neck. Otherwise FK drives
+                    // everything and the solver is released so the rig stops deforming the limbs.
+                    bool ikActive = useIkDriver && ikSolver != null && ikSolver.IsBound;
+                    retargeter.SetArmsLegsDrivenExternally(ikActive);
+                    // ADR-022: when the Kalidokit arm solver (raw-bone A/B) is on, FK yields the ARM segments
+                    // to it (torso + legs stay on FK). Applied after FK below so it owns the arm bones.
+                    bool kalidokitArmsActive = useKalidokitArms && kalidokitRetargeter != null && kalidokitRetargeter.IsBound;
+                    retargeter.SetArmsExternallyDriven(kalidokitArmsActive);
+                    if (ikSolver != null && ikSolver.IsBound) {
+                        ikSolver.SetActive(useIkDriver);
+                    }
+                    if (!IsPoseStale(filtered)) {
+                        retargeter.Apply(filtered, retargetMinConfidence, retargetExitConfidence);
+                        if (ikActive) {
+                            ikSolver.Apply(filtered, retargetMinConfidence);
                         }
-                        Vector3 targetOffset = (frame.RootPositionMetres - positionNeutralHip) * positionScale;
-                        float lerpT = 1f - Mathf.Exp(-positionSmoothing * deltaSeconds);
-                        positionCurrentOffset = Vector3.Lerp(positionCurrentOffset, targetOffset, lerpT);
-                        avatarRootTransform.position = avatarRootInitialPosition + positionCurrentOffset;
+                        if (kalidokitArmsActive) {
+                            kalidokitRetargeter.SetAxisSigns(kalidokitAxisSigns);
+                            kalidokitRetargeter.SetLerp(kalidokitLerp);
+                            kalidokitRetargeter.SetDriveHand(kalidokitDriveHand);
+                            kalidokitRetargeter.Apply(filtered);
+                        }
+                        // World translation from the measured hip anchor (unfiltered `frame` carries it; the joint
+                        // filter only smooths landmarks). Neutral-relative + scaled + exponentially smoothed so the
+                        // avatar walks/jumps with the user without inheriting depth jitter.
+                        if (trackPosition && avatarRootTransform != null && frame.HasRootPosition) {
+                            if (!hasPositionNeutral) {
+                                positionNeutralHip = frame.RootPositionMetres;
+                                hasPositionNeutral = true;
+                            }
+                            Vector3 targetOffset = (frame.RootPositionMetres - positionNeutralHip) * positionScale;
+                            float lerpT = 1f - Mathf.Exp(-positionSmoothing * deltaSeconds);
+                            positionCurrentOffset = Vector3.Lerp(positionCurrentOffset, targetOffset, lerpT);
+                            avatarRootTransform.position = avatarRootInitialPosition + positionCurrentOffset;
+                        }
                     }
                 }
             }
@@ -295,8 +362,12 @@ namespace VirtualMirror.App {
                 expressionRetargeter.Apply(null);
             }
 
-            if (useHandTracking && handProvider != null && handRetargeter != null) {
+            if (!kalidokitBodyActive && useHandTracking && handProvider != null && handRetargeter != null) {
                 handProvider.Tick(deltaSeconds);
+                // ADR-021: push the wrist weight every frame so the serialized wristRotationWeight is
+                // live-tunable during Play (0 disables wrist rotation, fingers still curl) — the user can
+                // dial it in without a recompile instead of stop→edit→Play cycles.
+                handRetargeter.SetWristWeight(wristRotationWeight);
                 if (!handRetargeter.IsBound) {
                     handRetargeter.Bind(animator);
                 }
@@ -304,10 +375,30 @@ namespace VirtualMirror.App {
                 if (handProvider.TryGetFrame(out handFrame)) {
                     handRetargeter.Apply(handFrame);
                 }
-            } else if (handRetargeter != null && handRetargeter.IsBound) {
+            } else if (!kalidokitBodyActive && handRetargeter != null && handRetargeter.IsBound) {
                 // LOW-A: hand tracking toggled off — relax fingers to the open rest pose so they don't
                 // freeze mid-curl (mirrors the face-tracking reset above).
                 handRetargeter.ResetToOpen();
+            }
+
+            // ADR-022 fingers: on the Kalidokit body path, drive the control-rig fingers from the hand
+            // provider's curls (the hand-curl retargeter above is bypassed because the control rig owns the
+            // skeleton). Runs before ProcessRuntime so the fingers are applied this frame.
+            if (kalidokitBodyActive && useHandTracking && handProvider != null && kalidokitControlRig != null) {
+                handProvider.Tick(deltaSeconds);
+                kalidokitControlRig.SetFingerTuning(kalidokitFingerCurlAxis, kalidokitFingerWeight);
+                HandFrame kaliHandFrame;
+                if (handProvider.TryGetFrame(out kaliHandFrame)) {
+                    kalidokitControlRig.ApplyFingers(kaliHandFrame);
+                }
+            }
+
+            // ADR-022 whole-body: the VRM is set to manual update while the control rig owns it, so run its
+            // runtime ONCE here — AFTER the body pose + face expressions + fingers were written this frame —
+            // to apply everything (control rig → skeleton, springbones, expressions). Without this the
+            // avatar stays in T-pose (the reported bug).
+            if (kalidokitBodyActive && kalidokitControlRig != null) {
+                kalidokitControlRig.ProcessRuntime();
             }
         }
 
@@ -365,6 +456,9 @@ namespace VirtualMirror.App {
             settingsStore = new SettingsStore(pathProvider, logService, settingsSaveDebounceSeconds);
             settingsStore.Load();
             UniVrmAvatarLoader avatarLoader = new UniVrmAvatarLoader(logService, maxAvatarFileBytes);
+            // ADR-022: the whole-body Kalidokit path needs the VRM normalized control rig, which is a
+            // load-time option — set it before the avatar auto-loads. Off → raw bones for the FK/IK path.
+            avatarLoader.GenerateControlRig = useKalidokitBody;
             services = new ServiceRegistry(pathProvider, logService, settingsStore, avatarLoader);
             performanceMonitor = new PerformanceMonitor(); // H1: was never instantiated → HUD FPS stayed blank
             StartCameraCapture();
@@ -396,6 +490,8 @@ namespace VirtualMirror.App {
         private void StartTracking() {
             jointFilter = new JointFilterPipeline(filterMinCutoff, filterBeta, filterDerivativeCutoff);
             retargeter = new HumanoidPoseRetargeter();
+            kalidokitRetargeter = new KalidokitRetargeter(); // ADR-022: Kalidokit-ported arm solver (raw-bone A/B)
+            kalidokitControlRig = new KalidokitControlRigDriver(); // ADR-022: whole-body via normalized control rig
             if (useIkDriver) {
                 EnsureIkSolver();
             }

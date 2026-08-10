@@ -122,6 +122,12 @@ namespace VirtualMirror.Retargeting {
         // Rotate the hand by the palm's change since a captured neutral (delta-from-neutral, like the torso
         // basis) so the absolute landmark->bone axis convention cancels and only relative wrist motion shows.
         // Applied in world space on top of the IK-posed forearm; runs after IK in LateUpdate so it survives.
+        //
+        // ADR-021: ROLL-FREE. Only the palm's FORWARD axis (wrist->middle-MCP direction) drives the wrist,
+        // via FromToRotation of the neutral forward onto the current forward. The palm ROLL (pronation) is
+        // derived from the noisy index/pinky span and, applied as a full-orientation delta, spun the wrist
+        // like a helicopter at a distance. FromToRotation has NO roll degree of freedom, so the wrist can
+        // bend toward where the hand points but is structurally incapable of spinning.
         private void ApplyWrist(bool isLeft, bool tracked, Quaternion palm) {
             Transform hand = isLeft ? leftHand : rightHand;
             if (hand == null || !tracked || wristWeight <= 0f) {
@@ -139,8 +145,13 @@ namespace VirtualMirror.Retargeting {
                 return;
             }
             Quaternion neutral = isLeft ? leftNeutralPalm : rightNeutralPalm;
-            Quaternion worldDelta = palm * Quaternion.Inverse(neutral);
-            hand.rotation = Quaternion.Slerp(hand.rotation, worldDelta * hand.rotation, wristWeight);
+            Vector3 neutralForward = neutral * Vector3.forward;
+            Vector3 currentForward = palm * Vector3.forward;
+            if (neutralForward.sqrMagnitude < 1e-8f || currentForward.sqrMagnitude < 1e-8f) {
+                return;
+            }
+            Quaternion swing = Quaternion.FromToRotation(neutralForward, currentForward);
+            hand.rotation = Quaternion.Slerp(hand.rotation, swing * hand.rotation, wristWeight);
         }
 
         private void BindHandFingers(Animator animator, bool isLeft) {

@@ -25,6 +25,23 @@ LOW-A/C/D remainders), re-verifying compile + tests after each batch. Mirror sin
 resolved-by-design (Unity owns; sidecar `--mirror` off). **Only PLAY verification (OAK-D + eyes on the
 avatar) remains — the user's, per `AUDIT_TESTPLAN_2026-08-07.md` §B PLAY + §C.**
 
+**Post-audit test-video fixes (2026-08-07):** user PLAY test surfaced 3 issues, all fixed + logged as
+ADRs so they don't recur — **waist twist** (spine yaw now from the hip line, ADR-019), **jitter**
+(sidecar smoothing strengthened, single-owner kept, ADR-020), **wrist** (re-enabled on OAK with
+smoothing + live weight, ADR-021). Round 2: **wrist roll-free** (ADR-021 amend), **beta up for
+responsiveness** (ADR-020 amend), back-facing twist = single-camera limit (ADR-019). Compile 0/0 +
+EditMode 21/21 + sidecar py_compile clean.
+
+**Kalidokit port — the 70%→95% path (2026-08-07, ADR-022):** the persistent forearm spin is vector-FK's
+guessed limb ROLL (not the hand, not the engine). Decision (user-chosen): stay on Unity, replace the
+retarget math with a C# port of **Kalidokit (MIT)** which derives roll from limb geometry. **WHOLE BODY ported** (arms + hips/spine +
+legs) and applied via UniVRM's **normalized control rig** so ONE global convention works for every bone
+(no per-bone guessing). Behind **`useKalidokitBody`** (set before Play; FK/IK/hand-curl bypassed when on).
+Compiles 0/0, EditMode 27/27 (6 KMath tests). ⏳ USER live check: set `useKalidokitBody` before Play →
+confirm the avatar moves (if T-pose, it's UniVRM Process ordering, fixable) → tune the one convention
+(`kalidokitBodyFlipQuat` 0..3 + `kalidokitBodyEulerSigns`, Inspector-live). Next: HandSolver → control-rig
+fingers. See ADR-022 + `ai_handoff.md`.
+
 ---
 
 ## Now (M0)

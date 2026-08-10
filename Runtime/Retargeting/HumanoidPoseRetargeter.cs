@@ -8,10 +8,12 @@ namespace VirtualMirror.Retargeting {
     /// <summary>
     /// Drives a humanoid avatar from a <see cref="PoseFrame"/> using vector-based FK.
     ///
-    /// Torso (Hips + Spine) is driven by full 3-axis bases sharing the same torso-up: Hips from the
-    /// hip line, Spine from the shoulder line. Both are <b>calibration-relative</b> — the tracked
-    /// neutral basis is captured on the first confident frame and each bone rotates relative to it on
-    /// top of the avatar rest, so the torso is straight at neutral regardless of coordinate handedness.
+    /// Torso (Hips + Spine): both take yaw from the horizontally-projected HIP line (so the Spine cannot
+    /// yaw-twist relative to the Hips when the arms move — that was the recurring "waist twist"); the Hips
+    /// use a vertical up (upright, facing only) and the Spine uses the live torso-up so it carries only the
+    /// forward/side bend. Both are <b>calibration-relative</b> — the tracked neutral basis is captured on
+    /// the first confident frame and each bone rotates relative to it on top of the avatar rest, so the
+    /// torso is straight at neutral regardless of coordinate handedness.
     ///
     /// Limbs/neck are driven per-segment with a roll-constrained rotation whose reference is the
     /// per-frame body-forward, so twist follows the body facing. Every driven part is gated with
@@ -54,11 +56,12 @@ namespace VirtualMirror.Retargeting {
             public readonly JointId[] ToJoints;
             public readonly bool IsLimb;
             public readonly bool IsLeg;
+            public readonly bool IsArm;
             public readonly bool IsLeftLeg;
 
             public bool Active;
 
-            public BoundSegment(Transform bone, Quaternion restRotation, Vector3 restDirection, JointId[] fromJoints, JointId[] toJoints, bool isLimb, bool isLeg, bool isLeftLeg) {
+            public BoundSegment(Transform bone, Quaternion restRotation, Vector3 restDirection, JointId[] fromJoints, JointId[] toJoints, bool isLimb, bool isLeg, bool isArm, bool isLeftLeg) {
                 Bone = bone;
                 RestRotation = restRotation;
                 RestDirection = restDirection;
@@ -66,6 +69,7 @@ namespace VirtualMirror.Retargeting {
                 ToJoints = toJoints;
                 IsLimb = isLimb;
                 IsLeg = isLeg;
+                IsArm = isArm;
                 IsLeftLeg = isLeftLeg;
                 Active = false;
             }
@@ -79,19 +83,25 @@ namespace VirtualMirror.Retargeting {
             // When true, this bone uses a STABLE vertical up instead of the live torso-up. Used for the Hips
             // (pelvis): with the shared torso-up, a forward waist bend tilts the up-vector and rotates BOTH
             // hips and spine together → the whole body tilts rigidly. Anchoring the hips to vertical means the
-            // hips only track facing (yaw) / side-lean from the hip line and stay upright, so the SPINE (which
-            // keeps the live torso-up) carries the forward bend → a real waist bend, not a rigid tilt.
+            // hips only track facing (yaw) / side-lean and stay upright, so the SPINE (which keeps the live
+            // torso-up) carries the forward bend → a real waist bend, not a rigid tilt.
             public readonly bool StableUp;
+            // When true, the "right" vector is projected onto the horizontal plane (Y zeroed) before the basis
+            // is built, so this bone's YAW comes purely from facing and can't be rolled by a vertical
+            // component. Both torso bones use this + the HIP line as their right, so the Spine yaws WITH the
+            // Hips and cannot twist relative to them (ADR-019).
+            public readonly bool ProjectRightHorizontal;
 
             public Quaternion NeutralBasis;
             public bool HasNeutral;
 
-            public BasisBone(Transform bone, Quaternion avatarRestRotation, JointId rightFrom, JointId rightTo, bool stableUp) {
+            public BasisBone(Transform bone, Quaternion avatarRestRotation, JointId rightFrom, JointId rightTo, bool stableUp, bool projectRightHorizontal) {
                 Bone = bone;
                 AvatarRestRotation = avatarRestRotation;
                 RightFrom = rightFrom;
                 RightTo = rightTo;
                 StableUp = stableUp;
+                ProjectRightHorizontal = projectRightHorizontal;
                 NeutralBasis = Quaternion.identity;
                 HasNeutral = false;
             }
@@ -103,6 +113,7 @@ namespace VirtualMirror.Retargeting {
 
         private bool torsoActive;
         private bool armsLegsDrivenExternally;
+        private bool armsExternallyDriven; // ADR-022: arms owned by the Kalidokit solver → FK skips arm segments
         private bool trackLegs = true;
         private int neutralWarmupFrames;
         private bool bound;
@@ -144,6 +155,15 @@ namespace VirtualMirror.Retargeting {
         /// </summary>
         public void SetArmsLegsDrivenExternally(bool value) {
             armsLegsDrivenExternally = value;
+        }
+
+        /// <summary>
+        /// ADR-022: when true, the ARM segments (upper/lower arm) are left to the Kalidokit solver and this
+        /// FK path drives only torso + legs (+ neck). Distinct from <see cref="SetArmsLegsDrivenExternally"/>
+        /// (the IK path, which owns arms AND legs).
+        /// </summary>
+        public void SetArmsExternallyDriven(bool value) {
+            armsExternallyDriven = value;
         }
 
         /// <summary>
@@ -213,20 +233,13 @@ namespace VirtualMirror.Retargeting {
                 if (right.magnitude < MinTorsoVectorMagnitude) {
                     continue;
                 }
-                // Hips use a stable vertical up AND a horizontally-projected hip-line, so they track only
-                // facing (yaw): any vertical component of the tracked hip line (sensor noise / off-centre
-                // body-orientation error) can no longer roll the whole avatar → no rigid whole-body tilt,
-                // and uprightness no longer depends on a good neutral calibration. The spine keeps the live
-                // torso-up + shoulder line so it still carries real lean/bend. See BasisBone.StableUp.
-                Vector3 boneUp;
-                Vector3 boneRight;
-                if (basisBone.StableUp) {
-                    boneUp = Vector3.up;
-                    boneRight = new Vector3(right.x, 0f, right.z);
-                } else {
-                    boneUp = up;
-                    boneRight = right;
-                }
+                // Both torso bones take yaw from the horizontally-projected HIP line (right). The Hips use a
+                // vertical up → facing/yaw only, upright. The Spine uses the live torso-up → it carries the
+                // forward/side BEND on top of the SAME hip-derived yaw, so it can't yaw-twist relative to the
+                // hips when the arms move (ADR-019 — the recurring waist twist). Real chest-vs-pelvis axial
+                // twist is intentionally not reconstructed (unreliable from this tracking; it caused the twist).
+                Vector3 boneUp = basisBone.StableUp ? Vector3.up : up;
+                Vector3 boneRight = basisBone.ProjectRightHorizontal ? new Vector3(right.x, 0f, right.z) : right;
                 Quaternion currentBasis;
                 if (!RotationFromVectors.TryBasis(boneRight, boneUp, out currentBasis)) {
                     continue;
@@ -268,6 +281,11 @@ namespace VirtualMirror.Retargeting {
                     segment.Active = false;
                     continue;
                 }
+                if (armsExternallyDriven && segment.IsArm) {
+                    // ADR-022: Kalidokit owns the arms this frame — leave them for KalidokitRetargeter.
+                    segment.Active = false;
+                    continue;
+                }
                 float confidence = Mathf.Min(MinConfidence(frame, segment.FromJoints), MinConfidence(frame, segment.ToJoints));
                 segment.Active = UpdateGate(segment.Active, confidence, enterConfidence, exitConfidence);
                 if (!segment.Active) {
@@ -291,6 +309,11 @@ namespace VirtualMirror.Retargeting {
 
         private static bool IsLeftLegBone(HumanBodyBones bone) {
             return bone == HumanBodyBones.LeftUpperLeg || bone == HumanBodyBones.LeftLowerLeg;
+        }
+
+        private static bool IsArmBone(HumanBodyBones bone) {
+            return bone == HumanBodyBones.LeftUpperArm || bone == HumanBodyBones.LeftLowerArm
+                || bone == HumanBodyBones.RightUpperArm || bone == HumanBodyBones.RightLowerArm;
         }
 
         // H6: is a leg confidently "standing" — its ankle at least MinLegDropMetres below the hips along
@@ -337,22 +360,26 @@ namespace VirtualMirror.Retargeting {
                 if (restDirection.sqrMagnitude < 1e-8f) {
                     continue;
                 }
-                boundSegments.Add(new BoundSegment(bone, bone.rotation, restDirection, definition.FromJoints, definition.ToJoints, definition.IsLimb, IsLegBone(definition.Bone), IsLeftLegBone(definition.Bone)));
+                boundSegments.Add(new BoundSegment(bone, bone.rotation, restDirection, definition.FromJoints, definition.ToJoints, definition.IsLimb, IsLegBone(definition.Bone), IsArmBone(definition.Bone), IsLeftLegBone(definition.Bone)));
             }
         }
 
         private void BindBasisBones(Animator animator) {
-            // Hips: stable vertical up (yaw/side-lean only, stays upright). Spine: live torso-up (carries bend).
-            AddBasisBone(animator, HumanBodyBones.Hips, JointId.LeftHip, JointId.RightHip, true);
-            AddBasisBone(animator, HumanBodyBones.Spine, JointId.LeftShoulder, JointId.RightShoulder, false);
+            // ADR-019: both torso bones take yaw from the HIP line (projected horizontal), so the Spine can no
+            // longer yaw-twist relative to the Hips when an arm moves. The old Spine basis used the SHOULDER
+            // line, which rotates as the shoulders shift with arm raises → the waist twist users kept hitting.
+            // Hips: vertical up → facing/yaw only, upright. Spine: live torso-up → carries the forward/side
+            // bend on top of the same hip-derived yaw.
+            AddBasisBone(animator, HumanBodyBones.Hips, JointId.LeftHip, JointId.RightHip, true, true);
+            AddBasisBone(animator, HumanBodyBones.Spine, JointId.LeftHip, JointId.RightHip, false, true);
         }
 
-        private void AddBasisBone(Animator animator, HumanBodyBones bone, JointId rightFrom, JointId rightTo, bool stableUp) {
+        private void AddBasisBone(Animator animator, HumanBodyBones bone, JointId rightFrom, JointId rightTo, bool stableUp, bool projectRightHorizontal) {
             Transform transform = animator.GetBoneTransform(bone);
             if (transform == null) {
                 return;
             }
-            basisBones.Add(new BasisBone(transform, transform.rotation, rightFrom, rightTo, stableUp));
+            basisBones.Add(new BasisBone(transform, transform.rotation, rightFrom, rightTo, stableUp, projectRightHorizontal));
         }
 
         private static bool UpdateGate(bool active, float confidence, float enterConfidence, float exitConfidence) {

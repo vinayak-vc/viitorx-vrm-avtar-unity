@@ -42,6 +42,129 @@ Steps for the user:
 
 ---
 
+## 🎥 Post-audit user test-video fixes — waist twist / wrist / jitter (2026-08-07, session 2)
+
+The user recorded an OAK-D whole-body PLAY test after the audit and reported three issues; I watched it
+frame-by-frame (sidecar preview real-pose vs avatar) and fixed all three. **Each got an ADR so it does
+NOT get re-litigated next session** — read ADR-019/020/021 before touching torso/smoothing/wrist.
+
+1. **Waist twist (real retarget bug) → FIXED, ADR-019.** Standing straight/front-facing, the avatar's
+   chest yaw-twisted vs the hips, varying with arm raises. Cause: the Spine basis took its yaw from the
+   **shoulder line** (moves when arms move). Fix: both torso bones now take yaw from the horizontally-
+   projected **hip line**; the Spine keeps torso-up only for the bend → no yaw-twist relative to the hips.
+   Trade-off: chest-vs-pelvis axial twist not reproduced (unreliable anyway). `HumanoidPoseRetargeter`.
+2. **Jitter / "smoothing gone" → FIXED (single-owner kept), ADR-020.** The audit's M3/M18 made the OAK
+   path bypass Unity's `jointFilter` (single-owner = sidecar); the lone sidecar One-Euro was too light,
+   so jitter showed. Fix: **do NOT re-add a Unity stage** — lowered the sidecar default `--min-cutoff`
+   1.0 → 0.5 so it's smooth out of the box. Tune `--min-cutoff 0.3` if still jittery / stand ~2 m
+   (depth is coarse past ~2 m; the user stood ~2.4–3 m). `wholebody_udp_sender.py`.
+3. **Wrist "directional only" → RE-ENABLED, ADR-021 (supersedes ADR-018 disable).** ADR-018 had disabled
+   the OAK wrist because the raw palm basis spun at distance. Fix: temporally slerp-smooth the palm
+   quaternion in `OakDUdpPoseProvider` (`WristSmoothing=0.35`) and make `wristRotationWeight` **live-
+   tunable during Play** (push each frame). Best ~2 m; set weight 0 live to disable — **do not re-disable
+   in code**. `OakDUdpPoseProvider.cs`, `AppBootstrap.cs`.
+
+**Verification:** Unity compile 0/0, EditMode 21/21, sidecar `py_compile` clean.
+
+**Round-2 (2026-08-07, after the user's first PLAY test of the above):** three follow-ups —
+- **Wrist helicoptered** → the re-enable's full-orientation delta fed the noisy palm ROLL into a continuous
+  spin. **Fixed = ROLL-FREE wrist** (`ApplyWrist` now uses `FromToRotation` of the palm forward axis only —
+  no roll DOF, structurally can't spin). ADR-021 amendment. Do NOT restore a full-orientation wrist delta.
+- **Reaction too slow** → I'd lowered `--min-cutoff` but left `--beta` tiny (laggy on motion). **Fixed =
+  raise `--beta` 0.02 → 0.4** (reaction speed), `--min-cutoff` 0.5 → 0.7 (stillness). Both live-tunable per
+  sidecar run. ADR-020 amendment.
+- **Back-facing twist** → single-camera front/back ambiguity; documented as a KNOWN LIMITATION on ADR-019
+  (out of scope for a front-facing mirror; needs multi-view / measured-depth Phase-2). Not chased.
+
+**⚠️ I had to force a recompile while the user was mid-Play → it domain-reloaded and aborted the OAK receive
+thread; I then Stopped Play to run EditMode tests. User must STOP Play, RESTART the sidecar (to pick up the
+new `--beta`/`--min-cutoff` defaults), and re-enter Play for a clean test.**
+
+**PLAY-verify (user, OAK-D, ~2 m):** (a) front-facing arm raises → no torso twist; (b) hold still → steady,
+fast move → snappy (tune `--beta`/`--min-cutoff` live); (c) bend/point a wrist → follows without spinning
+(lower `wristRotationWeight` live if too strong).
+
+---
+
+## 🦾 Kalidokit-ported arm solver — the 70%→95% path (2026-08-07, ADR-022)
+
+After a 2nd test still showed the forearm spinning, root-caused decisively: it's **vector-FK's guessed limb
+roll**, not the hand (a roll-free hand can't fix a spinning forearm) and **not the engine** (the data is
+clean; every engine needs the same landmark→rotation math). User chose **"Port Kalidokit into Unity"** over
+leaving Unity. Kalidokit (MIT) derives limb roll from GEOMETRY (bend + plane), so roll is measured not
+guessed — the proven approach behind webcam VTuber apps, and our OAK 3D makes it *more* robust.
+
+**Built (arms first, compiles 0/0, EditMode 27/27):**
+- `Runtime/Retargeting/Kalidokit/KMath.cs` — faithful port of Kalidokit's Vector math (findRotation,
+  angleBetween3DCoords, rollPitchYaw, normalizers) + `KMathTests` (6, locking known values).
+- `Runtime/Retargeting/Kalidokit/KalidokitArmSolver.cs` — `calcArms` + `rigArm` verbatim.
+- `Runtime/Retargeting/KalidokitRetargeter.cs` — applies UpperArm/LowerArm/Hand as `rest * Remap(euler)`.
+- `HumanoidPoseRetargeter.SetArmsExternallyDriven` + `IsArm` → FK yields ONLY the arms (torso+legs stay FK).
+- `AppBootstrap` toggle **`useKalidokitArms`** (default OFF, A/B) + live knobs `kalidokitAxisSigns`
+  (default (-1,-1,1)), `kalidokitLerp`, `kalidokitDriveHand`.
+
+**⏳ THE live tune (user) — the axis convention.** Kalidokit euler is three-vrm convention (right-handed);
+Unity bones are left-handed. `kalidokitAxisSigns` maps between them and is the one thing needing a live
+pass (like `poseFlipX`). Steps: tick **`useKalidokitArms`** on AppBootstrap in Play → the arms will move but
+likely on wrong axes → try the ±1 sign combinations on `kalidokitAxisSigns` (and `kalidokitLerp` ~0.3–0.6)
+until arms track cleanly and the forearm no longer spins. All Inspector-live (no recompile). The solver math
+is unit-tested — if it looks wrong, it's the signs, not the math.
+
+**Next after the arm convention is dialled in:** port Kalidokit's `HandSolver` (per-finger + wrist) and
+`calcHips`/`calcLegs` (spine/legs) to move the whole body onto the proven solver; retire vector-FK roll.
+See ADR-022.
+
+### Whole-body Kalidokit via the normalized control rig (2026-08-07, ADR-022 amendment) — the direction that unsticks the per-bone tuning
+Because raw-bone application needs per-bone axis tuning, the whole body now applies to UniVRM's
+**normalized control rig** (`Vrm10Runtime.ControlRig`, same VRM1.0 normalized bones as three-vrm) → ONE
+global three→Unity convention for every bone. Ported the rest of Kalidokit (`calcHips` rot, `calcLegs`,
+spherical/`rollPitchYaw2` in `KMath`, `KalidokitPoseSolver`); new `KalidokitControlRigDriver` drives the
+whole skeleton; loader gains `GenerateControlRig` (load-time). Behind **`useKalidokitBody`** — when on,
+FK/IK/hand-curl are bypassed; face blendshapes still run. **Compiles 0/0, EditMode 27/27.**
+
+**✅ PROCESS-ORDER FIXED + VERIFIED ON VIDEO (2026-08-07).** The T-pose was UniVRM's auto `Process()`
+racing our LateUpdate writes. Fixed: driver sets `vrm.UpdateType = None` on bind, `AppBootstrap` calls
+`kalidokitControlRig.ProcessRuntime()` at the end of `UpdateTracking` (after body + face). Headless-verified
+on the **video source** (OAK not connected): control rig generated, `UpdateType=None`, control-rig bones
+NON-identity and changing frame-to-frame (tracking the video), 0 exceptions, no T-pose. `Bootstrap.unity`
+saved to the video test config (`useKalidokitBody=true`, `useVideoSource=true`, `useOakUdpTracking=false`,
+`useSentis3dTracking=false`, MediaPipe on).
+
+**✅ CONVENTION SOLVED + VERIFIED ON VIDEO (2026-08-07) — `flipQuat=2`, `mirror=true`, `eulerSigns=(1,1,1)`.**
+User feedback (flipQuat 0=inside-out, 2=right-but-mirrored) + a data-driven headless check (stepped the
+sim, compared the tracked raised arm vs the avatar's raised arm in the same frame) confirmed: at flipQuat=2
+the orientation is correct (hands/head anatomically sane, no inside-out), and the new `kalidokitBodyMirror`
+toggle flips copy↔reflection cleanly. Set `kalidokitBodyMirror=true` (copy / un-mirrored per the user's
+"fix the mirroring"). Whole-body pose renders as a clean walking stride — no T-pose/inside-out/helicopter.
+0 exceptions. **Scene saved on the video test config** (`useVideoSource=true`, MediaPipe, OAK/Sentis off).
+
+**✅ RIGHTWARD-LEAN FIXED (2026-08-07).** Cause: the spine euler was applied to BOTH Spine AND Chest →
+doubled torso rotation (~45° yaw + ~20° roll = the constant lean). Fix: distribute the spine across
+Spine+Chest (0.5 each) + `kalidokitBodyTorsoRoll` (default 0 = upright, no lean; raise for side-lean).
+Verified: roll=0, Spine=Chest=(0,6.1,0) distributed. `KalidokitControlRigDriver` / `AppBootstrap`.
+
+**✅ FINGERS driven on the control rig (curl-based, 2026-08-07).** `KalidokitControlRigDriver` binds the 30
+normalized finger bones and curls them from the HandFrame (any hand provider), about a tunable
+`kalidokitFingerCurlAxis` (default (0,0,-1)), weight `kalidokitFingerWeight`. Verified end-to-end (synthetic
+0.8 curl → control-rig + raw-skeleton finger bone rotated). Chose curl over the full 21-landmark Kalidokit
+HandSolver because the dance video's hands are too small for MediaPipe Hand (no valid hand frame on it).
+
+**Remaining / next:**
+1. **Mirror preference:** shipped `kalidokitBodyMirror=true` (avatar copies you). Real-mirror reflection = set **false**.
+2. **Fingers need a close hand source** (webcam close-up / OAK) for real curl data — on the dance video MediaPipe
+   Hand finds nothing so fingers stay open. May also need a `kalidokitFingerCurlAxis` tune for flexion direction.
+   Full per-joint Kalidokit HandSolver (21 landmarks → HandFrame surgery) is a future refinement.
+3. **Side-lean:** if you WANT torso side-bend, raise `kalidokitBodyTorsoRoll` toward 1 (default 0 = upright).
+4. **OAK path later:** `useVideoSource=false`, `useOakUdpTracking=true` (keep `useKalidokitBody=true`, `flipQuat=2`).
+   Provider-independent (control rig normalizes it).
+5. **⚠️ Don't drive Play repeatedly over MCP** — a MediaPipe Glog double-init abort crashed the editor during
+   verification (fixed by relaunching). Use a single clean Play + data reads; live screenshots freeze headless.
+
+Files: `Runtime/Retargeting/Kalidokit/KMath.cs`, `KalidokitPoseSolver.cs`, `Runtime/Retargeting/KalidokitControlRigDriver.cs`,
+`Runtime/Avatar/Vrm/UniVrmAvatarLoader.cs` (`GenerateControlRig`), `Runtime/Bootstrap/AppBootstrap.cs`.
+
+---
+
 ## ⚠️ Python sidecar relocated to a submodule (2026-08-07)
 
 The OAK-D / model Python sidecar now lives in its **own repo** `vinayak-vc/viitorx-vrm-model-python`,
