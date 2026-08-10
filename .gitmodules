@@ -1,0 +1,3 @@
+[submodule "python-sidecar~"]
+	path = python-sidecar~
+	url = https://github.com/vinayak-vc/viitorx-vrm-model-python.git
