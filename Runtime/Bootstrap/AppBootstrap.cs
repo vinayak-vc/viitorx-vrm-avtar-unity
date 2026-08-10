@@ -29,85 +29,95 @@ namespace VirtualMirror.App {
     /// Mirror scene's avatar root and auto-loads the last used avatar. Survives scene loads.
     /// </summary>
     public sealed class AppBootstrap : MonoBehaviour {
-        [SerializeField] private string mirrorSceneName = "Mirror";
-        [SerializeField] private string avatarRootName = "AvatarRoot";
-        [SerializeField] private bool loadMirrorSceneOnStart = true;
-        [SerializeField] private float settingsSaveDebounceSeconds = 0.4f;
-        [SerializeField] private bool mirrorLogToConsole = true;
-        [SerializeField] private long maxAvatarFileBytes = 268435456;
+        // ---- Scene & services plumbing (set once; hidden from the Inspector to keep it focused) ----
+        [HideInInspector] [SerializeField] private string mirrorSceneName = "Mirror";
+        [HideInInspector] [SerializeField] private string avatarRootName = "AvatarRoot";
+        [HideInInspector] [SerializeField] private bool loadMirrorSceneOnStart = true;
+        [HideInInspector] [SerializeField] private float settingsSaveDebounceSeconds = 0.4f;
+        [HideInInspector] [SerializeField] private bool mirrorLogToConsole = true;
+        [HideInInspector] [SerializeField] private long maxAvatarFileBytes = 268435456;
+
+        [Header("Tracking Source")]
+        [Tooltip("OAK-D depth camera via the Python sidecar over UDP — the production path. Takes priority over the other providers when it starts.")]
+        [SerializeField] private bool useOakUdpTracking = false; // B2 (Python sidecar over UDP) — ADR-016
+        [SerializeField] private int oakUdpPort = 8899;
+        [Tooltip("Use the sample video file instead of a live webcam (ignored on the OAK-D path).")]
         [SerializeField] private bool useVideoSource = false;
-        [SerializeField] private string sampleVideoPath = "C:/Unity/viitorx-vrm-avtar-unity-base-project/sampleVRMFiles/sample video.mp4";
-        [SerializeField] private int cameraWidth = 1280;
-        [SerializeField] private int cameraHeight = 720;
-        [SerializeField] private int cameraFps = 30;
-        [SerializeField] private float filterMinCutoff = 1f;
-        [SerializeField] private float filterBeta = 0.2f;
-        [SerializeField] private float filterDerivativeCutoff = 1f;
+        [Tooltip("MediaPipe pose on the webcam/video (CPU). Fallback when OAK/Sentis are off.")]
         [SerializeField] private bool useMediaPipeTracking = true;
-        [SerializeField] private string poseModelFileName = "pose_landmarker_heavy.bytes";
+
+        [Header("Kalidokit Body — active whole-body retarget (ADR-022/023)")]
+        [Tooltip("Drive the whole skeleton via the VRM normalized control rig. MUST be set BEFORE Play (the control rig is generated at load).")]
+        [SerializeField] private bool useKalidokitBody = false;
+        [Tooltip("Global three.js->Unity handedness conversion (0..3). 2 is correct for this rig.")]
+        [SerializeField] private int kalidokitBodyFlipQuat = 0;
+        [SerializeField] private Vector3 kalidokitBodyEulerSigns = Vector3.one;
+        [Tooltip("Smoothing toward the solved pose (0..1).")]
+        [SerializeField] private float kalidokitBodyLerp = 0.5f;
+        [Tooltip("Reflect the input skeleton (negate X + swap L/R). Leave OFF — reflecting the input twists a rotation retarget (ADR-023); a true mirror must be done output-side.")]
+        [SerializeField] private bool kalidokitBodyMirror = false;
+        [Tooltip("Torso side-lean amount (0 = upright; 1 = full side-lean tracking).")]
+        [SerializeField] private float kalidokitBodyTorsoRoll = 0f;
+        [SerializeField] private bool kalidokitBodyLegs = true;
+        [Tooltip("Normalized-bone flexion axis for the curl-driven fingers.")]
+        [SerializeField] private Vector3 kalidokitFingerCurlAxis = new Vector3(0f, 0f, -1f);
+        [Tooltip("Finger curl weight (0 disables fingers).")]
+        [SerializeField] private float kalidokitFingerWeight = 1f;
+
+        [Header("Pose Mapping")]
         [SerializeField] private bool poseFlipX = true;
         [SerializeField] private bool poseFlipY = true;
         [SerializeField] private bool poseFlipZ = true;
-        [SerializeField] private float retargetMinConfidence = 0.5f;
-        [SerializeField] private float retargetExitConfidence = 0.3f;
-        [SerializeField] private float poseStaleSeconds = 0.5f;
-        [SerializeField] private bool useIkDriver = true;
-        // Lower-body IK. Default off: in the OAK-D webcam setup the legs are typically desk-occluded / out of
-        // the narrow color FOV, and BlazePose hallucinates the occluded legs → folded avatar legs. Off keeps
-        // legs straight at rest. Turn on only when the full lower body is reliably framed.
+
+        [Header("Features")]
+        [SerializeField] private bool useFaceTracking = true;
+        [SerializeField] private bool useHandTracking = true;
+        [Tooltip("Wrist rotation weight (0 disables wrist rotation; fingers still curl). Live-tunable.")]
+        [SerializeField] private float wristRotationWeight = 0.7f;
+        [Tooltip("Track legs (off keeps legs straight when the lower body is occluded / out of frame).")]
         [SerializeField] private bool trackLegs = false;
-        // Root translation from the OAK-D's measured hip position, so the avatar walks/jumps with the user
-        // (a webcam mono path cannot do this reliably; the depth camera can). Movement is neutral-relative
-        // and scaled; smoothing damps depth jitter. positionScale 1 = 1:1 metres.
+        [Tooltip("Translate the avatar from the OAK-D measured hip position (walk/jump with the user).")]
         [SerializeField] private bool trackPosition = true;
         [SerializeField] private float positionScale = 1f;
-        [SerializeField] private float positionSmoothing = 12f;
-        [SerializeField] private bool useFaceTracking = true;
-        [SerializeField] private bool useMediaPipeFace = true;
-        [SerializeField] private string faceModelFileName = "face_landmarker.bytes";
-        [SerializeField] private bool useHandTracking = true;
-        [SerializeField] private bool useMediaPipeHand = true;
-        [SerializeField] private string handModelFileName = "hand_landmarker.bytes";
-        [SerializeField] private float wristRotationWeight = 0.7f;
-        // ADR-022: Kalidokit-ported arm solver (derives limb roll from geometry → no forearm helicopter).
-        // Off by default so it can be A/B'd against the current FK. The axis signs map Kalidokit's Euler
-        // (right-handed, Y-up) onto Unity bone-local rotation and are the one convention that needs a live
-        // tuning pass — all four are Inspector-tunable during Play.
-        [SerializeField] private bool useKalidokitArms = false;
-        [SerializeField] private Vector3 kalidokitAxisSigns = new Vector3(-1f, -1f, 1f);
-        [SerializeField] private float kalidokitLerp = 0.4f;
-        [SerializeField] private bool kalidokitDriveHand = true;
-        // ADR-022 WHOLE-BODY path (recommended over the arms-only raw-bone path above): loads the VRM
-        // normalized control rig and drives the entire skeleton from the ported Kalidokit solver with ONE
-        // global convention, so there is no per-bone axis guessing. MUST be set BEFORE Play (the control rig
-        // is a load-time option). Tune the single convention live: kalidokitBodyFlipQuat (0..3) +
-        // kalidokitBodyEulerSigns; kalidokitBodyLerp = smoothing. When on, FK/IK + the hand-curl path are
-        // bypassed (the control rig owns the skeleton); face blendshapes still run.
-        [SerializeField] private bool useKalidokitBody = false;
-        [SerializeField] private Vector3 kalidokitBodyEulerSigns = Vector3.one;
-        [SerializeField] private int kalidokitBodyFlipQuat = 0;
-        [SerializeField] private float kalidokitBodyLerp = 0.5f;
-        [SerializeField] private bool kalidokitBodyLegs = true;
-        // Mirror the input so the avatar reflects the user like a real mirror (negate X + swap L/R) instead
-        // of copying same-side. Live-tunable.
-        [SerializeField] private bool kalidokitBodyMirror = true;
-        // Torso side-lean amount (0 = upright, no lean; 1 = full side-lean tracking). Default 0 fixes the
-        // constant "leaned right" from noisy shoulder tilt (ADR-019 no-unreliable-roll precedent). Live.
-        [SerializeField] private float kalidokitBodyTorsoRoll = 0f;
-        // Kalidokit fingers on the control rig (curl-based, from the hand provider). Curl axis is the
-        // normalized-bone flexion axis (tunable like flipQuat); weight 0 disables. Live-tunable.
-        [SerializeField] private Vector3 kalidokitFingerCurlAxis = new Vector3(0f, 0f, -1f);
-        [SerializeField] private float kalidokitFingerWeight = 1f;
-        [SerializeField] private bool useSentis3dTracking = false;
-        [SerializeField] private Unity.InferenceEngine.ModelAsset sentisModel;
-        [SerializeField] private bool sentisImageNetNorm = true;
-        [SerializeField] private float sentisMetreScale = 1.7f;
-        [SerializeField] private float sentisDepthScale = 0.8f;
-        [SerializeField] private bool sentisPersonCrop = true;
-        [SerializeField] private float sentisFilterBeta = 0.6f;
-        [SerializeField] private float sentisFilterMinCutoff = 1.5f;
-        [SerializeField] private bool useOakUdpTracking = false; // B2 (Python sidecar over UDP) — ADR-016
-        [SerializeField] private int oakUdpPort = 8899;
+
+        [Header("Debug")]
+        [Tooltip("Draw a live line-skeleton of the raw tracked pose beside the avatar to validate tracking by eye.")]
+        [SerializeField] private bool showDebugSkeleton = false;
+        [Tooltip("Uniform size of the debug skeleton.")]
+        [SerializeField] private float debugSkeletonScale = 1.5f;
+        [Tooltip("Offset of the debug skeleton from the avatar root.")]
+        [SerializeField] private Vector3 debugSkeletonOffset = new Vector3(1.4f, 1.0f, 0f);
+
+        // ---- Capture / filter / retarget internals (tuned at runtime via the calibration panel; hidden) ----
+        [HideInInspector] [SerializeField] private string poseModelFileName = "pose_landmarker_heavy.bytes";
+        [HideInInspector] [SerializeField] private string sampleVideoPath = "C:/Unity/viitorx-vrm-avtar-unity-base-project/sampleVRMFiles/sample video.mp4";
+        [HideInInspector] [SerializeField] private int cameraWidth = 1280;
+        [HideInInspector] [SerializeField] private int cameraHeight = 720;
+        [HideInInspector] [SerializeField] private int cameraFps = 30;
+        [HideInInspector] [SerializeField] private float filterMinCutoff = 1f;
+        [HideInInspector] [SerializeField] private float filterBeta = 0.2f;
+        [HideInInspector] [SerializeField] private float filterDerivativeCutoff = 1f;
+        [HideInInspector] [SerializeField] private float retargetMinConfidence = 0.5f;
+        [HideInInspector] [SerializeField] private float retargetExitConfidence = 0.3f;
+        [HideInInspector] [SerializeField] private float poseStaleSeconds = 0.5f;
+        [HideInInspector] [SerializeField] private float positionSmoothing = 12f;
+        [HideInInspector] [SerializeField] private bool useMediaPipeFace = true;
+        [HideInInspector] [SerializeField] private string faceModelFileName = "face_landmarker.bytes";
+        [HideInInspector] [SerializeField] private bool useMediaPipeHand = true;
+        [HideInInspector] [SerializeField] private string handModelFileName = "hand_landmarker.bytes";
+
+        // ---- Legacy FK/IK path (fully bypassed while Kalidokit Body is on) ----
+        [HideInInspector] [SerializeField] private bool useIkDriver = true;
+
+        // ---- Sentis RTMW3D GPU path (optional alternate provider; off by default) ----
+        [HideInInspector] [SerializeField] private bool useSentis3dTracking = false;
+        [HideInInspector] [SerializeField] private Unity.InferenceEngine.ModelAsset sentisModel;
+        [HideInInspector] [SerializeField] private bool sentisImageNetNorm = true;
+        [HideInInspector] [SerializeField] private float sentisMetreScale = 1.7f;
+        [HideInInspector] [SerializeField] private float sentisDepthScale = 0.8f;
+        [HideInInspector] [SerializeField] private bool sentisPersonCrop = true;
+        [HideInInspector] [SerializeField] private float sentisFilterBeta = 0.6f;
+        [HideInInspector] [SerializeField] private float sentisFilterMinCutoff = 1.5f;
 
         private ServiceRegistry services;
         private LogService logService;
@@ -118,8 +128,8 @@ namespace VirtualMirror.App {
         private PoseSpaceConverter converter;
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
-        private KalidokitRetargeter kalidokitRetargeter;
         private KalidokitControlRigDriver kalidokitControlRig;
+        private PoseDebugSkeleton debugSkeleton;
         private IIkSolver ikSolver;
         private IFaceTrackingProvider faceProvider;
         private VrmExpressionRetargeter expressionRetargeter;
@@ -234,9 +244,6 @@ namespace VirtualMirror.App {
             if (animator != boundAnimator) {
                 retargeter.Bind(animator);
                 retargeter.SetTrackLegs(trackLegs);
-                if (kalidokitRetargeter != null) {
-                    kalidokitRetargeter.Bind(animator); // ADR-022 (arms-only raw-bone path)
-                }
                 if (kalidokitControlRig != null) {
                     // ADR-022 whole-body: bind the normalized control rig (null unless loaded with it).
                     UniVRM10.Vrm10Instance vrmForRig = avatarSession.Current.Root != null ? avatarSession.Current.Root.GetComponent<UniVRM10.Vrm10Instance>() : null;
@@ -292,6 +299,7 @@ namespace VirtualMirror.App {
                     }
                     filtered = lastFilteredFrame;
                 }
+                RenderDebugSkeleton(filtered);
                 if (kalidokitBodyActive) {
                     // ADR-022 whole-body: the normalized control rig owns the entire skeleton, so release
                     // FK + IK (they must not write raw bones the control rig would overwrite each Process).
@@ -310,10 +318,9 @@ namespace VirtualMirror.App {
                     // everything and the solver is released so the rig stops deforming the limbs.
                     bool ikActive = useIkDriver && ikSolver != null && ikSolver.IsBound;
                     retargeter.SetArmsLegsDrivenExternally(ikActive);
-                    // ADR-022: when the Kalidokit arm solver (raw-bone A/B) is on, FK yields the ARM segments
-                    // to it (torso + legs stay on FK). Applied after FK below so it owns the arm bones.
-                    bool kalidokitArmsActive = useKalidokitArms && kalidokitRetargeter != null && kalidokitRetargeter.IsBound;
-                    retargeter.SetArmsExternallyDriven(kalidokitArmsActive);
+                    // FK owns the arms on this legacy path (the Kalidokit whole-body path drives arms via the
+                    // control rig instead — see kalidokitBodyActive above).
+                    retargeter.SetArmsExternallyDriven(false);
                     if (ikSolver != null && ikSolver.IsBound) {
                         ikSolver.SetActive(useIkDriver);
                     }
@@ -321,12 +328,6 @@ namespace VirtualMirror.App {
                         retargeter.Apply(filtered, retargetMinConfidence, retargetExitConfidence);
                         if (ikActive) {
                             ikSolver.Apply(filtered, retargetMinConfidence);
-                        }
-                        if (kalidokitArmsActive) {
-                            kalidokitRetargeter.SetAxisSigns(kalidokitAxisSigns);
-                            kalidokitRetargeter.SetLerp(kalidokitLerp);
-                            kalidokitRetargeter.SetDriveHand(kalidokitDriveHand);
-                            kalidokitRetargeter.Apply(filtered);
                         }
                         // World translation from the measured hip anchor (unfiltered `frame` carries it; the joint
                         // filter only smooths landmarks). Neutral-relative + scaled + exponentially smoothed so the
@@ -400,6 +401,29 @@ namespace VirtualMirror.App {
             if (kalidokitBodyActive && kalidokitControlRig != null) {
                 kalidokitControlRig.ProcessRuntime();
             }
+        }
+
+        // Live line-rendered debug skeleton of the RAW tracked pose, drawn beside the avatar so tracking can
+        // be validated by eye against the retargeted VRM (the user's request). Lazily created; toggled live by
+        // showDebugSkeleton. Purely diagnostic — no effect on the avatar.
+        private void RenderDebugSkeleton(PoseFrame frame) {
+            if (!showDebugSkeleton) {
+                if (debugSkeleton != null && debugSkeleton.gameObject.activeSelf) {
+                    debugSkeleton.gameObject.SetActive(false);
+                }
+                return;
+            }
+            if (debugSkeleton == null) {
+                GameObject skeletonObject = new GameObject("PoseDebugSkeleton");
+                debugSkeleton = skeletonObject.AddComponent<PoseDebugSkeleton>();
+                Vector3 basePosition = avatarRootTransform != null ? avatarRootInitialPosition : Vector3.zero;
+                skeletonObject.transform.position = basePosition + debugSkeletonOffset;
+                skeletonObject.transform.localScale = Vector3.one * debugSkeletonScale;
+            }
+            if (!debugSkeleton.gameObject.activeSelf) {
+                debugSkeleton.gameObject.SetActive(true);
+            }
+            debugSkeleton.Render(frame);
         }
 
         private bool servicesTornDown;
@@ -490,7 +514,6 @@ namespace VirtualMirror.App {
         private void StartTracking() {
             jointFilter = new JointFilterPipeline(filterMinCutoff, filterBeta, filterDerivativeCutoff);
             retargeter = new HumanoidPoseRetargeter();
-            kalidokitRetargeter = new KalidokitRetargeter(); // ADR-022: Kalidokit-ported arm solver (raw-bone A/B)
             kalidokitControlRig = new KalidokitControlRigDriver(); // ADR-022: whole-body via normalized control rig
             if (useIkDriver) {
                 EnsureIkSolver();

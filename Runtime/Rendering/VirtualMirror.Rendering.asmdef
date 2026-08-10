@@ -1,7 +1,9 @@
 {
     "name": "VirtualMirror.Rendering",
     "rootNamespace": "VirtualMirror.Rendering",
-    "references": [],
+    "references": [
+        "VirtualMirror.Core"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

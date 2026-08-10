@@ -186,8 +186,16 @@ namespace VirtualMirror.Retargeting {
             ApplyBone(leftLowerArm, pose.LowerArmLeft);
             ApplyBone(rightUpperArm, pose.UpperArmRight);
             ApplyBone(rightLowerArm, pose.LowerArmRight);
-            ApplyBone(leftHand, pose.HandLeft);
-            ApplyBone(rightHand, pose.HandRight);
+            // Hands: Kalidokit derives the Hand rotation from the body-pose hand points (wrist + pinky/index
+            // MCPs — indices 15/17/19 for the right, 16/18/20 for the left). On the OAK whole-body stream
+            // those hand points (17-22) are often ALL ZERO (not provided), so FindRotation(wrist, origin)
+            // yields a garbage FIXED rotation — the persistent hand "curve" that never tracks the wrist
+            // (found live 2026-08-10, ADR-023). Only drive the Hand bone when its hand points are present;
+            // otherwise drive it to REST (identity euler) so the hand stays straight instead of curled.
+            bool leftHandValid = landmarks[18] != Vector3.zero || landmarks[20] != Vector3.zero;
+            bool rightHandValid = landmarks[17] != Vector3.zero || landmarks[19] != Vector3.zero;
+            ApplyBone(leftHand, leftHandValid ? pose.HandLeft : Vector3.zero);
+            ApplyBone(rightHand, rightHandValid ? pose.HandRight : Vector3.zero);
             if (driveLegs) {
                 ApplyBone(leftUpperLeg, pose.UpperLegLeft);
                 ApplyBone(leftLowerLeg, pose.LowerLegLeft);
@@ -225,11 +233,15 @@ namespace VirtualMirror.Retargeting {
             if (!bound || frame == null || !frame.IsValid || fingerWeight <= 0f) {
                 return;
             }
-            ApplyHandFingers(leftFingers, frame.LeftThumbCurl, frame.LeftIndexCurl, frame.LeftMiddleCurl, frame.LeftRingCurl, frame.LeftLittleCurl);
-            ApplyHandFingers(rightFingers, frame.RightThumbCurl, frame.RightIndexCurl, frame.RightMiddleCurl, frame.RightRingCurl, frame.RightLittleCurl);
+            // Per-hand sign (ADR-023 / port audit A1): the left & right normalized finger bones share a
+            // PARALLEL (non-mirrored) local frame, so ONE shared axis+sign curls one hand IN and the other
+            // OUT (hyperextends). Kalidokit's HandSolver uses invert = side==Right?1:-1; mirror that here so
+            // BOTH hands curl into the palm. If both hyperextend, flip kalidokitFingerCurlAxis (tunes both).
+            ApplyHandFingers(leftFingers, frame.LeftThumbCurl, frame.LeftIndexCurl, frame.LeftMiddleCurl, frame.LeftRingCurl, frame.LeftLittleCurl, -1f);
+            ApplyHandFingers(rightFingers, frame.RightThumbCurl, frame.RightIndexCurl, frame.RightMiddleCurl, frame.RightRingCurl, frame.RightLittleCurl, 1f);
         }
 
-        private void ApplyHandFingers(List<FingerJoint> list, float thumb, float index, float middle, float ring, float little) {
+        private void ApplyHandFingers(List<FingerJoint> list, float thumb, float index, float middle, float ring, float little, float sideSign) {
             float[] curls = new float[] { thumb, index, middle, ring, little };
             int k = 0;
             while (k < list.Count) {
@@ -239,7 +251,7 @@ namespace VirtualMirror.Retargeting {
                     continue;
                 }
                 float curl = Mathf.Clamp01(curls[joint.Finger]) * fingerWeight;
-                Quaternion rot = Quaternion.AngleAxis(curl * joint.MaxDegrees, fingerCurlAxis);
+                Quaternion rot = Quaternion.AngleAxis(curl * joint.MaxDegrees * sideSign, fingerCurlAxis);
                 joint.Bone.localRotation = Quaternion.Slerp(joint.Bone.localRotation, joint.Rest * rot, lerpAmount);
             }
         }

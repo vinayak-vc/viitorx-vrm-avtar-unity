@@ -154,7 +154,32 @@ MonoBehaviour:
   settingsSaveDebounceSeconds: 0.4
   mirrorLogToConsole: 1
   maxAvatarFileBytes: 268435456
-  useVideoSource: 1
+  useOakUdpTracking: 1
+  oakUdpPort: 8899
+  useVideoSource: 0
+  useMediaPipeTracking: 1
+  useKalidokitBody: 1
+  kalidokitBodyFlipQuat: 2
+  kalidokitBodyEulerSigns: {x: 1, y: 1, z: 1}
+  kalidokitBodyLerp: 0.5
+  kalidokitBodyMirror: 0
+  kalidokitBodyTorsoRoll: 0
+  kalidokitBodyLegs: 1
+  kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
+  kalidokitFingerWeight: 1
+  poseFlipX: 0
+  poseFlipY: 1
+  poseFlipZ: 0
+  useFaceTracking: 1
+  useHandTracking: 1
+  wristRotationWeight: 0.7
+  trackLegs: 1
+  trackPosition: 1
+  positionScale: 1
+  showDebugSkeleton: 1
+  debugSkeletonScale: 1.5
+  debugSkeletonOffset: {x: 1.4, y: 1, z: 0}
+  poseModelFileName: pose_landmarker_heavy.bytes
   sampleVideoPath: D:\Unity\viitorx-vrm-avtar-unity-base-project\Assets\StreamingAssets\vid.mp4
   cameraWidth: 1280
   cameraHeight: 720
@@ -162,39 +187,15 @@ MonoBehaviour:
   filterMinCutoff: 1
   filterBeta: 0.2
   filterDerivativeCutoff: 1
-  useMediaPipeTracking: 1
-  poseModelFileName: pose_landmarker_heavy.bytes
-  poseFlipX: 0
-  poseFlipY: 1
-  poseFlipZ: 0
   retargetMinConfidence: 0.5
   retargetExitConfidence: 0.3
   poseStaleSeconds: 0.5
-  useIkDriver: 0
-  trackLegs: 1
-  trackPosition: 1
-  positionScale: 1
   positionSmoothing: 12
-  useFaceTracking: 1
   useMediaPipeFace: 1
   faceModelFileName: face_landmarker.bytes
-  useHandTracking: 1
   useMediaPipeHand: 1
   handModelFileName: hand_landmarker.bytes
-  wristRotationWeight: 0.7
-  useKalidokitArms: 1
-  kalidokitAxisSigns: {x: -1, y: -1, z: 1}
-  kalidokitLerp: 0.4
-  kalidokitDriveHand: 1
-  useKalidokitBody: 1
-  kalidokitBodyEulerSigns: {x: 1, y: 1, z: 1}
-  kalidokitBodyFlipQuat: 2
-  kalidokitBodyLerp: 0.5
-  kalidokitBodyLegs: 1
-  kalidokitBodyMirror: 1
-  kalidokitBodyTorsoRoll: 0
-  kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
-  kalidokitFingerWeight: 1
+  useIkDriver: 0
   useSentis3dTracking: 0
   sentisModel: {fileID: 5022602860645237092, guid: 521045b5f9b746a44bdda694478d1c83, type: 3}
   sentisImageNetNorm: 1
@@ -203,8 +204,6 @@ MonoBehaviour:
   sentisPersonCrop: 1
   sentisFilterBeta: 0.6
   sentisFilterMinCutoff: 1.5
-  useOakUdpTracking: 0
-  oakUdpPort: 8899
 --- !u!4 &375600628
 Transform:
   m_ObjectHideFlags: 0
