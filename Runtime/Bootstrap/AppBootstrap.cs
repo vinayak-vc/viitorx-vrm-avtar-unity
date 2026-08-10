@@ -232,6 +232,9 @@ namespace VirtualMirror.App {
                 if (handRetargeter != null) {
                     handRetargeter.Recalibrate();
                 }
+                if (kalidokitControlRig != null) {
+                    kalidokitControlRig.Recalibrate(); // re-capture the wrist neutral palm
+                }
             }
 
             Animator animator = null;
@@ -382,14 +385,18 @@ namespace VirtualMirror.App {
                 handRetargeter.ResetToOpen();
             }
 
-            // ADR-022 fingers: on the Kalidokit body path, drive the control-rig fingers from the hand
-            // provider's curls (the hand-curl retargeter above is bypassed because the control rig owns the
-            // skeleton). Runs before ProcessRuntime so the fingers are applied this frame.
+            // ADR-022 fingers + ADR-023 wrist: on the Kalidokit body path, drive the control-rig fingers from
+            // the hand provider's curls (the hand-curl retargeter above is bypassed because the control rig
+            // owns the skeleton). Fingers run BEFORE ProcessRuntime; the WRIST runs AFTER (below), on the raw
+            // hand bone. Keep the frame reference so the wrist can reuse it post-Process.
+            HandFrame kaliHandFrame = null;
+            bool haveKaliHandFrame = false;
             if (kalidokitBodyActive && useHandTracking && handProvider != null && kalidokitControlRig != null) {
                 handProvider.Tick(deltaSeconds);
                 kalidokitControlRig.SetFingerTuning(kalidokitFingerCurlAxis, kalidokitFingerWeight);
-                HandFrame kaliHandFrame;
+                kalidokitControlRig.SetWristWeight(wristRotationWeight); // live-tunable; 0 disables the wrist
                 if (handProvider.TryGetFrame(out kaliHandFrame)) {
+                    haveKaliHandFrame = true;
                     kalidokitControlRig.ApplyFingers(kaliHandFrame);
                 }
             }
@@ -400,6 +407,11 @@ namespace VirtualMirror.App {
             // avatar stays in T-pose (the reported bug).
             if (kalidokitBodyActive && kalidokitControlRig != null) {
                 kalidokitControlRig.ProcessRuntime();
+                // ADR-023: the WRIST bend is applied to the RAW hand bone AFTER Process (Process would
+                // overwrite a control-rig write). Roll-free swing from the OAK hand stream's palm forward.
+                if (haveKaliHandFrame) {
+                    kalidokitControlRig.ApplyWrist(kaliHandFrame);
+                }
             }
         }
 

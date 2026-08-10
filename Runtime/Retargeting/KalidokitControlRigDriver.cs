@@ -73,6 +73,17 @@ namespace VirtualMirror.Retargeting {
         private Vector3 fingerCurlAxis = new Vector3(0f, 0f, -1f); // normalized-bone flexion axis (tunable)
         private float fingerWeight = 1f;
 
+        // Wrist bend (ADR-021/023). The control rig owns bone LOCAL rotations, so the wrist is applied to the
+        // RAW skeleton Hand bones AFTER Runtime.Process (see AppBootstrap) as a ROLL-FREE swing of the palm's
+        // forward axis, delta-from-a-captured-neutral (FromToRotation has no roll DOF → cannot helicopter).
+        private Transform rawLeftHand;
+        private Transform rawRightHand;
+        private Quaternion leftNeutralPalm = Quaternion.identity;
+        private Quaternion rightNeutralPalm = Quaternion.identity;
+        private bool hasLeftPalmNeutral;
+        private bool hasRightPalmNeutral;
+        private float wristWeight = 0.7f;
+
         public bool IsBound {
             get {
                 return bound;
@@ -118,6 +129,13 @@ namespace VirtualMirror.Retargeting {
             leftLowerLeg = controlRig.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
             rightUpperLeg = controlRig.GetBoneTransform(HumanBodyBones.RightUpperLeg);
             rightLowerLeg = controlRig.GetBoneTransform(HumanBodyBones.RightLowerLeg);
+            // Raw skeleton hands for the post-Process wrist bend (the control rig writes to these via Process
+            // each frame, so the wrist must be applied to them AFTER Process — see ApplyWrist / AppBootstrap).
+            UnityEngine.Animator rawAnimator = vrm.GetComponentInChildren<UnityEngine.Animator>();
+            rawLeftHand = rawAnimator != null ? rawAnimator.GetBoneTransform(HumanBodyBones.LeftHand) : null;
+            rawRightHand = rawAnimator != null ? rawAnimator.GetBoneTransform(HumanBodyBones.RightHand) : null;
+            hasLeftPalmNeutral = false;
+            hasRightPalmNeutral = false;
             BindFingers();
             bound = hips != null || leftUpperArm != null || rightUpperArm != null;
         }
@@ -129,6 +147,10 @@ namespace VirtualMirror.Retargeting {
             bound = false;
             controlRig = null;
             vrm = null;
+            rawLeftHand = null;
+            rawRightHand = null;
+            hasLeftPalmNeutral = false;
+            hasRightPalmNeutral = false;
         }
 
         /// <summary>
@@ -221,6 +243,55 @@ namespace VirtualMirror.Retargeting {
         public void SetFingerTuning(Vector3 curlAxis, float weight) {
             fingerCurlAxis = curlAxis;
             fingerWeight = Mathf.Clamp01(weight);
+        }
+
+        public void SetWristWeight(float weight) {
+            wristWeight = Mathf.Clamp01(weight);
+        }
+
+        /// <summary>Re-capture each hand's neutral palm on the next tracked frame (bound to the C key).</summary>
+        public void Recalibrate() {
+            hasLeftPalmNeutral = false;
+            hasRightPalmNeutral = false;
+        }
+
+        /// <summary>
+        /// Drive the WRIST bend from the hand provider's palm orientation. Applied to the RAW Hand bones, so it
+        /// MUST be called AFTER <see cref="ProcessRuntime"/> (the control rig would otherwise overwrite it).
+        /// ROLL-FREE swing of the palm's forward axis, delta-from-neutral (ADR-021): bends toward where the
+        /// hand points, structurally cannot spin. wristWeight 0 disables (fingers still curl).
+        /// </summary>
+        public void ApplyWrist(HandFrame frame) {
+            if (!bound || frame == null || !frame.IsValid || wristWeight <= 0f) {
+                return;
+            }
+            ApplyWristBone(rawLeftHand, frame.LeftWristTracked, frame.LeftWristRotation, true);
+            ApplyWristBone(rawRightHand, frame.RightWristTracked, frame.RightWristRotation, false);
+        }
+
+        private void ApplyWristBone(Transform hand, bool tracked, Quaternion palm, bool isLeft) {
+            if (hand == null || !tracked) {
+                return;
+            }
+            bool hasNeutral = isLeft ? hasLeftPalmNeutral : hasRightPalmNeutral;
+            if (!hasNeutral) {
+                if (isLeft) {
+                    leftNeutralPalm = palm;
+                    hasLeftPalmNeutral = true;
+                } else {
+                    rightNeutralPalm = palm;
+                    hasRightPalmNeutral = true;
+                }
+                return;
+            }
+            Quaternion neutral = isLeft ? leftNeutralPalm : rightNeutralPalm;
+            Vector3 neutralForward = neutral * Vector3.forward;
+            Vector3 currentForward = palm * Vector3.forward;
+            if (neutralForward.sqrMagnitude < 1e-8f || currentForward.sqrMagnitude < 1e-8f) {
+                return;
+            }
+            Quaternion swing = Quaternion.FromToRotation(neutralForward, currentForward);
+            hand.rotation = Quaternion.Slerp(hand.rotation, swing * hand.rotation, wristWeight);
         }
 
         /// <summary>
