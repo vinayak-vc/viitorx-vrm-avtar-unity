@@ -87,6 +87,9 @@ namespace VirtualMirror.App {
         [SerializeField] private float debugSkeletonScale = 1.5f;
         [Tooltip("Offset of the debug skeleton from the avatar root.")]
         [SerializeField] private Vector3 debugSkeletonOffset = new Vector3(1.4f, 1.0f, 0f);
+        [Tooltip("Pipeline logging: write recv_log.jsonl (received) + model_log.jsonl (applied) to compare against the sidecar's sender_log.jsonl. Run the sidecar with --log-dir <the same dir>, then diff with compare_logs.py.")]
+        [SerializeField] private bool pipelineLogging = false;
+        [SerializeField] private string pipelineLogDir = "D:/Unity/viitorx-vrm-avtar-unity-base-project/Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/pipeline_logs";
 
         // ---- Capture / filter / retarget internals (tuned at runtime via the calibration panel; hidden) ----
         [HideInInspector] [SerializeField] private string poseModelFileName = "pose_landmarker_heavy.bytes";
@@ -130,6 +133,8 @@ namespace VirtualMirror.App {
         private HumanoidPoseRetargeter retargeter;
         private KalidokitControlRigDriver kalidokitControlRig;
         private PoseDebugSkeleton debugSkeleton;
+        private System.IO.StreamWriter modelLog;
+        private bool modelLogFailed;
         private IIkSolver ikSolver;
         private IFaceTrackingProvider faceProvider;
         private VrmExpressionRetargeter expressionRetargeter;
@@ -412,6 +417,9 @@ namespace VirtualMirror.App {
                 if (haveKaliHandFrame) {
                     kalidokitControlRig.ApplyWrist(kaliHandFrame);
                 }
+                if (pipelineLogging) {
+                    WriteModelLog();
+                }
             }
         }
 
@@ -438,6 +446,58 @@ namespace VirtualMirror.App {
             debugSkeleton.Render(frame);
         }
 
+        // Pipeline logging (diagnostics): one model_log.jsonl line per applied Kalidokit-body frame — seq +
+        // the resulting avatar bone orientations (hips facing, hands, forearms) — to diff against
+        // recv_log.jsonl and localize where the retarget introduces jitter/spin (compare_logs.py).
+        private void WriteModelLog() {
+            if (boundAnimator == null || modelLogFailed) {
+                return;
+            }
+            try {
+                if (modelLog == null) {
+                    System.IO.Directory.CreateDirectory(pipelineLogDir);
+                    modelLog = new System.IO.StreamWriter(System.IO.Path.Combine(pipelineLogDir, "model_log.jsonl"), false);
+                    modelLog.AutoFlush = true;
+                }
+                long seq = bodyProvider is OakDUdpPoseProvider ? ((OakDUdpPoseProvider)bodyProvider).LastSeq : -1;
+                Transform hips = boundAnimator.GetBoneTransform(HumanBodyBones.Hips);
+                Transform lh = boundAnimator.GetBoneTransform(HumanBodyBones.LeftHand);
+                Transform rh = boundAnimator.GetBoneTransform(HumanBodyBones.RightHand);
+                Transform ll = boundAnimator.GetBoneTransform(HumanBodyBones.LeftLowerArm);
+                Transform rl = boundAnimator.GetBoneTransform(HumanBodyBones.RightLowerArm);
+                string line = "{\"seq\":" + seq
+                    + ",\"hipsY\":" + LogF(hips != null ? hips.eulerAngles.y : 0f)
+                    + ",\"hipsFwd\":" + LogV(hips != null ? hips.forward : Vector3.zero)
+                    + ",\"lhand\":" + LogV(lh != null ? lh.eulerAngles : Vector3.zero)
+                    + ",\"rhand\":" + LogV(rh != null ? rh.eulerAngles : Vector3.zero)
+                    + ",\"llow\":" + LogV(ll != null ? ll.eulerAngles : Vector3.zero)
+                    + ",\"rlow\":" + LogV(rl != null ? rl.eulerAngles : Vector3.zero)
+                    + ",\"lhandF\":" + LogV(lh != null ? lh.forward : Vector3.zero)
+                    + ",\"rhandF\":" + LogV(rh != null ? rh.forward : Vector3.zero)
+                    + ",\"llowF\":" + LogV(ll != null ? ll.forward : Vector3.zero)
+                    + ",\"rlowF\":" + LogV(rl != null ? rl.forward : Vector3.zero)
+                    + "}";
+                modelLog.WriteLine(line);
+            } catch (Exception) {
+                modelLogFailed = true;
+                if (modelLog != null) {
+                    try {
+                        modelLog.Dispose();
+                    } catch (Exception) {
+                    }
+                    modelLog = null;
+                }
+            }
+        }
+
+        private static string LogF(float v) {
+            return v.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static string LogV(Vector3 v) {
+            return "[" + LogF(v.x) + "," + LogF(v.y) + "," + LogF(v.z) + "]";
+        }
+
         private bool servicesTornDown;
 
         private void OnApplicationQuit() {
@@ -456,6 +516,14 @@ namespace VirtualMirror.App {
                 return;
             }
             servicesTornDown = true;
+            if (modelLog != null) {
+                try {
+                    modelLog.Flush();
+                    modelLog.Dispose();
+                } catch (Exception) {
+                }
+                modelLog = null;
+            }
             if (faceProvider != null) {
                 faceProvider.Dispose();
             }
@@ -536,6 +604,9 @@ namespace VirtualMirror.App {
             // sidecar's datagrams (avatar rests until the sidecar streams). Run udp_pose_sender.py separately.
             if (useOakUdpTracking) {
                 OakDUdpPoseProvider oakUdp = new OakDUdpPoseProvider(logService, converter, oakUdpPort);
+                if (pipelineLogging) {
+                    oakUdp.SetPipelineLog(pipelineLogDir); // recv_log.jsonl — must be set before StartTracking
+                }
                 oakUdp.StartTracking();
                 if (oakUdp.IsRunning) {
                     bodyProvider = oakUdp;

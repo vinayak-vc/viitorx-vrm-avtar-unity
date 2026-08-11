@@ -172,13 +172,15 @@ MonoBehaviour:
   poseFlipZ: 0
   useFaceTracking: 1
   useHandTracking: 1
-  wristRotationWeight: 0.7
+  wristRotationWeight: 0
   trackLegs: 1
   trackPosition: 1
   positionScale: 1
   showDebugSkeleton: 1
   debugSkeletonScale: 1.5
   debugSkeletonOffset: {x: 1.4, y: 1, z: 0}
+  pipelineLogging: 1
+  pipelineLogDir: D:/Unity/viitorx-vrm-avtar-unity-base-project/Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/pipeline_logs
   poseModelFileName: pose_landmarker_heavy.bytes
   sampleVideoPath: D:\Unity\viitorx-vrm-avtar-unity-base-project\Assets\StreamingAssets\vid.mp4
   cameraWidth: 1280

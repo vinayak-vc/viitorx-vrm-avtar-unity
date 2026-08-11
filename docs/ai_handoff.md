@@ -5,6 +5,28 @@ Purpose: next agent can continue without re-deriving context.
 
 ---
 
+## 🎯 POC STATUS + DECISION (2026-08-10, ADR-024) — read this first
+
+Pipeline logging (ADR-023) + two live OAK captures settled the long wrist saga: the remaining instability is **source hand-data quality**, not a Unity bug. **Decision: ship the POC with wrist-orientation OFF (`wristRotationWeight=0`, persisted); fingers still curl.**
+
+| Capability | State | Notes |
+|---|---|---|
+| Body pose (torso/arms/legs) | ✅ POC-ready | shoulders ~0.8 cm/frame, arms track T/up/out |
+| Facing (yaw) | ✅ frontal-stable | hips-yaw p95 0° (frontal-locked flatten, ADR-023) |
+| Finger curls | ✅ works | per-finger curl from the OAK hand stream |
+| Face expressions | ✅ works | MediaPipe blendshapes (needs a working RGB webcam) |
+| Position/root | ✅ works | avatar walks/jumps with the user (measured hip xyz) |
+| **Wrist bend** | ⏸️ **deferred** | source palm 7.7–10°/frame + 174° re-acquire snaps at 2–3 m → OFF for POC; needs a close-range hand source |
+| Body turn-tracking | ⏸️ deferred | single-front-camera limit |
+
+**Path to re-enable the wrist (post-POC):** a close-range hand source (dedicated webcam MediaPipe Hands, or user much closer, or a hi-res OAK RGB crop) → set `wristRotationWeight` back up; the roll-free apply already works. See ADR-024.
+
+**Sidecar limb-depth smoothing added (2026-08-10, ADR-020 amendment):** the residual jitter is **depth (z) on the limbs** (wrist z jitters ~5× its x,y — invisible in the 2D preview, hence "stable in Python, unstable in Unity"). `smoothing.py` now applies a heavier One-Euro to limb depth (`--depth-min-cutoff 0.3 --depth-beta 0.1`, arms+hands only) + **hold-on-dropout** (`--max-hold-frames 8`, uses the last-good limb value instead of the noisy zrel fallback that caused the 8-12 m spikes; bounded, no freeze). Unit-tested (0.12→0.006 m/frame z-jitter). **Biggest win is still ~2 m framing** (the 19:00 capture was at hip 3.99 m).
+
+**Open question for the user:** in the 2026-08-10 19:00 capture the avatar rendered **grey/untextured** — confirm whether that's intended (a placeholder/scene-view) or a material/render regression on the VRM to investigate separately.
+
+---
+
 ## 🩺 Kalidokit body path RE-DIAGNOSED on the user's 2026-08-09 recording — "helicopter"/poor accuracy (2026-08-10, IN PROGRESS)
 
 The user sent a screen recording of the **video test config** (`useKalidokitBody=1`, MediaPipe pose, sample dance video) showing the avatar still helicoptering + arms not tracking. Diagnosed **live in Unity (MCP 6400, in Play)** with a **canonical-pose harness**: inject known poses via reflection on the live `KalidokitControlRigDriver.Apply` + read RAW-skeleton world positions (reliable because `execute_code` runs synchronously on the main thread, so it reads back before the next frame overwrites).
@@ -27,6 +49,8 @@ The user sent a screen recording of the **video test config** (`useKalidokitBody
 6. **AppBootstrap inspector cleaned:** tunables grouped under `[Header]`s (Tracking Source / Kalidokit Body / Pose Mapping / Features / Debug) with `[Tooltip]`s; plumbing + backend detail hidden via `[HideInInspector]` (still serialized/functional); **removed the superseded arms-only Kalidokit raw-bone path** — `useKalidokitArms` + `kalidokitAxisSigns`/`kalidokitLerp`/`kalidokitDriveHand` + the `KalidokitRetargeter` field/wiring (the whole-body control-rig path replaces it; `KalidokitRetargeter.cs` is now an unused file, recoverable via git). Compile 0 errors.
 
 **OAK-D is the real path and the body now tracks well (T-pose reproduced) — input quality was the ceiling, confirmed.** **User re-run:** restart the sidecar (flatten fix) → re-enter Play → hands straight, arms un-bent, rotation back. **WRIST BEND — now DONE (2026-08-10, ADR-023):** `KalidokitControlRigDriver.ApplyWrist` applies the ADR-021 roll-free swing (palm forward vs captured neutral) to the RAW Hand bones AFTER `ProcessRuntime`, fed by the OAK 21-pt hand stream. Live-weighted by `wristRotationWeight` (0 disables), C key re-captures neutral. Verified in Unity (35° palm → 24.4° hand, roll-free). **Still OPEN:** body turn-tracking (facing is frontal-locked — single-camera limit).
+
+**PIPELINE LOGGING added (2026-08-10) — to diagnose "stable in the Python window, unstable in Unity".** Three logs aligned by a new frame `seq`: `sender_log.jsonl` (sidecar `--log-dir <dir>`), `recv_log.jsonl` (Unity received+converted) + `model_log.jsonl` (applied avatar bones) — Unity writes the latter two when `pipelineLogging` is on (**now ON by default**; `pipelineLogDir` defaults to the sidecar's `pipeline_logs`). `compare_logs.py --dir <dir>` aligns by seq and prints per-stage frame-to-frame **jitter** so instability localizes to SEND / WIRE / RETARGET / WRIST-APPLY (self-tested on synthetic logs: correctly flags a spinning palm and hip-yaw jitter). Files: `wholebody_udp_sender.py` (seq/`t` + `--log-dir`), `OakDUdpPoseProvider.cs` (`recv_log` + `LastSeq`), `AppBootstrap.cs` (`model_log`), `compare_logs.py`. **Capture (one-shot):** with Unity in Play (pipelineLogging on), run **`python-sidecar~/run_capture.bat`** — starts the sidecar with `--log-dir pipeline_logs --show`; press **`q`/ESC** in the preview to stop, and it prints `compare_logs.py` automatically. **Enhanced diagnostics (2026-08-10):** logs now carry elbows, per-frame **distance (`hipZ`)**, **coverage (`cov`)**, and gimbal-free model **forward vectors**; `compare_logs.py` reports **per-axis x/y/z jitter** (depth vs image-plane), a >2.5 m "too far" flag, dropout %, per-stage fps, worst depth-spike seq, and an auto-verdict — this is how "wrist depth = 5× image-plane" + "you're at 4 m" were nailed. **Pending (task 10):** analyze a real capture to fix the user's 4 obs (wrist-spin, jitter, left-edge skeleton, model≠skeleton).
 
 ---
 

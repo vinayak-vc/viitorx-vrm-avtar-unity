@@ -65,6 +65,14 @@ namespace VirtualMirror.Tracking.OakD {
         private bool handsWarned;
         private const int LogEveryFrames = 90;
 
+        // Pipeline logging (diagnostics): when a dir is set (SetPipelineLog, before StartTracking), append one
+        // recv_log.jsonl line per received datagram — seq + key converted landmarks + the derived palm
+        // quaternions — to diff against the sidecar's sender_log.jsonl and Unity's model_log.jsonl via
+        // compare_logs.py. Written on the receive thread only. Off unless a dir is set.
+        private string pipelineLogDir;
+        private System.IO.StreamWriter pipelineLog;
+        private long lastSeq = -1;
+
         public OakDUdpPoseProvider(ILogService logService, PoseSpaceConverter converter, int port) {
             if (logService == null) {
                 throw new ArgumentNullException(nameof(logService));
@@ -97,6 +105,18 @@ namespace VirtualMirror.Tracking.OakD {
             }
         }
 
+        // Seq of the most recently parsed datagram (aligns the model-stage log). -1 until the first frame.
+        public long LastSeq {
+            get {
+                return Interlocked.Read(ref lastSeq);
+            }
+        }
+
+        // Enable pipeline logging into <dir>/recv_log.jsonl. Call BEFORE StartTracking.
+        public void SetPipelineLog(string dir) {
+            pipelineLogDir = dir;
+        }
+
         public void StartTracking() {
             if (running) {
                 return;
@@ -113,6 +133,17 @@ namespace VirtualMirror.Tracking.OakD {
                 hasNewHand = false;
                 hasAnyHand = false;
                 clock.Restart(); // LOW-C: real monotonic arrival timestamps (was a fixed 33 ms/frame assumption)
+                if (!string.IsNullOrEmpty(pipelineLogDir)) {
+                    try {
+                        System.IO.Directory.CreateDirectory(pipelineLogDir);
+                        pipelineLog = new System.IO.StreamWriter(System.IO.Path.Combine(pipelineLogDir, "recv_log.jsonl"), false);
+                        pipelineLog.AutoFlush = true;
+                        logService.Log(LogLevel.Info, "OAK-D pipeline logging -> " + System.IO.Path.Combine(pipelineLogDir, "recv_log.jsonl"));
+                    } catch (Exception logEx) {
+                        logService.LogException(logEx, "OAK-D pipeline log open failed");
+                        pipelineLog = null;
+                    }
+                }
                 running = true;
                 receiveThread = new Thread(ReceiveLoop);
                 receiveThread.IsBackground = true;
@@ -219,6 +250,14 @@ namespace VirtualMirror.Tracking.OakD {
                 receiveThread.Join(1000);
                 receiveThread = null;
             }
+            if (pipelineLog != null) {
+                try {
+                    pipelineLog.Flush();
+                    pipelineLog.Dispose();
+                } catch (Exception) {
+                }
+                pipelineLog = null;
+            }
         }
 
         // Parse one UDP JSON datagram: { "lm": [[x,y,z,vis], ... 33], "xyz": [..] }. lm are BlazePose-33
@@ -230,6 +269,8 @@ namespace VirtualMirror.Tracking.OakD {
                 return;
             }
             JObject root = JObject.Parse(json);
+            long seq = root["seq"] != null ? root["seq"].Value<long>() : -1;
+            Interlocked.Exchange(ref lastSeq, seq);
             JArray landmarks = root["lm"] as JArray;
             if (landmarks == null || landmarks.Count == 0) {
                 target.MarkInvalid(timestampSeconds);
@@ -280,12 +321,46 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             ParseHands(root, timestampSeconds);
+            if (pipelineLog != null) {
+                WriteRecvLog(target, workerHandFrame, seq, timestampSeconds);
+            }
+        }
+
+        private static string F(float v) {
+            return v.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        // One recv_log.jsonl line: seq + key CONVERTED landmarks (shoulders/hips/wrists, Unity space) + the
+        // derived palm quaternions. Diff against sender_log.jsonl (should match modulo the axis convention)
+        // and model_log.jsonl (to localize where jitter/spin enters). Receive-thread only.
+        private void WriteRecvLog(PoseFrame t, HandFrame h, long seq, double ts) {
+            try {
+                Vector3 sL = t.GetLandmark((JointId)11).Position, sR = t.GetLandmark((JointId)12).Position;
+                Vector3 hL = t.GetLandmark((JointId)23).Position, hR = t.GetLandmark((JointId)24).Position;
+                Vector3 wL = t.GetLandmark((JointId)15).Position, wR = t.GetLandmark((JointId)16).Position;
+                Vector3 eL = t.GetLandmark((JointId)13).Position, eR = t.GetLandmark((JointId)14).Position;
+                Quaternion lp = h.LeftWristRotation, rp = h.RightWristRotation;
+                string line = "{\"seq\":" + seq + ",\"t\":" + ts.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"sh\":[[" + F(sL.x) + "," + F(sL.y) + "," + F(sL.z) + "],[" + F(sR.x) + "," + F(sR.y) + "," + F(sR.z) + "]]"
+                    + ",\"el\":[[" + F(eL.x) + "," + F(eL.y) + "," + F(eL.z) + "],[" + F(eR.x) + "," + F(eR.y) + "," + F(eR.z) + "]]"
+                    + ",\"hip\":[[" + F(hL.x) + "," + F(hL.y) + "," + F(hL.z) + "],[" + F(hR.x) + "," + F(hR.y) + "," + F(hR.z) + "]]"
+                    + ",\"wr\":[[" + F(wL.x) + "," + F(wL.y) + "," + F(wL.z) + "],[" + F(wR.x) + "," + F(wR.y) + "," + F(wR.z) + "]]"
+                    + ",\"lpalm\":[" + F(lp.x) + "," + F(lp.y) + "," + F(lp.z) + "," + F(lp.w) + "],\"ltrk\":" + (h.LeftWristTracked ? "true" : "false")
+                    + ",\"rpalm\":[" + F(rp.x) + "," + F(rp.y) + "," + F(rp.z) + "," + F(rp.w) + "],\"rtrk\":" + (h.RightWristTracked ? "true" : "false")
+                    + "}";
+                pipelineLog.WriteLine(line);
+            } catch (Exception) {
+            }
         }
 
         // ADR-021: temporal smoothing state for the re-enabled wrist palm basis (worker-thread only). The
         // raw palm quaternion from distant hand landmarks jitters/spins (ADR-018); slerp-smoothing it before
         // streaming keeps the wrist responsive without the spin.
-        private const float WristSmoothing = 0.35f;
+        private const float WristSmoothing = 0.15f;   // slerp factor toward the new palm each frame — LOWERED
+                                                       // from 0.35 (live logs: recv palm jittered ~10 deg/frame,
+                                                       // spikes to 150 deg) so the wrist is steady, not spinning.
+        private const float WristMaxStepDeg = 15f;     // rate-limit: cap the per-frame palm step so a depth-spike
+                                                       // (~150 deg) can't snap the wrist. Rate-limited, never held.
         private Quaternion smoothedLeftWrist = Quaternion.identity;
         private Quaternion smoothedRightWrist = Quaternion.identity;
         private bool hasLeftWrist;
@@ -295,6 +370,18 @@ namespace VirtualMirror.Tracking.OakD {
         // per-finger curl from the bend angle at each finger's middle joint (angle is invariant to the
         // converter's axis flips, so raw points are used), and a palm orientation run through the shared
         // PoseSpaceConverter for axis/mirror parity with the body (applied delta-from-neutral downstream).
+        // Damp the palm quaternion: slerp toward the new value by WristSmoothing, but cap the per-frame step
+        // at WristMaxStepDeg so a depth-spike (palm jumping ~150 deg between frames) can't snap the wrist.
+        // Rate-limited rather than held, so it can never freeze on a persistent spike (ADR-018 lesson).
+        private static Quaternion SmoothWristQuat(Quaternion smoothed, Quaternion target) {
+            float angle = Quaternion.Angle(smoothed, target);
+            float t = WristSmoothing;
+            if (angle > 1e-3f) {
+                t = Mathf.Min(t, WristMaxStepDeg / angle);
+            }
+            return Quaternion.Slerp(smoothed, target, t);
+        }
+
         private void ParseHands(JObject root, double timestampSeconds) {
             Vector3[] left = ReadHand(root["lh"] as JArray);
             Vector3[] right = ReadHand(root["rh"] as JArray);
@@ -336,13 +423,13 @@ namespace VirtualMirror.Tracking.OakD {
             // stays responsive without spinning; downstream it is applied delta-from-neutral and blended by
             // the live-tunable wristRotationWeight (set the slider/field to 0 to disable). Best ~2 m framing.
             if (lTracked) {
-                smoothedLeftWrist = hasLeftWrist ? Quaternion.Slerp(smoothedLeftWrist, lWrist, WristSmoothing) : lWrist;
+                smoothedLeftWrist = hasLeftWrist ? SmoothWristQuat(smoothedLeftWrist, lWrist) : lWrist;
                 hasLeftWrist = true;
             } else {
                 hasLeftWrist = false;
             }
             if (rTracked) {
-                smoothedRightWrist = hasRightWrist ? Quaternion.Slerp(smoothedRightWrist, rWrist, WristSmoothing) : rWrist;
+                smoothedRightWrist = hasRightWrist ? SmoothWristQuat(smoothedRightWrist, rWrist) : rWrist;
                 hasRightWrist = true;
             } else {
                 hasRightWrist = false;

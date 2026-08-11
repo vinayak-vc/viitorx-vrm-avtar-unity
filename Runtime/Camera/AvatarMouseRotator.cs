@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace VirtualMirror.Camera {
     /// <summary>
@@ -14,9 +14,11 @@ namespace VirtualMirror.Camera {
 
         public void SetTarget(Transform avatarRoot) {
             targetAvatarRoot = avatarRoot;
+            this.enabled = false;
         }
 
         private void Update() {
+            return;
             if (targetAvatarRoot == null) {
                 return;
             }
