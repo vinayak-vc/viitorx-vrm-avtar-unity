@@ -125,6 +125,20 @@ namespace VirtualMirror.Retargeting {
         private bool hasRightPalmNeutral;
         private float wristWeight = 0.7f;
 
+        // P0-1 (audit §F-01): per-limb confidence gate. Each limb accepts a fresh solve only when its driving
+        // joints are confident enough; otherwise it HOLDS its last valid rotation (never zero → no collapse).
+        // The driving joints follow Kalidokit's left/right cross-map (KalidokitArmSolver/PoseSolver): the LEFT
+        // bones are solved from the RIGHT-side landmarks and vice-versa, so the gate reads those indices.
+        private readonly LimbGate leftArmGate = new LimbGate();
+        private readonly LimbGate rightArmGate = new LimbGate();
+        private readonly LimbGate leftLegGate = new LimbGate();
+        private readonly LimbGate rightLegGate = new LimbGate();
+        private readonly float[] conf = new float[PoseFrame.LandmarkCount];
+        private float limbConfidenceThreshold = 0.3f;   // centralized, live-tunable from AppBootstrap
+        private ILogService limbLogService;              // optional; transitions + aggregates only (not per-frame)
+        private long appliedFrameCounter;
+        private const int AggregateLogEvery = 300;       // ~10-15 s: periodic held/reacquire aggregate
+
         public bool IsBound {
             get {
                 return bound;
@@ -177,6 +191,10 @@ namespace VirtualMirror.Retargeting {
             rawRightHand = rawAnimator != null ? rawAnimator.GetBoneTransform(HumanBodyBones.RightHand) : null;
             hasLeftPalmNeutral = false;
             hasRightPalmNeutral = false;
+            leftArmGate.Reset();      // P0-1: fresh hold state for the new rig (no stale held pose)
+            rightArmGate.Reset();
+            leftLegGate.Reset();
+            rightLegGate.Reset();
             BindFingers();
             bound = hips != null || leftUpperArm != null || rightUpperArm != null;
         }
@@ -217,8 +235,10 @@ namespace VirtualMirror.Retargeting {
             float mx = mirrorX ? -1f : 1f;
             int i = 0;
             while (i < PoseFrame.LandmarkCount) {
-                Vector3 p = frame.GetLandmark((JointId)i).Position;
+                PoseLandmark lmk = frame.GetLandmark((JointId)i);
+                Vector3 p = lmk.Position;
                 landmarks[i] = new Vector3(p.x * mx, -p.y, p.z);
+                conf[i] = lmk.Confidence;   // P0-1: carry per-joint confidence alongside the position
                 i = i + 1;
             }
             if (mirrorX) {
@@ -229,6 +249,10 @@ namespace VirtualMirror.Retargeting {
                     Vector3 tmp = landmarks[a];
                     landmarks[a] = landmarks[b];
                     landmarks[b] = tmp;
+                    // Swap confidence identically so conf[] stays aligned with the landmarks the solver used.
+                    float ctmp = conf[a];
+                    conf[a] = conf[b];
+                    conf[b] = ctmp;
                     pi = pi + 2;
                 }
             }
@@ -293,10 +317,12 @@ namespace VirtualMirror.Retargeting {
             if (chest != null) {
                 ApplyBone(chest, new Vector3(bend * 0.5f, spineYaw * ChestYawDamp, spineRoll * ChestYawDamp));
             }
-            ApplyBone(leftUpperArm, pose.UpperArmLeft);
-            ApplyBone(leftLowerArm, pose.LowerArmLeft);
-            ApplyBone(rightUpperArm, pose.UpperArmRight);
-            ApplyBone(rightLowerArm, pose.LowerArmRight);
+            // P0-1: confidence-gated arms. Kalidokit cross-maps sides — pose.*Left is solved from landmarks
+            // 12/14/16 (right shoulder/elbow/wrist), pose.*Right from 11/13/15 — so gate on those.
+            ApplyLimb(leftArmGate, "leftArm", Min3(conf[12], conf[14], conf[16]),
+                      leftUpperArm, pose.UpperArmLeft, leftLowerArm, pose.LowerArmLeft);
+            ApplyLimb(rightArmGate, "rightArm", Min3(conf[11], conf[13], conf[15]),
+                      rightUpperArm, pose.UpperArmRight, rightLowerArm, pose.LowerArmRight);
             // Hands: Kalidokit derives the Hand rotation from the body-pose hand points (wrist + pinky/index
             // MCPs — indices 15/17/19 for the right, 16/18/20 for the left). On the OAK whole-body stream
             // those hand points (17-22) are often ALL ZERO (not provided), so FindRotation(wrist, origin)
@@ -308,14 +334,54 @@ namespace VirtualMirror.Retargeting {
             ApplyBone(leftHand, leftHandValid ? pose.HandLeft : Vector3.zero);
             ApplyBone(rightHand, rightHandValid ? pose.HandRight : Vector3.zero);
             if (driveLegs) {
-                ApplyBone(leftUpperLeg, pose.UpperLegLeft);
-                ApplyBone(leftLowerLeg, pose.LowerLegLeft);
-                ApplyBone(rightUpperLeg, pose.UpperLegRight);
-                ApplyBone(rightLowerLeg, pose.LowerLegRight);
+                // P0-1: confidence-gated legs (same cross-map: pose.*Left from 24/26/28, pose.*Right from
+                // 23/25/27). Occluded lower body arrives as conf 0 → the leg HOLDS instead of folding.
+                ApplyLimb(leftLegGate, "leftLeg", Min3(conf[24], conf[26], conf[28]),
+                          leftUpperLeg, pose.UpperLegLeft, leftLowerLeg, pose.LowerLegLeft);
+                ApplyLimb(rightLegGate, "rightLeg", Min3(conf[23], conf[25], conf[27]),
+                          rightUpperLeg, pose.UpperLegRight, rightLowerLeg, pose.LowerLegRight);
             }
             // Hips rotation only (position handled elsewhere); damped yaw (above) + roll gated by torsoRoll,
-            // with Kalidokit's Hips 0.7 dampener. Pitch is 0 (Kalidokit sets hips.x = 0).
+            // with Kalidokit's Hips 0.7 dampener. Pitch is 0 (Kalidokit sets hips.x = 0). Torso is NOT gated
+            // (the audit found it already stable; P0 must not degrade it).
             ApplyBone(hips, new Vector3(0f, hipsYaw * HipsYawDamp, hipsRoll * HipsYawDamp));
+
+            appliedFrameCounter = appliedFrameCounter + 1;
+            if (limbLogService != null && appliedFrameCounter % AggregateLogEvery == 0) {
+                limbLogService.Log(LogLevel.Info,
+                    "[P0-1] aggregate frames=" + appliedFrameCounter
+                    + " leftArm(held=" + leftArmGate.HeldFrames + ",holds=" + leftArmGate.HoldEvents + ",reacq=" + leftArmGate.ReacquireEvents + ")"
+                    + " rightArm(held=" + rightArmGate.HeldFrames + ",holds=" + rightArmGate.HoldEvents + ",reacq=" + rightArmGate.ReacquireEvents + ")"
+                    + " leftLeg(held=" + leftLegGate.HeldFrames + ",holds=" + leftLegGate.HoldEvents + ",reacq=" + leftLegGate.ReacquireEvents + ")"
+                    + " rightLeg(held=" + rightLegGate.HeldFrames + ",holds=" + rightLegGate.HoldEvents + ",reacq=" + rightLegGate.ReacquireEvents + ")");
+            }
+        }
+
+        // P0-1: apply a limb's two bones through its confidence gate. HIGH conf → fresh solve; LOW/invalid →
+        // hold the last valid rotation (never zero). ApplyBone's existing slerp makes re-acquire smooth (no
+        // snap). Transitions (VALID↔HELD) are logged sparsely; healthy frames are silent.
+        private void ApplyLimb(LimbGate gate, string name, float limbConf,
+                               Transform upperBone, Vector3 upperEuler, Transform lowerBone, Vector3 lowerEuler) {
+            Vector3 targetUpper;
+            Vector3 targetLower;
+            bool transitioned;
+            if (gate.Resolve(limbConf, limbConfidenceThreshold, upperEuler, lowerEuler,
+                             out targetUpper, out targetLower, out transitioned)) {
+                ApplyBone(upperBone, targetUpper);
+                ApplyBone(lowerBone, targetLower);
+            }
+            if (transitioned && limbLogService != null) {
+                bool held = gate.CurrentState == LimbGate.State.Held;
+                limbLogService.Log(LogLevel.Info,
+                    "[P0-1] limb=" + name + " conf=" + limbConf.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                    + " thr=" + limbConfidenceThreshold.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                    + " state=" + gate.CurrentState + " action=" + (held ? "HOLD" : "REACQUIRE")
+                    + " heldFrames=" + gate.HeldFrames + " confFailures=" + gate.ConfidenceFailures);
+            }
+        }
+
+        private static float Min3(float a, float b, float c) {
+            return Mathf.Min(a, Mathf.Min(b, c));
         }
 
         // Torso-yaw conditioner (ADR-027): rate-limit (rejects the +/-180 ambiguity flips while still
@@ -353,6 +419,19 @@ namespace VirtualMirror.Retargeting {
 
         public void SetWristWeight(float weight) {
             wristWeight = Mathf.Clamp01(weight);
+        }
+
+        /// <summary>P0-1: centralized limb-confidence threshold (live-tunable). A limb whose weakest driving
+        /// joint's confidence is below this holds its last valid rotation instead of applying a fresh (possibly
+        /// origin-collapsed) solve.</summary>
+        public void SetLimbConfidence(float threshold) {
+            limbConfidenceThreshold = Mathf.Clamp01(threshold);
+        }
+
+        /// <summary>Optional diagnostics sink for P0-1. Logs only limb VALID↔HELD transitions + periodic
+        /// aggregates — never per-frame for healthy joints.</summary>
+        public void SetLogger(ILogService log) {
+            limbLogService = log;
         }
 
         public void SetSpineBend(float scale) {

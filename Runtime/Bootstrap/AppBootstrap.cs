@@ -70,6 +70,10 @@ namespace VirtualMirror.App {
         [SerializeField] private Vector3 kalidokitFingerCurlAxis = new Vector3(0f, 0f, -1f);
         [Tooltip("Finger curl weight (0 disables fingers).")]
         [SerializeField] private float kalidokitFingerWeight = 1f;
+        [Tooltip("P0-1: a limb (arm/leg) accepts a fresh Kalidokit solve only when its weakest driving joint's " +
+                 "confidence is at least this; below it, the limb HOLDS its last valid rotation instead of " +
+                 "collapsing toward the origin on an invalid/occluded joint. 0 disables the gate.")]
+        [SerializeField] private float limbConfidenceThreshold = 0.3f;
 
         [Header("Pose Mapping")]
         [SerializeField] private bool poseFlipX = true;
@@ -328,6 +332,7 @@ namespace VirtualMirror.App {
                         kalidokitControlRig.SetSpineBend(kalidokitSpineBendScale);
                         kalidokitControlRig.SetSpineBendDynamics(kalidokitSpineBendBaselineTau);
                         kalidokitControlRig.SetTorsoYawScale(kalidokitTorsoYawScale);
+                        kalidokitControlRig.SetLimbConfidence(limbConfidenceThreshold); // P0-1 live-tunable gate
                         kalidokitControlRig.Apply(filtered);
                     }
                 } else {
@@ -613,6 +618,7 @@ namespace VirtualMirror.App {
             jointFilter = new JointFilterPipeline(filterMinCutoff, filterBeta, filterDerivativeCutoff);
             retargeter = new HumanoidPoseRetargeter();
             kalidokitControlRig = new KalidokitControlRigDriver(); // ADR-022: whole-body via normalized control rig
+            kalidokitControlRig.SetLogger(logService); // P0-1: sparse limb hold/reacquire diagnostics
             if (useIkDriver) {
                 EnsureIkSolver();
             }
