@@ -52,6 +52,47 @@ namespace VirtualMirror.Retargeting {
         // from noisy shoulder tilt. Scales the roll (z) of hips + spine: 0 = upright (no lean, ADR-019
         // StableUp precedent), 1 = full side-lean tracking. Live-tunable.
         private float torsoRoll;
+        // Waist forward-bend (Milestone-2, ADR-025) + robustness (ADR-026): the Kalidokit port zeroes spine
+        // pitch, so add a forward bend derived from the measured trunk depth (mid-hip -> mid-shoulder tilt).
+        // The raw trunk pitch carries a SLOW, DISTANCE-DEPENDENT systematic offset (RTMW3D measures the upper
+        // body farther; the offset drifts as the user walks: upright reads ~+5.5 deg at 2 m, ~0 at 3 m) plus
+        // per-frame noise (std ~6 deg) and occasional 35 deg spikes (pipeline-log measured, 2026-08-11). A
+        // single fixed neutral captured once (the old approach) could not track that drift, so the avatar
+        // leaned at rest and the real bend drowned in noise. Instead: subtract a SLOW ADAPTIVE baseline
+        // (high-pass — removes the drifting offset but KEEPS the faster intentional bend), then rate-limit
+        // (spike reject) and lightly low-pass the result. All live-tunable; C re-seeds the baseline.
+        private float spineBendScale = 1f;
+        private float spineBaseline;                 // slow EMA of raw trunk pitch = the adaptive neutral (rad)
+        private bool hasSpineBaseline;
+        private readonly List<float> spineWarmup = new List<float>();
+        private const int SpineWarmupFrames = 45;    // ~2 s @ ~21 fps: seed baseline from the median first
+        private float spineBendBaselineTau = 8f;      // s; larger holds a sustained bend longer + corrects drift slower (huge ~= fixed neutral)
+        private float spineBendSmoothTau = 0.12f;     // s; output low-pass that kills residual pitch jitter
+        private float spineBendMaxRateDeg = 250f;     // deg/s; rate-limit that rejects the 35 deg/frame spikes
+        private float spineBendRateLimited;           // rate-limited bend (rad), pre-smoothing
+        private float spineBendSmoothed;              // final applied bend (rad)
+
+        // Torso YAW damping for stable 360-turn (ADR-027). Kalidokit derives torso facing from the DEPTH
+        // separation of the shoulder/hip line (2-point rollPitchYaw); that estimate is hypersensitive to OAK
+        // depth noise at range (pipeline-log measured: rest yaw ~-10 deg, excursions to -119 deg, and +/-180
+        // deg AMBIGUITY FLIPS from the calcHips jump-fix branches). Un-flattening the trunk (ADR-025, for
+        // turn+bend) fed that noise straight in -> the chest over-twists and DRAGS the arms (the "wrong pose"
+        // regression). Fix: (1) RATE-LIMIT the yaw (a spurious +/-180 flip bounces back before the slew
+        // follows it = rejected; a genuine gradual turn is followed), (2) light low-pass, (3) a soft
+        // DEAD-ZONE that keeps small/noisy yaw at frontal. Applied to hips + spine yaw; live-scaled by
+        // torsoYawScale (0 = frontal-lock fallback, 1 = full damped turn). Kalidokit's per-bone dampeners
+        // (Hips 0.7, Spine 0.45, Chest 0.25) are also restored (our path had used 1.0 + a 0.5/0.5 split ->
+        // ~1.4x over-twist). See ADR-027.
+        private const float HipsYawDamp = 0.7f;       // Kalidokit rigRotation dampeners (reference demo values)
+        private const float SpineYawDamp = 0.45f;
+        private const float ChestYawDamp = 0.25f;
+        private float torsoYawScale = 1f;             // 0 = frontal-lock, 1 = full (live-tunable)
+        private float yawMaxRateDeg = 140f;           // deg/s; below a human turn (~180 deg/s) so flips are rejected but real turns follow
+        private float yawSmoothTau = 0.15f;           // s; output low-pass
+        private float yawDeadzoneLoDeg = 8f;          // deg; |yaw| below this -> frontal (kills rest noise)
+        private float yawDeadzoneHiDeg = 22f;         // deg; full turn above this (soft knee between)
+        private float hipsYawRate = float.NaN, hipsYawSmooth;   // NaN = seed on first frame (self-seeding per signal)
+        private float spineYawRate = float.NaN, spineYawSmooth;
 
         // JointId left<->right pairs for a true reflection (negate X AND swap sides — negate-X alone crosses
         // the limbs, ADR-018). Flattened pairs.
@@ -194,15 +235,63 @@ namespace VirtualMirror.Retargeting {
 
             KalidokitFullPose pose = KalidokitPoseSolver.Solve(landmarks);
 
-            // Torso: scale the roll (z) by torsoRoll (0 = upright), and DISTRIBUTE the spine rotation across
-            // Spine + Chest instead of applying the full euler to BOTH (that doubled the torso rotation →
-            // the constant lean). Split 50/50 when a Chest bone exists, else all on Spine.
-            Vector3 spineE = pose.Spine;
-            spineE.z *= torsoRoll;
+            float dt = Time.deltaTime;
+            if (dt <= 0f) {
+                dt = 0.02f;
+            }
+
+            // Waist FORWARD-BEND (Milestone-2, ADR-026): Kalidokit's calcHips/spine zeroes spine pitch (a
+            // webcam can't see forward bend), so the avatar never bent at the waist even though the OAK depth
+            // captures it. Derive the trunk's forward tilt from the measured mid-hip -> mid-shoulder vector
+            // (adapted convention: X right, Y DOWN, Z toward camera) with an ADAPTIVE baseline (high-pass),
+            // rate-limit + smooth. Result -> `bend` (a pitch to add to Spine/Chest, split like before).
+            float bend = 0f;
+            if (spineBendScale != 0f) {
+                Vector3 midSh = (landmarks[11] + landmarks[12]) * 0.5f;
+                Vector3 midHip = (landmarks[23] + landmarks[24]) * 0.5f;
+                Vector3 trunk = midSh - midHip;
+                float vert = -trunk.y;                       // torso vertical extent (adapted Y is down)
+                if (vert > 0.05f) {                          // skip degenerate/garbage trunks (e.g. all-zero-Z startup)
+                    float rawPitch = Mathf.Atan2(trunk.z, vert);
+                    if (!hasSpineBaseline) {
+                        // Warm-up: seed the adaptive baseline from the MEDIAN of the first frames (robust to
+                        // the one all-zero-Z startup frame), applying no bend until it is seeded.
+                        spineWarmup.Add(rawPitch);
+                        if (spineWarmup.Count >= SpineWarmupFrames) {
+                            spineBaseline = Median(spineWarmup);
+                            hasSpineBaseline = true;
+                        }
+                    } else {
+                        // High-pass: the baseline slowly follows the drifting systematic offset; the bend is
+                        // the FAST residual above it (so upright -> ~0 at any distance, a real bend shows).
+                        float aSlow = 1f - Mathf.Exp(-dt / Mathf.Max(0.1f, spineBendBaselineTau));
+                        spineBaseline += aSlow * (rawPitch - spineBaseline);
+                        float targetBend = (rawPitch - spineBaseline) * spineBendScale;
+                        // Spike reject: rate-limit the change (a hard 35 deg/frame lurch cannot get through).
+                        float maxStep = Mathf.Deg2Rad * spineBendMaxRateDeg * dt;
+                        spineBendRateLimited += Mathf.Clamp(targetBend - spineBendRateLimited, -maxStep, maxStep);
+                        // Light low-pass to kill the residual per-frame pitch jitter.
+                        float aFast = 1f - Mathf.Exp(-dt / Mathf.Max(0.02f, spineBendSmoothTau));
+                        spineBendSmoothed += aFast * (spineBendRateLimited - spineBendSmoothed);
+                        bend = spineBendSmoothed;
+                    }
+                }
+            }
+
+            // Torso YAW (ADR-027): reject the +/-180 ambiguity flips + OAK depth noise, follow real turns.
+            // Applied to hips + spine yaw, scaled by torsoYawScale (0 = frontal-lock). Roll stays gated by
+            // torsoRoll (0 = upright). Bend keeps its own Spine/Chest split (ADR-026).
+            float hipsYaw = DampYaw(pose.Hips.y, ref hipsYawRate, ref hipsYawSmooth, dt) * torsoYawScale;
+            float spineYaw = DampYaw(pose.Spine.y, ref spineYawRate, ref spineYawSmooth, dt) * torsoYawScale;
+            float spineRoll = pose.Spine.z * torsoRoll;
+            float hipsRoll = pose.Hips.z * torsoRoll;
             float spineShare = chest != null ? 0.5f : 1f;
-            ApplyBone(spine, spineE * spineShare);
+
+            // Kalidokit per-bone dampeners on yaw/roll (Hips 0.7, Spine 0.45, Chest 0.25); the waist bend keeps
+            // its intended total (spineShare + 0.5 = 1.0 across Spine+Chest).
+            ApplyBone(spine, new Vector3(bend * spineShare, spineYaw * SpineYawDamp, spineRoll * SpineYawDamp));
             if (chest != null) {
-                ApplyBone(chest, spineE * 0.5f);
+                ApplyBone(chest, new Vector3(bend * 0.5f, spineYaw * ChestYawDamp, spineRoll * ChestYawDamp));
             }
             ApplyBone(leftUpperArm, pose.UpperArmLeft);
             ApplyBone(leftLowerArm, pose.LowerArmLeft);
@@ -224,10 +313,27 @@ namespace VirtualMirror.Retargeting {
                 ApplyBone(rightUpperLeg, pose.UpperLegRight);
                 ApplyBone(rightLowerLeg, pose.LowerLegRight);
             }
-            // Hips rotation only (position handled elsewhere); scale roll by torsoRoll (0 = upright).
-            Vector3 hipsE = pose.Hips;
-            hipsE.z *= torsoRoll;
-            ApplyBone(hips, hipsE);
+            // Hips rotation only (position handled elsewhere); damped yaw (above) + roll gated by torsoRoll,
+            // with Kalidokit's Hips 0.7 dampener. Pitch is 0 (Kalidokit sets hips.x = 0).
+            ApplyBone(hips, new Vector3(0f, hipsYaw * HipsYawDamp, hipsRoll * HipsYawDamp));
+        }
+
+        // Torso-yaw conditioner (ADR-027): rate-limit (rejects the +/-180 ambiguity flips while still
+        // following a genuine gradual turn) -> low-pass -> soft dead-zone (small/noisy yaw snaps to frontal).
+        // Self-seeds per signal (NaN sentinel) so there is no startup slew. Input/output radians.
+        private float DampYaw(float rawRad, ref float rateLimited, ref float smoothed, float dt) {
+            if (float.IsNaN(rateLimited)) {
+                rateLimited = rawRad;
+                smoothed = rawRad;
+            }
+            float maxStep = Mathf.Deg2Rad * yawMaxRateDeg * dt;
+            rateLimited += Mathf.Clamp(rawRad - rateLimited, -maxStep, maxStep);
+            float aFast = 1f - Mathf.Exp(-dt / Mathf.Max(0.02f, yawSmoothTau));
+            smoothed += aFast * (rateLimited - smoothed);
+            float lo = Mathf.Deg2Rad * yawDeadzoneLoDeg;
+            float hi = Mathf.Deg2Rad * yawDeadzoneHiDeg;
+            float gate = Mathf.SmoothStep(0f, 1f, (Mathf.Abs(smoothed) - lo) / Mathf.Max(0.001f, hi - lo));
+            return smoothed * gate;
         }
 
         private void ApplyBone(Transform bone, Vector3 eulerRadians) {
@@ -249,10 +355,49 @@ namespace VirtualMirror.Retargeting {
             wristWeight = Mathf.Clamp01(weight);
         }
 
-        /// <summary>Re-capture each hand's neutral palm on the next tracked frame (bound to the C key).</summary>
+        public void SetSpineBend(float scale) {
+            spineBendScale = scale;
+        }
+
+        /// <summary>
+        /// Live-tune the waist-bend dynamics (ADR-026). <paramref name="baselineTau"/> (s) trades holding a
+        /// SUSTAINED bend (larger) against correcting the distance-drift/systematic lean faster (smaller);
+        /// a very large value ~= a fixed neutral. Called each frame from AppBootstrap so it is Inspector-live.
+        /// </summary>
+        public void SetSpineBendDynamics(float baselineTau) {
+            spineBendBaselineTau = Mathf.Max(0.1f, baselineTau);
+        }
+
+        /// <summary>Live-tune the damped body-turn amount (ADR-027): 0 = frontal-lock (no yaw), 1 = full
+        /// (Kalidokit-damped) turn. Lower this if a noisy/far setup still swings the torso.</summary>
+        public void SetTorsoYawScale(float scale) {
+            torsoYawScale = Mathf.Clamp01(scale);
+        }
+
+        /// <summary>Re-seed the neutral palm (per hand) + the adaptive spine-bend baseline (C key). Press while
+        /// standing upright so "no bend" maps to the current relaxed posture.</summary>
         public void Recalibrate() {
             hasLeftPalmNeutral = false;
             hasRightPalmNeutral = false;
+            hasSpineBaseline = false;
+            spineWarmup.Clear();
+            spineBendRateLimited = 0f;
+            spineBendSmoothed = 0f;
+            hipsYawRate = float.NaN;      // re-seed the torso-yaw conditioners (ADR-027)
+            spineYawRate = float.NaN;
+            hipsYawSmooth = 0f;
+            spineYawSmooth = 0f;
+        }
+
+        // Median of a small buffer (used to seed the spine-bend baseline robustly against a startup outlier).
+        private static float Median(List<float> values) {
+            if (values == null || values.Count == 0) {
+                return 0f;
+            }
+            List<float> copy = new List<float>(values);
+            copy.Sort();
+            int mid = copy.Count / 2;
+            return (copy.Count % 2 == 1) ? copy[mid] : (copy[mid - 1] + copy[mid]) * 0.5f;
         }
 
         /// <summary>

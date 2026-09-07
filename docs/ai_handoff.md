@@ -1,7 +1,27 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-08-07  
+Last updated: 2026-08-11  
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## 🧭 Retarget regression DIAGNOSED + torso-yaw damped (2026-08-11, ADR-027 + `RETARGET_AUDIT_2026-08-11.md`) — READ THIS FIRST
+
+The user's screen recording showed the **debug skeleton correct but the avatar arms/legs/torso wrong** (twisted waist, wrong facing, arms dragged/asymmetric, "inhuman" fingers). Full diagnosis in [`RETARGET_AUDIT_2026-08-11.md`](RETARGET_AUDIT_2026-08-11.md). **Root cause:** Kalidokit derives torso facing from the shoulder/hip-line DEPTH separation (2-pt `rollPitchYaw`), which is hypersensitive to OAK depth noise at range (measured: rest yaw −10°, excursions −119°, ±180° flips). **ADR-025's un-flatten exposed it** → the chest over-twists and drags the arms (M1 was stable only because the trunk was flattened = frontal-locked). An interim "×π over-rotation" claim was **WRONG** — Kalidokit's `rigHips` ×π too; the port is faithful there.
+
+**User chose "keep 360° turning but damp it."** Implemented (ADR-027): a **torso-yaw conditioner** (rate-limit 140°/s rejects the ±180° flips + follows real turns; soft dead-zone 8–22° → frontal when small; low-pass) on hips+spine yaw, live-scaled by **`kalidokitTorsoYawScale`** (0 = frontal-lock fallback, 1 = full); plus **restored Kalidokit per-bone dampeners** (Hips 0.7 / Spine 0.45 / Chest 0.25, was 1.0 + 0.5/0.5). Verified offline on the real logs: rest yaw −10°→−1°, flips 2→0, jitter −39%. Compile 0/0.
+
+**FRONTAL-LOCK is now the DEFAULT (2026-08-11, ADR-027 amendment).** The user's post-fix capture confirmed the conditioner worked (hips-yaw max 90°→2.27°, STABLE; arms/bend/position track at ~1.5–1.8 m; both-arms-up now symmetric). The residual "hands go backwards" = the avatar turning to face away, which correlates with **distance** (median torso-yaw 22° at <1.8 m vs 64° at 2.1–2.4 m; raw skeleton folds at 2.66 m). User walks to 2.5 m+ in the M2 room → chose **frontal-lock**. `kalidokitTorsoYawScale` default = **0** (applied live). Arms/bend/walk/fingers unaffected. Re-enable turn = raise the knob while **standing <~1.8 m**; the proper walk-around fix is a **distance-gated yaw** (deferred, see ADR-027 amendment). **R4 RESOLVED — NO arm bug (live injection 2026-08-11):** asymmetric-pose injection on the live driver showed both arms raise correctly when both raised and each side responds independently — the arm solver + `flipQuat` are sound (minor ~25% side magnitude asym only). The "one arm up" was the **torso twist dragging the arms** (R1, fixed by ADR-027). **DO NOT touch `kalidokitBodyFlipQuat`.** Still open: fingers (curl axis/sign + noisy source). **Live re-verify (user):** re-run `run_capture.bat`, stand ~2 m; if the torso still swings on a noisy/far setup, lower `kalidokitTorsoYawScale` (0 = frontal-lock).
+
+---
+
+## 🩹 Milestone-2 waist-bend FIXED — adaptive baseline (2026-08-11, ADR-026)
+
+The user's live M2 OAK run reported: **avatar doesn't bend at the waist (skeleton does), still jitters, and leans forward when standing upright.** Diagnosed from that run's OWN pipeline logs (`python-sidecar~/pipeline_logs/`, 5337 frames) — **the bend signal is in the data** (upright p50 ≈ +5.5° / bend p95 ≈ +19° at <2 m), but the ADR-025 spine-bend used a **single fixed neutral captured on the first frame** — which was the 4.24 m all-zero-Z startup garbage → neutral `0°` → a **constant ~5.5° rest lean**, and the neutral **couldn't track the distance drift** (upright reads +5.5° @2 m, −0.6° @3 m) as the user walks. Noise std ~6° + 35°/frame spikes buried the ~14° bend → "no bend".
+
+**Fix (ADR-026):** replaced the fixed neutral with a **slow ADAPTIVE baseline (high-pass, `tau≈8 s`, median-seeded)** + **rate-limit (250°/s)** + **light low-pass** on the derived pitch. Upright → ~0 at any distance; real bends pass; jitter down. **Verified offline on the user's actual logs:** jitter 0.56→0.36 °/frame (−36 %), per-distance rest median ≈0 (was +5.5° @2 m), bends ±11–12° preserved. Compile 0/0. **Also:** `run_capture.bat` was forcing `--min-cutoff 0.7`, overriding ADR-025's 0.5 still-jitter default → restored to 0.5.
+
+**NEEDS THE USER'S LIVE RE-VERIFY (OAK):** re-run `run_capture.bat`, **stand ~2 m** (last capture was median 2.65 m, 58 % > 2.5 m, ~21 % depth coverage — too far; that alone hurt the bend/turn + jitter). Confirm: upright avatar is straight (no rest lean), waist bends when you bend, less jitter. Live knobs: **`kalidokitSpineBendScale`** (raise for a more visible bend; flip sign if it bends backward), **`kalidokitSpineBendBaselineTau`** (raise to hold a sustained bend longer). Press **C** standing upright to re-seed. Then send the new `compare_logs.py` output + a short clip.
 
 ---
 

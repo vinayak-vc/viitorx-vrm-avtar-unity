@@ -58,6 +58,13 @@ namespace VirtualMirror.App {
         [SerializeField] private bool kalidokitBodyMirror = false;
         [Tooltip("Torso side-lean amount (0 = upright; 1 = full side-lean tracking).")]
         [SerializeField] private float kalidokitBodyTorsoRoll = 0f;
+        [Tooltip("Waist forward-bend from OAK depth (0 = off/upright, 1 = full; raise for a more pronounced bend). Flip the sign if it bends the wrong way. Press C standing upright to re-seed. Live-tunable.")]
+        [SerializeField] private float kalidokitSpineBendScale = 1f;
+        [Tooltip("Waist-bend baseline time-constant (s). Larger holds a sustained bend longer but corrects the distance/systematic lean slower; very large ~= a fixed neutral (ADR-026). Live-tunable.")]
+        [SerializeField] private float kalidokitSpineBendBaselineTau = 8f;
+        [Tooltip("Body-turn amount (ADR-027): 0 = frontal-lock (default — a mirror is frontal, and turning is unreliable past ~2 m where depth degrades → false 'facing away'). Raise toward 1 ONLY when standing close (<~1.8 m) if you want body-turn. Live-tunable.")]
+        [Range(0f, 1f)]
+        [SerializeField] private float kalidokitTorsoYawScale = 0f;
         [SerializeField] private bool kalidokitBodyLegs = true;
         [Tooltip("Normalized-bone flexion axis for the curl-driven fingers.")]
         [SerializeField] private Vector3 kalidokitFingerCurlAxis = new Vector3(0f, 0f, -1f);
@@ -318,6 +325,9 @@ namespace VirtualMirror.App {
                     }
                     if (!IsPoseStale(filtered)) {
                         kalidokitControlRig.SetTuning(kalidokitBodyEulerSigns, kalidokitBodyFlipQuat, kalidokitBodyLerp, kalidokitBodyLegs, kalidokitBodyMirror, kalidokitBodyTorsoRoll);
+                        kalidokitControlRig.SetSpineBend(kalidokitSpineBendScale);
+                        kalidokitControlRig.SetSpineBendDynamics(kalidokitSpineBendBaselineTau);
+                        kalidokitControlRig.SetTorsoYawScale(kalidokitTorsoYawScale);
                         kalidokitControlRig.Apply(filtered);
                     }
                 } else {
@@ -337,21 +347,12 @@ namespace VirtualMirror.App {
                         if (ikActive) {
                             ikSolver.Apply(filtered, retargetMinConfidence);
                         }
-                        // World translation from the measured hip anchor (unfiltered `frame` carries it; the joint
-                        // filter only smooths landmarks). Neutral-relative + scaled + exponentially smoothed so the
-                        // avatar walks/jumps with the user without inheriting depth jitter.
-                        if (trackPosition && avatarRootTransform != null && frame.HasRootPosition) {
-                            if (!hasPositionNeutral) {
-                                positionNeutralHip = frame.RootPositionMetres;
-                                hasPositionNeutral = true;
-                            }
-                            Vector3 targetOffset = (frame.RootPositionMetres - positionNeutralHip) * positionScale;
-                            float lerpT = 1f - Mathf.Exp(-positionSmoothing * deltaSeconds);
-                            positionCurrentOffset = Vector3.Lerp(positionCurrentOffset, targetOffset, lerpT);
-                            avatarRootTransform.position = avatarRootInitialPosition + positionCurrentOffset;
-                        }
                     }
                 }
+                // Physical movement (walk/jump): drive the avatar ROOT from the OAK measured hip xyz on BOTH
+                // retarget paths. This used to live only in the FK else-branch, so the Kalidokit body path
+                // never translated (Milestone-2 fix). Runs whenever a frame carries a measured root position.
+                ApplyRootPosition(frame, deltaSeconds);
             }
 
             if (useFaceTracking && faceProvider != null && expressionRetargeter != null) {
@@ -444,6 +445,23 @@ namespace VirtualMirror.App {
                 debugSkeleton.gameObject.SetActive(true);
             }
             debugSkeleton.Render(frame);
+        }
+
+        // Physical movement: translate the avatar root by the OAK-measured mid-hip position (neutral-relative,
+        // scaled, exponentially smoothed) so the avatar walks/jumps with the user. Shared by both retarget
+        // paths (Milestone-2). No-op when the frame carries no measured root (RGB paths) or trackPosition off.
+        private void ApplyRootPosition(PoseFrame frame, float deltaSeconds) {
+            if (!trackPosition || avatarRootTransform == null || frame == null || !frame.HasRootPosition) {
+                return;
+            }
+            if (!hasPositionNeutral) {
+                positionNeutralHip = frame.RootPositionMetres;
+                hasPositionNeutral = true;
+            }
+            Vector3 targetOffset = (frame.RootPositionMetres - positionNeutralHip) * positionScale;
+            float lerpT = 1f - Mathf.Exp(-positionSmoothing * deltaSeconds);
+            positionCurrentOffset = Vector3.Lerp(positionCurrentOffset, targetOffset, lerpT);
+            avatarRootTransform.position = avatarRootInitialPosition + positionCurrentOffset;
         }
 
         // Pipeline logging (diagnostics): one model_log.jsonl line per applied Kalidokit-body frame — seq +
