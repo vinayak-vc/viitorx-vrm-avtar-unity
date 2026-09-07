@@ -49,6 +49,8 @@ Read in order when onboarding. Update the matching document when a subsystem cha
 | 23 | [Coding Standards](23_CodingStandards.md) | C# / Unity rules (see also AGENTS.md) |
 | 24 | [Risks](24_Risks.md) | Technical and product risks |
 | 25 | [Pose Pipeline](25_PosePipeline.md) | Coordinates, filter, confidence, calib |
+| 26 | [OAK-D Depth Phase 2](26_OakDDepthPhase2.md) | Measured per-keypoint depth |
+| 27 | [Character Rig Spec](27_CharacterRigSpec.md) | Canonical VRM 1.0 rig contract for artists |
 
 ---
 

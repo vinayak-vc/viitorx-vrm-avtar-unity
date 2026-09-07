@@ -44,6 +44,27 @@ fingers. See ADR-022 + `ai_handoff.md`.
 
 ---
 
+## Character rig template + spec + validator (2026-08-10) — DELIVERED
+
+Reverse-engineered the VRM 1.0 rig contract from the pipeline so artists build avatars that track with zero
+per-avatar tuning. See [`ai_handoff.md`](ai_handoff.md) "🎭 Canonical VRM 1.0 rig template".
+
+- [x] **Spec doc** [`docs/27_CharacterRigSpec.md`](27_CharacterRigSpec.md) — VRM 1.0 + T-pose + facing rules,
+  bone tables (17 core/limb + 30 fingers + 7 optional), required expressions, Blender workflow, validation,
+  limits. Indexed in `README.md` (rows 26+27).
+- [x] **Blender generator** `tools/blender/build_rig.py` — headless; builds 54-bone T-pose skeleton +
+  placeholder skinned mesh + expression shape-key slots + humanoid mapping + expression binds → exports
+  VRM 1.0 to `tools/blender/output/`. Installed VRM Add-on for Blender v4.5.0 (MIT) headless into Blender 4.5
+  (release CDN TLS-blocked → installed from `git clone` of the source).
+- [x] **Import validator** `Editor/VrmRigValidator.cs` (+ `VirtualMirror.Editor.asmdef`) — Menu
+  "Virtual Mirror → Validate VRM Rig"; parses the `.vrm` glb JSON (VRMC_vrm) → PASS/FAIL + missing
+  bones/expressions. ⏳ needs a Unity compile-check (MCP unbound this session).
+- [x] **Verified** generated VRM by glb-JSON parse: spec 1.0, 54 bones (0 missing, all 30 fingers, all
+  optionals), 6 required expressions bound. Copied placeholder to `StreamingAssets/Avatars/VirtualMirrorRigTemplate.vrm`.
+- [ ] **In-app load-test** — pending Unity MCP (restart to bind) OR manual Play → Tab → pick the template.
+
+---
+
 ## Now (M0)
 
 - [x] Create Runtime/Editor/Tests folder scaffold per `02_ProjectStructure.md`  

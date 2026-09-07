@@ -1,6 +1,6 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-08-07  
+Last updated: 2026-08-10  
 Purpose: next agent can continue without re-deriving context.
 
 ---
@@ -24,6 +24,51 @@ Pipeline logging (ADR-023) + two live OAK captures settled the long wrist saga: 
 **Sidecar limb-depth smoothing added (2026-08-10, ADR-020 amendment):** the residual jitter is **depth (z) on the limbs** (wrist z jitters ~5× its x,y — invisible in the 2D preview, hence "stable in Python, unstable in Unity"). `smoothing.py` now applies a heavier One-Euro to limb depth (`--depth-min-cutoff 0.3 --depth-beta 0.1`, arms+hands only) + **hold-on-dropout** (`--max-hold-frames 8`, uses the last-good limb value instead of the noisy zrel fallback that caused the 8-12 m spikes; bounded, no freeze). Unit-tested (0.12→0.006 m/frame z-jitter). **Biggest win is still ~2 m framing** (the 19:00 capture was at hip 3.99 m).
 
 **Open question for the user:** in the 2026-08-10 19:00 capture the avatar rendered **grey/untextured** — confirm whether that's intended (a placeholder/scene-view) or a material/render regression on the VRM to investigate separately.
+
+---
+
+## 🎭 Canonical VRM 1.0 rig template + spec + import validator — DELIVERED (2026-08-10)
+
+Reverse-engineered the **rig contract** from the pipeline (the `KalidokitControlRigDriver`
+`HumanBodyBones` it binds + the `VrmExpressionRetargeter` presets it writes + the T-pose neutral)
+so artists can build avatars in Blender that track with **zero per-avatar tuning**. Three artifacts:
+
+1. **Spec doc** [`docs/27_CharacterRigSpec.md`](27_CharacterRigSpec.md) — hard rules (VRM **1.0** only,
+   rest = **T-pose**, faces **−Y in Blender** → VRM +Z-forward), bone tables (**17 core/limb + 30 fingers
+   + 7 optional**), required expressions (`blinkLeft/Right`, `aa`, `happy`, `angry`, `surprised` + visemes),
+   Blender workflow, export, validation, pipeline limits. Added to `docs/README.md` index (rows 26 + 27).
+2. **Blender generator** [`tools/blender/build_rig.py`](../tools/blender/build_rig.py) — headless
+   (`blender --background --python build_rig.py`). Builds a 54-bone skeleton (T-pose, faces −Y, left=+X) +
+   placeholder skinned block-mesh + 13 expression shape-key slots + humanoid mapping + expression binds,
+   exports **VRM 1.0** to `tools/blender/output/{.vrm,.blend}`. Needs the **VRM Add-on for Blender**
+   (saturday06 **v4.5.0**, MIT) — installed headless into **Blender 4.5** at
+   `C:\Program Files\Blender Foundation\Blender 4.5\blender.exe`. ⚠️ GitHub's release CDN
+   `release-assets.githubusercontent.com` is **TLS-blocked on this network** (release download + `gh release
+   download` both fail; `api.github.com` + `git clone` work) → installed by `git clone --branch v4.5.0`
+   then copying `src/io_scene_vrm` into `%APPDATA%\Blender Foundation\Blender\4.5\scripts\addons\` and
+   `addon_enable(module='io_scene_vrm')`.
+3. **Import validator** [`Editor/VrmRigValidator.cs`](../Editor/VrmRigValidator.cs) (+ new
+   `Editor/VirtualMirror.Editor.asmdef`, refs `Newtonsoft.Json`, Editor-only) — Menu **Virtual Mirror →
+   Validate VRM Rig (Pick File)** / **Validate Selected VRM**. Parses the `.vrm` **glb JSON chunk** (the exact
+   `VRMC_vrm` data UniVRM loads) → PASS/FAIL + the precise missing bones/expressions. No UniVRM/async
+   dependency; also callable as `VrmRigValidator.Validate(path, out report)`. **⏳ NOT Unity-compiled** this
+   session (Unity MCP unbound) — user should let the editor import `Editor/`.
+
+**Generated VRM verified** (authoritative glb-JSON parse): `specVersion=1.0`, **54 human bones** (0 missing
+required, all 30 fingers, all 7 optionals — upperChest/shoulders/toes/eyes), all **6 required expressions
+bound** + visemes. Copied to `StreamingAssets/Avatars/VirtualMirrorRigTemplate.vrm` (a **grey block-man
+placeholder** — for load-testing the rig *contract*, not a finished avatar; the dropdown auto-enumerates it).
+
+**⏳ NOT in-app load-tested** — Unity MCP is **not bound this session** (only Firebase MCP connected; the local
+UnityMCP config needs a Claude Code restart to bind — see memory `unitymcp-cwd-scope`). Load-test path:
+restart Claude Code (or relaunch from the project root) → Play → load the avatar → read control-rig bones
+frame-to-frame (synchronous geometry reads, NOT screenshots — ADR-023). Manual: Play → Tab → pick
+`VirtualMirrorRigTemplate`.
+
+**Format note:** VRM 1.0 **is** a glb container + `VRMC_vrm`/`VRMC_springBone` extensions. A **plain `.glb`
+(no VRM extensions) will NOT load** in the app — no humanoid map, no expressions, no normalized control rig.
+The same armature can glTF-export to `.glb` for other engines, but this pipeline requires the VRM wrapper.
+Export **VRM**, not glb.
 
 ---
 
