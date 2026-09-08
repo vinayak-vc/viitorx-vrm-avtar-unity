@@ -47,6 +47,16 @@ namespace VirtualMirror.Tracking.OakD {
         private Thread receiveThread;
         private volatile bool running;
         private readonly System.Diagnostics.Stopwatch clock = new System.Diagnostics.Stopwatch();
+
+        // P1-3: timestamped pose buffer + interpolation. Replaces latest-wins with temporal
+        // reconstruction at (now - interpolationDelay). Delay 0 => original behaviour, exactly.
+        private readonly PoseBuffer poseBuffer = new PoseBuffer(16);
+        private readonly PoseFrame interpolatedFrame = new PoseFrame();
+        private bool interpolationEnabled;
+        private double interpolationDelaySeconds;
+        private long interpAggregateCounter;
+        private const int InterpLogEvery = 600;   // periodic aggregate only, never per render frame
+        private double lastPacketAgeMs;
         // M9: volatile so the worker's ParseInto writes and the consumer's lock-guarded reference swap of
         // these buffers have consistent cross-thread visibility (no torn read of the in-flight frame).
         private volatile PoseFrame workerFrame;
@@ -202,7 +212,69 @@ namespace VirtualMirror.Tracking.OakD {
             }
         }
 
+        /// <summary>P1-3: enable temporal interpolation and set the presentation delay. A delay of 0
+        /// (or negative) restores the original latest-wins behaviour exactly.</summary>
+        public void SetPoseInterpolation(float delayMilliseconds) {
+            bool enable = delayMilliseconds > 0.01f;
+            lock (gate) {
+                interpolationDelaySeconds = delayMilliseconds / 1000.0;
+                if (enable != interpolationEnabled) {
+                    poseBuffer.Clear();
+                }
+                interpolationEnabled = enable;
+            }
+        }
+
+        /// <summary>P1-3 diagnostics snapshot (depth, seq pair, alpha, packet age ms).</summary>
+        public void GetBufferDiagnostics(out int depth, out long seqA, out long seqB,
+                                         out float alpha, out double packetAgeMs) {
+            lock (gate) {
+                depth = poseBuffer.Depth;
+                seqA = poseBuffer.LastSeqA;
+                seqB = poseBuffer.LastSeqB;
+                alpha = poseBuffer.LastAlpha;
+                packetAgeMs = lastPacketAgeMs;
+            }
+        }
+
         public bool TryGetLatestFrame(out PoseFrame latest) {
+            if (interpolationEnabled) {
+                bool sampled;
+                int dDepth = 0; long dA = -1; long dB = -1; float dAlpha = 0f; double dAge = -1.0;
+                lock (gate) {
+                    double now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+                    double renderTime = now - interpolationDelaySeconds;
+                    sampled = poseBuffer.Sample(renderTime, interpolatedFrame);
+                    if (sampled) {
+                        double newest = poseBuffer.NewestTime();
+                        lastPacketAgeMs = newest > 0.0 ? (now - newest) * 1000.0 : -1.0;
+                        dDepth = poseBuffer.Depth;
+                        dA = poseBuffer.LastSeqA;
+                        dB = poseBuffer.LastSeqB;
+                        dAlpha = poseBuffer.LastAlpha;
+                        dAge = lastPacketAgeMs;
+                    }
+                    hasNewFrame = false;   // the buffer is the source of truth while interpolating
+                }
+                latest = interpolatedFrame;
+                if (sampled) {
+                    interpAggregateCounter = interpAggregateCounter + 1;
+                    if (logService != null && interpAggregateCounter % InterpLogEvery == 0) {
+                        logService.Log(LogLevel.Info,
+                            "[P1-3] poseBufferDepth=" + dDepth
+                            + " interpDelayMs=" + (interpolationDelaySeconds * 1000.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture)
+                            + " sourceSeqA=" + dA + " sourceSeqB=" + dB
+                            + " alpha=" + dAlpha.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                            + " packetAgeMs=" + dAge.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)
+                            + " interp=" + poseBuffer.SamplesInterpolated
+                            + " clampNewest=" + poseBuffer.SamplesClampedNewest
+                            + " dupRej=" + poseBuffer.RejectedDuplicate
+                            + " oooRej=" + poseBuffer.RejectedOutOfOrder);
+                    }
+                }
+                return sampled;
+            }
+
             bool available;
             lock (gate) {
                 if (hasNewFrame) {
@@ -325,6 +397,14 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             ParseHands(root, timestampSeconds);
+            // P1-3: buffer this pose on the RECEIVE clock (Unity's own epoch, so no sender-skew
+            // assumption). Duplicate / out-of-order / backwards-timestamp packets are rejected inside.
+            if (interpolationEnabled && target.IsValid) {
+                double recvEpoch = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+                lock (gate) {
+                    poseBuffer.Push(target, seq, recvEpoch);
+                }
+            }
             if (pipelineLog != null) {
                 WriteRecvLog(target, workerHandFrame, seq, timestampSeconds, sendEpoch);
             }

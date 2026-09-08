@@ -70,6 +70,13 @@ namespace VirtualMirror.App {
         [SerializeField] private Vector3 kalidokitFingerCurlAxis = new Vector3(0f, 0f, -1f);
         [Tooltip("Finger curl weight (0 disables fingers).")]
         [SerializeField] private float kalidokitFingerWeight = 1f;
+        [Tooltip("P1-3: presentation delay (ms) for the timestamped pose buffer. Unity renders the pose " +
+                 "interpolated at (now - this), so render frames between two datagrams show real " +
+                 "in-between motion instead of the same pose re-applied ~11.7x. This is the ONLY " +
+                 "latency P1-3 adds. 0 = disabled (original latest-wins behaviour). Start small: one " +
+                 "packet interval at ~21 fps is ~48 ms, so 35-50 ms usually always has a future sample.")]
+        [SerializeField] private float poseInterpolationDelayMs = 40f;
+
         [Tooltip("P0-1: a limb (arm/leg) accepts a fresh Kalidokit solve only when its weakest driving joint's " +
                  "confidence is at least this; below it, the limb HOLDS its last valid rotation instead of " +
                  "collapsing toward the origin on an invalid/occluded joint. 0 disables the gate.")]
@@ -661,6 +668,7 @@ namespace VirtualMirror.App {
                 if (pipelineLogging) {
                     oakUdp.SetPipelineLog(pipelineLogDir); // recv_log.jsonl — must be set before StartTracking
                 }
+                oakUdp.SetPoseInterpolation(poseInterpolationDelayMs); // P1-3 timestamped pose buffer
                 oakUdp.StartTracking();
                 if (oakUdp.IsRunning) {
                     bodyProvider = oakUdp;

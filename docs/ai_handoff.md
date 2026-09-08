@@ -5,6 +5,71 @@ Purpose: next agent can continue without re-deriving context.
 
 ---
 
+## ⚡ P1-2 frame freshness = PASS (2026-09-08, `P1_2_FRESHNESS_2026-09-08.md`) — CURRENT STATE
+
+**Root cause of the 131 ms camera→host latency, found and fixed.** `DataOutputQueue.get()` returns the
+**OLDEST** packet. With inference (~21 ms) slower than the 30 fps sensor, the host queue sat full at
+`maxSize=4` → **4 × 33.3 = 133 ms** of pure staleness (measured live: 131.4 ms). Nothing was slow; the
+system was working on old frames.
+
+**Fix (host-side only, ~20 lines in `wholebody_udp_sender.py`):** one blocking `get()` for liveness,
+then `tryGetAll()` and keep only the NEWEST; depth chosen by **closest timestamp** to the selected RGB
+frame. Queue size unchanged. Toggle `--latest-frame` (default ON) / `--no-latest-frame`.
+
+| metric (loaded ~18.8 fps) | FIFO | latest-frame |
+|---|---|---|
+| frame age median | 130.95 ms | **30.71 ms** |
+| camera→UDP median | 183.45 ms | **85.44 ms** |
+| RGB/depth sync max | 54.53 ms | **12.09 ms** |
+| fps | 18.8 | 18.7 |
+
+- **RGB/depth pairing got BETTER, not riskier** — the old ordinal pairing was mis-associating depth by
+  **54.56 ms** (~1.6 frames). That is audit **F-09**, quantified for the first time.
+- Compute unchanged (43.29 vs 43.88 ms) → the win was queue wait, not processing.
+- 180 s soak: **no accumulation** (median 31.11 → 31.52 ms).
+- New permanent diagnostics in `sender_log.jsonl`: `frameAgeMs`, `queueDepth`, `staleDropped`,
+  `rgbDepthSyncMs`. Console prints `age=NNms stale=N`.
+- `--inject-load-ms` is **TEST-ONLY** (reproduces the subject-present condition without a human);
+  never set it in production.
+
+**Still needs a human subject:** real-motion A/B and the per-joint jitter regression (Phases 5–6).
+Run `run_p12_ab.bat`. **Methodological warning:** latest-frame skips frames, so *per-frame* displacement
+rises without any jitter increase — that comparison must be **velocity-normalised**, not per-frame.
+
+**Do NOT implement the Unity pose buffer yet** — P1-2 only guarantees Unity now receives fresh data.
+
+---
+
+## 🧩 P1-1 per-joint temporal tracking = PASS (2026-09-08, `P1_1_TRACKER_2026-09-08.md`) — CURRENT STATE
+
+Solves the verified P0 finding **CONFIDENT-BUT-WRONG LANDMARKS** (a hidden wrist held a wrong position
+for 840 frames at conf ~0.63). New `python-sidecar~/joint_tracker.py`: ONE reusable `JointTracker` per
+joint (TRACKED/WEAK/PREDICTED/LOST) + `SkeletonTracker`. Sits AFTER the P0 smoother, BEFORE PoseFrame.
+**P0 LimbGate is untouched and remains the final safety layer** — a LOST joint has its emit confidence
+zeroed, which looks exactly like a real occlusion to Unity. No Unity C# changed for P1-1.
+
+- **37/37 unit assertions** (`test_joint_tracker.py`), **6/6 adversarial cases detected**
+  (`evaluate_p1.py`), incl. the frozen-wrist case → 0.0000 m residual error.
+- **Latency 0.085 ms** median / 0.121 ms p99 for 12 joints — 8× under the 1 ms budget.
+- Legitimate dancing: **median/p95 unchanged**, peak displacement −18…−27% on 4 joints, worst
+  regression +6.1% (5.5 mm). PREDICTED 0.3%, LOST 0.0% → no false rejection.
+- Toggle: `--tracker` (default ON) / `--no-tracker` for A/B.
+
+**The check that actually matters is FROZEN detection** — a stuck joint has near-zero residual, speed
+and acceleration, so no conventional plausibility test can see it. That was the real observed failure.
+
+**Two bugs the tests caught (both would have shipped silently):** reacquisition was *teleporting* via
+the coherence path (aggregate stats looked fine); and the neighbour/segment check was acting as a veto,
+rejecting 4.6–13.5% of legitimate motion. Both fixed and re-measured.
+
+**Known weak spot:** a sustained high-confidence teleport longer than the 6-frame prediction window ends
+in LOST with slow recovery during fast motion → needs **P1-3/P1-5**.
+
+**Next: P1-2 (velocity estimation refinement) — not started.** Do not add interpolation, IK, foot lock
+or a Unity pose buffer yet.
+
+---
+
 ## 🚦 P0 acceptance = CONDITIONAL PASS — 14 criteria still NOT TESTED (2026-09-07, `P0_ACCEPTANCE_2026-09-07.md`) — READ THIS FIRST
 
 P0-1 (`LimbGate` confidence hold) and P0-2 (0.35 m limb cap + legs into the hold set) are implemented.
