@@ -168,18 +168,19 @@ namespace VirtualMirror.Tests {
             // The sidecar emits a dropped joint as [0,0,0,0]. Lerping valid -> zero would place the
             // joint half-way to the ORIGIN — the exact F-01 limb-collapse bug P0-1 exists to prevent.
             PoseBuffer b = new PoseBuffer(8);
-            PoseFrame a = Make(1f, 100.0);
+            PoseFrame a = Make(0f, 100.0);      // endpoints must DIFFER or "interpolates" proves nothing
             PoseFrame c = Make(1f, 100.1);
-            c.SetLandmark(Wrist, new PoseLandmark(Vector3.zero, 0f));   // wrist dropped
+            c.SetLandmark(Wrist, new PoseLandmark(Vector3.zero, 0f));   // wrist dropped by the sidecar
             b.Push(a, 1, 100.0);
             b.Push(c, 2, 100.1);
             PoseFrame o = new PoseFrame();
             b.Sample(100.05, o);
             PoseLandmark w = o.GetLandmark(JointId.LeftWrist);
-            Assert.AreEqual(1f, w.Position.x, 1e-4f, "must carry the VALID position, not lerp to origin");
+            Assert.AreEqual(0f, w.Position.x, 1e-4f,
+                "must carry the VALID endpoint's position (0), not lerp 0->origin");
             Assert.AreEqual(0f, w.Confidence, 1e-6f, "confidence min() = 0 so the LimbGate holds");
             Assert.AreEqual(0.5f, o.GetLandmark(JointId.LeftElbow).Position.x, 1e-4f,
-                "other joints still interpolate normally");
+                "other joints still interpolate normally (0 -> 1 at alpha 0.5)");
         }
 
         [Test]

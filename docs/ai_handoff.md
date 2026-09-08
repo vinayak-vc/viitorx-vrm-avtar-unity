@@ -1,7 +1,44 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-07  
+Last updated: 2026-09-08  
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## 📍 PROGRAM STATUS
+
+| Stage | Status | Evidence |
+|---|---|---|
+| **P0** — LimbGate + limb caps | **COMPLETE** (accepted after the live human run) | [`P0_ACCEPTANCE_2026-09-07.md`](P0_ACCEPTANCE_2026-09-07.md) |
+| **P1-1** — per-joint temporal tracking + plausibility | **COMPLETE** | [`P1_1_TRACKER_2026-09-08.md`](P1_1_TRACKER_2026-09-08.md) |
+| **P1-2** — real-time frame freshness / throughput | **COMPLETE** (incl. human A/B) | [`P1_2_FRESHNESS_2026-09-08.md`](P1_2_FRESHNESS_2026-09-08.md) |
+| **P1-3** — Unity timestamped pose buffer + interpolation | **COMPLETE** | [`P1_3_POSE_BUFFER_2026-09-08.md`](P1_3_POSE_BUFFER_2026-09-08.md) |
+| **Next** | recovery / palm / foot work — NOT STARTED | — |
+
+**Cumulative latency:** camera→avatar was ~162 ms → **~102 ms** (P1-2 removed ~100 ms of queue
+staleness; P1-3 spends 40 ms of that on interpolation, halving stutter).
+**Tests: 47/47 Unity EditMode + 37/37 Python green.**
+
+---
+
+## 🎞️ P1-3 Unity pose buffer = PASS (2026-09-08, `P1_3_POSE_BUFFER_2026-09-08.md`)
+
+`Runtime/Core/PoseBuffer.cs` — bounded ring of 16 timestamped poses; Unity renders at
+`now − poseInterpolationDelayMs` and interpolates between the bracketing pair instead of re-applying
+latest-wins (measured **17.8 applies per packet**, **41.5% of render frames frozen**).
+
+- Stutter (delta CoV) **2.286 → 1.070 (−53%)**; frozen render frames **41.5% → 23.6%**.
+- Measured with `stream_motion.py` — identical deterministic input in both runs; a human cannot repeat
+  a performance closely enough to measure interpolation quality.
+- **40 ms chosen over 55 ms**: 55 ms bought only 3 more points of smoothness for 15 ms more latency.
+- `poseInterpolationDelayMs = 0` restores the original path exactly (the buffer is not even populated).
+- **Safety rule preserving P0-1:** a landmark is NEVER position-interpolated across an invalid endpoint.
+  The sidecar sends a dropped joint as `[0,0,0,0]`, so lerping valid→zero would put it half-way to the
+  ORIGIN — the exact F-01 collapse. The valid position is carried and confidence becomes `min` = 0, so
+  the LimbGate still holds. Tested.
+- No extrapolation; duplicate / out-of-order / backwards-timestamp packets rejected.
+- **Known gap:** hands/palm quats still use the old rate-limited slerp path (not buffered), so body and
+  hands sit on timelines ~40 ms apart.
 
 ---
 
@@ -65,8 +102,7 @@ rejecting 4.6–13.5% of legitimate motion. Both fixed and re-measured.
 **Known weak spot:** a sustained high-confidence teleport longer than the 6-frame prediction window ends
 in LOST with slow recovery during fast motion → needs **P1-3/P1-5**.
 
-**Next: P1-2 (velocity estimation refinement) — not started.** Do not add interpolation, IK, foot lock
-or a Unity pose buffer yet.
+*(Superseded: P1-2 turned out to be frame freshness, not velocity refinement — see the status table.)*
 
 ---
 

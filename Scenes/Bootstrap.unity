@@ -170,6 +170,7 @@ MonoBehaviour:
   kalidokitBodyLegs: 1
   kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
   kalidokitFingerWeight: 1
+  poseInterpolationDelayMs: 40
   limbConfidenceThreshold: 0.3
   poseFlipX: 0
   poseFlipY: 1
