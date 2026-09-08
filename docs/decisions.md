@@ -462,3 +462,30 @@ Add a new ADR for every major choice. Do not silently contradict Accepted ADRs.
 ## Capture source note (M2)
 
 Development input is a **video file** (`VideoFileCaptureService`, `sampleVRMFiles/sample video.mp4`) rather than a live webcam, selected via `AppBootstrap.useVideoSource`. `WebcamCaptureService` exists and is swapped in by flipping that flag. Both implement `ICameraCapture`; tracking providers are agnostic to the source.
+
+---
+
+## ADR-032 — P1-4 kinematic recovery REJECTED (live avatar evidence)
+
+- **Status:** Accepted 2026-09-08. Sidecar counterpart: ADR-P009. Full report:
+  [`P1_4_CLOSEOUT_2026-09-08.md`](P1_4_CLOSEOUT_2026-09-08.md).
+- **Context:** P1-4 runs in the Python sidecar, but its failure is only visible **on the avatar**, so
+  the decision was made from Unity-side measurement: `model_log.jsonl` limb-held state, per-pose bone
+  rotation steps, and knee/elbow interior angles, correlated against the sidecar's event log.
+- **Decision:** P1-4 is **rejected**. No Unity code changed — the Unity pipeline
+  (`P1-3 PoseBuffer → Kalidokit → P0 LimbGate → VRM`) was correct throughout and is unmodified.
+  Only the sidecar default flipped (`--recovery` → off).
+- **Unity-side evidence:**
+  - frames with at least one limb **held by the P0 LimbGate**: **0.47% → 17.83%** under P1-4,
+    restored to **0.14%** after rollback. The gate behaved correctly; P1-4 gave it far too much to hold.
+  - avatar snaps > 45° per pose: 15 → 27 → **13** after rollback.
+  - `kneeAng.l` minimum 75.0° → **12.5°** (anatomically implausible) under P1-4; 0 implausible frames
+    after rollback.
+  - bone-length CV stayed **0.00000** in all three runs — the retarget never deformed the rig, so the
+    artefacts were rotation, never scale.
+- **Diagnostics added (DIAG-ONLY, read-only, retained):** `AppBootstrap.WriteModelLog` now also emits
+  `kneeAng`/`elbowAng` (interior angles from world positions) and `luplegF`/`ruplegF`/`llowlegF`/
+  `rlowlegF` (wrap-free bone forwards). Euler angles wrap at 0/360, so frame-to-frame deltas taken off
+  them produce phantom 300° spikes; these fields make joint inversion and rotation spikes measurable.
+- **Consequence:** do not enable sidecar `--recovery`. Do not begin palm/foot work with it on.
+  Next step is the upstream F-08 measurement-quality audit, not another downstream layer.

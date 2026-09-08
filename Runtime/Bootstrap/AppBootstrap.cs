@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 
 using UnityEngine;
@@ -509,6 +509,13 @@ namespace VirtualMirror.App {
                 float upArmL = (boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm) != null && ll != null)
                     ? Vector3.Distance(boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm).position, ll.position) : 0f;
                 float foreArmL = (ll != null && lh != null) ? Vector3.Distance(ll.position, lh.position) : 0f;
+                // DIAG-ONLY (P1-4 visual validation): interior knee/elbow angles + leg forward vectors.
+                // Euler angles wrap at 0/360, so frame-to-frame deltas off them are unreliable; these are
+                // wrap-free and turn "did the avatar's knee invert?" into a measurement. Read-only.
+                float lKneeAng = JointAngle(lul, lll, boundAnimator.GetBoneTransform(HumanBodyBones.LeftFoot));
+                float rKneeAng = JointAngle(rul, rll, boundAnimator.GetBoneTransform(HumanBodyBones.RightFoot));
+                float lElbowAng = JointAngle(boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm), ll, lh);
+                float rElbowAng = JointAngle(boundAnimator.GetBoneTransform(HumanBodyBones.RightUpperArm), rl, rh);
                 // DIAG-ONLY (P0 acceptance §6): the live LimbGate states, so the log PROVES the Unity gate
                 // held (1 = HELD, 0 = VALID) rather than inferring it from the Python-side hold.
                 int gLA = 0, gRA = 0, gLL = 0, gRL = 0, hLA = 0, hRA = 0, hLL = 0, hRL = 0;
@@ -536,6 +543,12 @@ namespace VirtualMirror.App {
                     + ",\"tApply\":" + (System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
                     + ",\"llowF\":" + LogV(ll != null ? ll.forward : Vector3.zero)
                     + ",\"rlowF\":" + LogV(rl != null ? rl.forward : Vector3.zero)
+                    + ",\"kneeAng\":{\"l\":" + LogF(lKneeAng) + ",\"r\":" + LogF(rKneeAng) + "}"
+                    + ",\"elbowAng\":{\"l\":" + LogF(lElbowAng) + ",\"r\":" + LogF(rElbowAng) + "}"
+                    + ",\"luplegF\":" + LogV(lul != null ? lul.forward : Vector3.zero)
+                    + ",\"ruplegF\":" + LogV(rul != null ? rul.forward : Vector3.zero)
+                    + ",\"llowlegF\":" + LogV(lll != null ? lll.forward : Vector3.zero)
+                    + ",\"rlowlegF\":" + LogV(rll != null ? rll.forward : Vector3.zero)
                     + "}";
                 modelLog.WriteLine(line);
             } catch (Exception) {
@@ -548,6 +561,14 @@ namespace VirtualMirror.App {
                     modelLog = null;
                 }
             }
+        }
+
+        // DIAG-ONLY (P1-4 visual validation): interior angle a-b-c in degrees; 0 when a bone is absent.
+        private static float JointAngle(Transform a, Transform b, Transform c) {
+            if (a == null || b == null || c == null) {
+                return 0f;
+            }
+            return Vector3.Angle(a.position - b.position, c.position - b.position);
         }
 
         private static string LogF(float v) {
