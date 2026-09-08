@@ -402,6 +402,63 @@ Add a new ADR for every major choice. Do not silently contradict Accepted ADRs.
 
 ---
 
+## ADR-028 — P0 stability: confidence-gated limb hold (LimbGate) + tightened distal-limb caps (Accepted 2026-09-07)
+
+- **Status:** Accepted. Closes audit finding **F-01** (CRITICAL) and **F-03/F-04**. Evidence: [`AUDIT_FBT_2026-09-07.md`](AUDIT_FBT_2026-09-07.md); acceptance: [`P0_ACCEPTANCE_2026-09-07.md`](P0_ACCEPTANCE_2026-09-07.md).
+- **Context:** per-joint confidence was gated only at the sidecar emit stage and never reached the Unity solve, so an invalid/occluded joint (emitted as `[0,0,0,0]`) drove a real bone rotation **aimed at the origin** → limb collapse. Separately the One-Euro `--max-jump 1.5 m` sat *above* the observed ~0.5–0.9 m limb spikes, so they passed, and knees/ankles were excluded from depth-smoothing and hold entirely.
+- **Decision:**
+  1. **P0-1 `LimbGate`** (`Runtime/Retargeting/LimbGate.cs`) — a two-state (VALID/HELD) gate at **application** time, not inside the solver. A limb whose weakest driving joint is below `limbConfidenceThreshold` **holds its last valid rotation**; it never substitutes zero. Gates on the Kalidokit cross-map (left bones ← right landmarks).
+  2. **P0-2** — knees/ankles (WB 13–16) added to the depth-smoothing + bounded-hold set, and per-index displacement caps `--arm-max-jump` / `--leg-max-jump` (**0.35 m**) for wrists/elbows/knees/ankles, rate-limited (slewed) not dropped. Trunk and hands keep the global cap.
+- **Verified live (human subject, real OAK-D):** the Unity gate fired **14 times across all four limbs**, **250 held rotations with 0 zero-rotations** (no origin collapse), re-acquisition jumps **max 15.7°** (no teleport/flip), peak displacement **−67…−76%** on wrists/elbows, **trunk improved 33–36%** (no regression). Scripted-occlusion proof: **20/20**.
+- **Bone-scale deformation is measured constant** (`spread 0.000000 m` over 102 968 applied frames). **Do not call the failure mode "squashing" — it is LIMB ROTATION INSTABILITY.**
+- **HONEST LIMIT:** RTMW3D does **not** lower confidence for a limb hidden behind the torso — it infers a plausible position at ~0.63 confidence (measured: **0 frames below the 0.3 threshold** across a 45 s hand-behind-back block). P0-1 therefore protects against **total joint loss**, not against confident-but-wrong data. That gap is what ADR-029 exists for.
+- **DO NOT:** move safety out of the LimbGate; raise the 0.35 m cap without live evidence (peak *legitimate* fast-arm motion measured **0.0746 m** — 4.7× headroom).
+- **Files:** `Runtime/Retargeting/LimbGate.cs`, `KalidokitControlRigDriver.cs`, `AppBootstrap.cs`, `python-sidecar~/smoothing.py`, `wholebody_udp_sender.py`.
+
+---
+
+## ADR-029 — P1-1: per-joint temporal tracking + plausibility (confident-but-wrong detection) (Accepted 2026-09-08)
+
+- **Status:** Accepted. Report: [`P1_1_TRACKER_2026-09-08.md`](P1_1_TRACKER_2026-09-08.md).
+- **Context:** ADR-028's honest limit — confidence alone is not validity. A hidden wrist held a **wrong** position for 840 frames at ~0.63 confidence, so no confidence gate could fire.
+- **Decision:** one reusable `JointTracker` per joint (`python-sidecar~/joint_tracker.py`), states **TRACKED / WEAK / PREDICTED / LOST**, placed **after** the P0 smoother and **before** PoseFrame. It does not replace the LimbGate: a `LOST` joint has its **emit confidence zeroed**, which is byte-identical to a real occlusion, so the P0 gate still makes the final call.
+- **Seven plausibility signals:** confidence, residual vs kinematic prediction (against an *adaptive* per-joint scale), speed, acceleration, depth consistency (existing 5×5/p30 result, unchanged), **FROZEN** (pinned <4 mm for ≥12 frames while the parent moved ≥5 cm), and segment length vs a running median.
+- **The FROZEN check is the one that matters** — a stuck joint has near-zero residual, speed *and* acceleration, so no conventional test can see it. It is the actual observed failure.
+- **Causal only, by choice.** An N−2…N+2 comparison needs lookahead, and lookahead is latency. A suspicious sample is down-weighted instead; consecutive samples that agree with each other promote back to TRACKED, so `A→B→C→D→E` (real motion) survives while `A→B→X→B` (spike) is damped, at zero added latency.
+- **Verified:** 37/37 unit assertions, **6/6 adversarial cases detected** (an 0.8 m error at confidence 0.95 leaves a **2 mm** trace; the frozen-wrist case recovers with **0.0000 m** residual). Legitimate dancing: median/p95 unchanged, peak −18…−27% on four joints. Cost **0.085 ms** median for 12 joints.
+- **Two calibration lessons (measured, not guessed):** the neighbour/segment check must be **corroborating evidence, capped at 0.5**, never a veto — uncapped it caused 3170 false rejections; and the output step limiter must budget from **measurement-to-measurement**, not from `lastValid`, or the WEAK offset inflates its own budget and the limiter never binds.
+- **DO NOT:** raise prediction horizons (bounded 6 frames / 0.30 m by design); add smoothing here — the tracker adds **memory, not lag**.
+- **KNOWN WEAK SPOT:** a sustained high-confidence teleport longer than the prediction window ends in LOST with slow recovery during fast motion. Needs short-gap prediction + blended recovery (future work).
+
+---
+
+## ADR-030 — P1-2: latest-frame queue policy (frame freshness over frame completeness) (Accepted 2026-09-08)
+
+- **Status:** Accepted. Report: [`P1_2_FRESHNESS_2026-09-08.md`](P1_2_FRESHNESS_2026-09-08.md).
+- **Context:** live measurement showed camera→host latency of **131 ms**. `DataOutputQueue.get()` returns the **OLDEST** packet; with inference (~21 ms) slower than the 30 fps sensor the host queue sat full at `maxSize=4` → **4 × 33.3 = 133 ms** of pure staleness. Nothing was slow; the system was working on old frames.
+- **Decision:** for an interactive avatar, **freshness beats completeness**. One blocking `get()` (liveness), then `tryGetAll()` keeping only the **newest** RGB packet; stale intermediates are **discarded, not processed**. Queue size unchanged (no large buffer added). Toggle `--latest-frame` (default ON) / `--no-latest-frame`.
+- **RGB/depth pairing:** depth is chosen by **closest timestamp** to the selected RGB frame — never newest-RGB + oldest-depth. This **improved** pairing (audit **F-09**), which had been mis-associating depth by **54.56 ms ≈ 1.6 frames**: max sync error 54.63 → **21.24 ms**.
+- **Verified live (human subject):** frame age **131.51 → 31.36 ms**, camera→UDP **161.81 → 62.03 ms**, fps and compute unchanged (20.85 vs 20.70 ms — proving the win was queue wait, not processing). 180 s soak: **no accumulation**. Under load 38.6% of captured frames are deliberately dropped — frames the estimator could never have consumed in time.
+- **Compute spikes >80 ms occur only at frame index 0–2** — ONNX Runtime/DirectML warm-up, per *process*, not per frame (a 3378-frame soak spiked only at frames 0 and 1).
+- **DO NOT:** enlarge the queue (that trades latency for frames nobody sees); set `--inject-load-ms` in production (test-only instrument).
+- **Device-side `XLinkOut` queues left at DepthAI defaults** — measured as non-contributing; revisit only if frame age exceeds sensor transfer plus one frame on a slower host.
+
+---
+
+## ADR-031 — P1-3: Unity timestamped pose buffer + interpolation (Accepted 2026-09-08)
+
+- **Status:** Accepted. Report: [`P1_3_POSE_BUFFER_2026-09-08.md`](P1_3_POSE_BUFFER_2026-09-08.md).
+- **Context:** Unity applied **latest-wins** and re-applied the same pose every render frame with a fixed slerp; `seq`/`t` were parsed but used only for log alignment. Measured **17.8 applies per packet** and **41.5% of render frames with literally zero bone movement** — the stutter signature.
+- **Decision:** `Runtime/Core/PoseBuffer.cs`, a bounded ring of 16 timestamped poses. Unity renders at `now − poseInterpolationDelayMs` and interpolates between the bracketing pair. Buffer axis is Unity's **receive epoch** (no sender-skew assumption). Duplicate, out-of-order and **backwards-timestamp** packets are rejected. **No extrapolation** — past the newest sample it clamps.
+- **SAFETY RULE (preserves ADR-028):** a landmark is **NEVER position-interpolated across an invalid endpoint**. The sidecar sends a dropped joint as `[0,0,0,0]`, so lerping valid→zero would place it half-way to the **origin** — the exact F-01 collapse. The valid position is carried and confidence becomes `min(a,b)` = 0, so the joint still reaches the LimbGate as invalid and the gate holds. Explicitly tested.
+- **Verified with identical deterministic input** (`stream_motion.py` — a human cannot repeat a performance closely enough to measure interpolation quality): stutter (delta CoV) **2.286 → 1.070 (−53%)**, frozen render frames **41.5% → 23.6%**. 47/47 EditMode tests.
+- **Delay = 40 ms, chosen on evidence:** 55 ms bought only 3 further points of smoothness for 15 ms more latency. `poseInterpolationDelayMs = 0` restores the original path exactly.
+- **Ordering mattered:** P1-2 removed ~100 ms of staleness; P1-3 spends 40 ms of it. Net **~162 ms → ~102 ms** and smoother. Done in the other order, the buffer would have pushed an already-162 ms pipeline to ~202 ms.
+- **DO NOT:** treat this as a smoothing stage (it is temporal reconstruction; P0/P1-1 own stability); add extrapolation without a separate decision.
+- **KNOWN GAP:** hand/palm quaternions still use the existing rate-limited slerp path, so body and hands sit on timelines ~40 ms apart. `PoseBuffer.SlerpRotation` exists and is tested for when hands are wired in.
+
+---
+
 ## Capture source note (M2)
 
 Development input is a **video file** (`VideoFileCaptureService`, `sampleVRMFiles/sample video.mp4`) rather than a live webcam, selected via `AppBootstrap.useVideoSource`. `WebcamCaptureService` exists and is swapped in by flipping that flag. Both implement `ICameraCapture`; tracking providers are agnostic to the source.

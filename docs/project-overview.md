@@ -1,7 +1,7 @@
 # Virtual Mirror — Project Overview
 
-**Status:** Documentation complete; implementation not started (M0)  
-**Stack:** Unity 6 + MediaPipe Tasks + VRM 1.0 (UniVRM) + Animation Rigging  
+**Status:** Milestone-2 — OAK-D depth path shipping. Stability program **P0 + P1-1 + P1-2 + P1-3 COMPLETE** (see `ai_handoff.md` for the status table).  
+**Stack:** Unity 6 + **OAK-D (DepthAI) + RTMW3D Python sidecar** + Kalidokit-ported retarget + VRM 1.0 (UniVRM); MediaPipe Tasks + Animation Rigging retained as the fallback path.  
 **Platform:** Windows x64 EXE  
 
 ---

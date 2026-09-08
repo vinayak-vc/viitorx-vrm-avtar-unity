@@ -4,6 +4,65 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## ✅ Full-body stability program — P0 → P1-3 (2026-09-07 → 2026-09-08) — ALL COMPLETE
+
+Driven by [`AUDIT_FBT_2026-09-07.md`](AUDIT_FBT_2026-09-07.md). ADRs **028–031**. Every stage was
+accepted on **measured live evidence**, never on code review alone.
+
+### P0 — confidence-gated stability (ADR-028) — COMPLETE
+- [x] **P0-1 `LimbGate`** — per-limb VALID/HELD gate at application time; holds last valid rotation, never substitutes zero. `Runtime/Retargeting/LimbGate.cs`.
+- [x] **P0-2** — knees/ankles into the depth-smoothing + hold set; `--arm-max-jump` / `--leg-max-jump` = **0.35 m** for wrist/elbow/knee/ankle (slewed, not dropped).
+- [x] **Diagnostic instrumentation** — `recv_log` gained knees/ankles + per-limb confidence + epoch clocks; `model_log` gained gate state, leg bones and **bone lengths**; sidecar gained per-stage timings. All marked `DIAG-ONLY`, additive only.
+- [x] **Scripted-occlusion proof** — `inject_occlusion.py` + `verify_gate.py`: **20/20**, 0 zero-rotations across 2765 held frames.
+- [x] **Live human acceptance** — gate fired **14×** across all 4 limbs; **0 origin collapse** (250 held rotations); re-acquire jumps **max 15.7°**; wrist/elbow peaks **−67…−76%**; trunk **improved 33–36%**.
+- [x] **Squash question settled by measurement** — femur/shin/upArm/foreArm spread **0.000000 m** over 102 968 frames. Correct term is **LIMB ROTATION INSTABILITY**.
+- [x] `limbConfidenceThreshold` serialized into `Scenes/Bootstrap.unity` (was relying on the C# initializer).
+
+### P1-1 — per-joint temporal tracking + plausibility (ADR-029) — COMPLETE
+- [x] `python-sidecar~/joint_tracker.py` — one reusable `JointTracker` per joint; TRACKED/WEAK/PREDICTED/LOST.
+- [x] **FROZEN detector** — the check that actually catches the observed failure (a stuck joint has near-zero residual, speed *and* acceleration).
+- [x] 37/37 unit assertions (`test_joint_tracker.py`); **6/6 adversarial cases detected** (`evaluate_p1.py`).
+- [x] Cost **0.085 ms** median for 12 joints — 8× under the 1 ms budget.
+- [x] Sidecar integration behind `--tracker` / `--no-tracker`.
+
+### P1-2 — frame freshness / throughput (ADR-030) — COMPLETE
+- [x] Root cause proven arithmetically: FIFO `get()` + `maxSize=4` at 30 fps = **133 ms** staleness (measured 131.4 ms).
+- [x] Latest-frame drain + **timestamp-matched depth** selection.
+- [x] Permanent diagnostics: `frameAgeMs`, `queueDepth`, `staleDropped`, `rgbDepthSyncMs`.
+- [x] **Live human A/B** — frame age **131.51 → 31.36 ms**; camera→UDP **161.81 → 62.03 ms**; fps and compute unchanged.
+- [x] RGB/depth pairing **improved** (audit F-09): max sync error 54.63 → 21.24 ms.
+- [x] 180 s soak — **no freshness accumulation**.
+- [x] Compute spikes root-caused to **ONNX/DirectML warm-up at frame 0–2**, not queue drain or GC.
+
+### P1-3 — Unity timestamped pose buffer + interpolation (ADR-031) — COMPLETE
+- [x] `Runtime/Core/PoseBuffer.cs` — bounded ring of 16; render at `now − poseInterpolationDelayMs`.
+- [x] Duplicate / out-of-order / **backwards-timestamp** rejection; **no extrapolation**.
+- [x] **Safety rule:** never position-interpolate across an invalid endpoint (would recreate the F-01 origin collapse). Explicitly tested.
+- [x] 14 new EditMode tests → **47/47 total**.
+- [x] Measured with identical deterministic input (`stream_motion.py`): stutter CoV **2.286 → 1.070 (−53%)**, frozen render frames **41.5% → 23.6%**.
+- [x] Delay **40 ms** chosen on evidence (55 ms bought 3 more points for 15 ms more latency).
+
+### Tooling added (reusable)
+`inject_occlusion.py`, `verify_gate.py`, `analyze_capture.py`, `guided_capture.py`, `evaluate_p1.py`,
+`compare_p12.py`, `stream_motion.py`, `run_p0_acceptance.bat`, `run_p12_ab.bat`.
+Audit baseline logs preserved in `python-sidecar~/pipeline_logs_baseline_audit/`.
+
+### Gotchas for the next agent
+- **Do NOT run the unfiltered EditMode suite** — it aborts the Editor via a MediaPipe native
+  `CHECK failed: 1 == ChannelSize()` (`image_frame.cc:362`) on the prebuild domain reload. Scope runs to
+  the `VirtualMirror.Tests` assembly. Not a product defect.
+- **`model_log` does not start until the VRM avatar binds (~7 s after Play).** Injecting data before
+  that yields *no observations*, which is not a failure. **Absence of observation ≠ evidence of failure.**
+- `--inject-load-ms` is a **test-only** instrument; never set it in production.
+
+### Open / next (NOT started)
+- [ ] **Recovery: short-gap prediction + blended reacquire** — P1-1's known weak spot (sustained high-confidence teleport → LOST → slow recovery during fast motion).
+- [ ] **Palm / wrist rotation** — the L-palm rate limiter saturates (median = p95 = 14.98° vs a 15°/frame cap); hands also sit ~40 ms off the body timeline after P1-3.
+- [ ] **Foot / ground constraint** — audit F-10, never implemented.
+- [ ] **Confidence normalisation** — audit F-08; P1-1 works around it kinematically rather than fixing the scale.
+
+---
+
 ## ⚠️ Full-codebase audit fix backlog (2026-08-07)
 
 A 5-track read-only audit found the recurring bugs stem from **duplicated responsibility across the

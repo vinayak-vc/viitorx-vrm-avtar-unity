@@ -32,21 +32,96 @@ namespace VirtualMirror.Core {
         private int count;
         private int head;               // index of the NEWEST entry
         private long newestSeq = long.MinValue;
+        private long oldestSeq;
+        private long lastSeqA;
+        private long lastSeqB;
+        private float lastAlpha;
+        private double lastRenderTime;
+        private long rejectedOutOfOrder;
+        private long rejectedDuplicate;
+        private long droppedOld;
+        private long samplesInterpolated;
+        private long samplesClampedNewest;
+        private long samplesClampedOldest;
 
         // --- diagnostics (read by the periodic aggregate log; never per-frame) ---
-        public int Depth { get { return count; } }
-        public long OldestSeq { get; private set; }
-        public long NewestSeq { get { return newestSeq == long.MinValue ? -1 : newestSeq; } }
-        public long LastSeqA { get; private set; }
-        public long LastSeqB { get; private set; }
-        public float LastAlpha { get; private set; }
-        public double LastRenderTime { get; private set; }
-        public long RejectedOutOfOrder { get; private set; }
-        public long RejectedDuplicate { get; private set; }
-        public long DroppedOld { get; private set; }
-        public long SamplesInterpolated { get; private set; }
-        public long SamplesClampedNewest { get; private set; }
-        public long SamplesClampedOldest { get; private set; }
+        public int Depth {
+            get {
+                return count;
+            }
+        }
+
+        public long OldestSeq {
+            get {
+                return oldestSeq;
+            }
+        }
+
+        public long NewestSeq {
+            get {
+                return newestSeq == long.MinValue ? -1 : newestSeq;
+            }
+        }
+
+        public long LastSeqA {
+            get {
+                return lastSeqA;
+            }
+        }
+
+        public long LastSeqB {
+            get {
+                return lastSeqB;
+            }
+        }
+
+        public float LastAlpha {
+            get {
+                return lastAlpha;
+            }
+        }
+
+        public double LastRenderTime {
+            get {
+                return lastRenderTime;
+            }
+        }
+
+        public long RejectedOutOfOrder {
+            get {
+                return rejectedOutOfOrder;
+            }
+        }
+
+        public long RejectedDuplicate {
+            get {
+                return rejectedDuplicate;
+            }
+        }
+
+        public long DroppedOld {
+            get {
+                return droppedOld;
+            }
+        }
+
+        public long SamplesInterpolated {
+            get {
+                return samplesInterpolated;
+            }
+        }
+
+        public long SamplesClampedNewest {
+            get {
+                return samplesClampedNewest;
+            }
+        }
+
+        public long SamplesClampedOldest {
+            get {
+                return samplesClampedOldest;
+            }
+        }
 
         public PoseBuffer(int capacity) {
             this.capacity = capacity < 2 ? 2 : capacity;
@@ -63,10 +138,10 @@ namespace VirtualMirror.Core {
             count = 0;
             head = -1;
             newestSeq = long.MinValue;
-            OldestSeq = -1;
-            LastSeqA = -1;
-            LastSeqB = -1;
-            LastAlpha = 0f;
+            oldestSeq = -1;
+            lastSeqA = -1;
+            lastSeqB = -1;
+            lastAlpha = 0f;
         }
 
         /// <summary>
@@ -80,25 +155,25 @@ namespace VirtualMirror.Core {
             }
             if (newestSeq != long.MinValue && seq >= 0) {
                 if (seq == newestSeq) {
-                    RejectedDuplicate = RejectedDuplicate + 1;
+                    rejectedDuplicate = rejectedDuplicate + 1;
                     return false;
                 }
                 if (seq < newestSeq) {
                     // A late packet cannot be inserted mid-ring without reordering, and reordering a
                     // real-time buffer buys nothing: by definition its interval has already rendered.
-                    RejectedOutOfOrder = RejectedOutOfOrder + 1;
+                    rejectedOutOfOrder = rejectedOutOfOrder + 1;
                     return false;
                 }
             }
             // Reject a timestamp that goes backwards (clock regression) even if seq advanced —
             // interpolation divides by (tB - tA) and a non-monotonic axis makes alpha meaningless.
             if (count > 0 && timestampSeconds <= times[head]) {
-                RejectedOutOfOrder = RejectedOutOfOrder + 1;
+                rejectedOutOfOrder = rejectedOutOfOrder + 1;
                 return false;
             }
 
             if (count == capacity) {
-                DroppedOld = DroppedOld + 1;
+                droppedOld = droppedOld + 1;
             }
             head = (head + 1) % capacity;
             CopyInto(source, frames[head]);
@@ -108,7 +183,7 @@ namespace VirtualMirror.Core {
                 count = count + 1;
             }
             newestSeq = seq;
-            OldestSeq = seqs[IndexFromOldest(0)];
+            oldestSeq = seqs[IndexFromOldest(0)];
             return true;
         }
 
@@ -122,33 +197,33 @@ namespace VirtualMirror.Core {
             if (count == 0 || output == null) {
                 return false;
             }
-            LastRenderTime = renderTime;
+            lastRenderTime = renderTime;
             if (count == 1) {
                 int only = IndexFromOldest(0);
                 CopyInto(frames[only], output);
-                LastSeqA = seqs[only];
-                LastSeqB = seqs[only];
-                LastAlpha = 0f;
-                SamplesClampedNewest = SamplesClampedNewest + 1;
+                lastSeqA = seqs[only];
+                lastSeqB = seqs[only];
+                lastAlpha = 0f;
+                samplesClampedNewest = samplesClampedNewest + 1;
                 return true;
             }
 
             int oldest = IndexFromOldest(0);
             if (renderTime <= times[oldest]) {
                 CopyInto(frames[oldest], output);
-                LastSeqA = seqs[oldest];
-                LastSeqB = seqs[oldest];
-                LastAlpha = 0f;
-                SamplesClampedOldest = SamplesClampedOldest + 1;
+                lastSeqA = seqs[oldest];
+                lastSeqB = seqs[oldest];
+                lastAlpha = 0f;
+                samplesClampedOldest = samplesClampedOldest + 1;
                 return true;
             }
             if (renderTime >= times[head]) {
                 // No future sample yet. Do NOT extrapolate (P1-3 scope) — present the newest pose.
                 CopyInto(frames[head], output);
-                LastSeqA = seqs[head];
-                LastSeqB = seqs[head];
-                LastAlpha = 1f;
-                SamplesClampedNewest = SamplesClampedNewest + 1;
+                lastSeqA = seqs[head];
+                lastSeqB = seqs[head];
+                lastAlpha = 1f;
+                samplesClampedNewest = samplesClampedNewest + 1;
                 return true;
             }
 
@@ -171,10 +246,10 @@ namespace VirtualMirror.Core {
                 alpha = 1f;
             }
             Interpolate(frames[aIdx], frames[bIdx], alpha, output);
-            LastSeqA = seqs[aIdx];
-            LastSeqB = seqs[bIdx];
-            LastAlpha = alpha;
-            SamplesInterpolated = SamplesInterpolated + 1;
+            lastSeqA = seqs[aIdx];
+            lastSeqB = seqs[bIdx];
+            lastAlpha = alpha;
+            samplesInterpolated = samplesInterpolated + 1;
             return true;
         }
 
