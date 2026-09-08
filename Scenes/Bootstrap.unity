@@ -164,9 +164,13 @@ MonoBehaviour:
   kalidokitBodyLerp: 0.5
   kalidokitBodyMirror: 0
   kalidokitBodyTorsoRoll: 0
+  kalidokitSpineBendScale: 1
+  kalidokitSpineBendBaselineTau: 8
+  kalidokitTorsoYawScale: 0
   kalidokitBodyLegs: 1
   kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
   kalidokitFingerWeight: 1
+  limbConfidenceThreshold: 0.3
   poseFlipX: 0
   poseFlipY: 1
   poseFlipZ: 0

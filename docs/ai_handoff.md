@@ -1,11 +1,56 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-08-11  
+Last updated: 2026-09-07  
 Purpose: next agent can continue without re-deriving context.
 
 ---
 
-## 🧭 Retarget regression DIAGNOSED + torso-yaw damped (2026-08-11, ADR-027 + `RETARGET_AUDIT_2026-08-11.md`) — READ THIS FIRST
+## 🚦 P0 acceptance = CONDITIONAL PASS — 14 criteria still NOT TESTED (2026-09-07, `P0_ACCEPTANCE_2026-09-07.md`) — READ THIS FIRST
+
+P0-1 (`LimbGate` confidence hold) and P0-2 (0.35 m limb cap + legs into the hold set) are implemented.
+Full acceptance report: [`P0_ACCEPTANCE_2026-09-07.md`](P0_ACCEPTANCE_2026-09-07.md).
+
+**Machine-verifiable half PASSES:** compile clean (0 `error CS`); **33/33 EditMode tests** incl. all 6
+`LimbGateTests`; shipping config confirmed; `LimbGate` traced on the live path (7 hops, source-cited);
+OAK-D RGB+depth+intrinsics operating @30 fps; **packet loss 0.00 %** (0/1046 and 0/54 285, 0 out-of-order);
+**end-to-end latency MEASURED ≈ 44.9 ms** median camera→avatar (audit had estimated 80–150 ms);
+**bone lengths CONSTANT to 0.000000 m** over 12 194 applied frames → *squashing does not occur; the
+correct label is LIMB ROTATION INSTABILITY.*
+
+**P0-1 UNITY GATE IS NOW PROVEN (2026-09-08).** Scripted occlusion injection
+([`inject_occlusion.py`](../python-sidecar~/inject_occlusion.py) → [`verify_gate.py`](../python-sidecar~/verify_gate.py))
+streams the real UDP contract with occluded joints emitted as `[0,0,0,0]` — **with the sidecar not running
+at all**, so nothing is inferred from a Python-side hold. Result over 3/5/8/12/20-frame occlusions × 4 limbs:
+**20/20 PASS**, gate held for the full duration, **0 zero-rotations across 2765 held frames (no origin
+collapse)**, 0 spurious holds on non-occluded limbs, re-acquired every time, bone lengths constant.
+
+**Still NOT TESTED (9 criteria): human motion quality.** Every camera capture recorded `measured_body = 0/33`
+(presence probe 2026-09-08: **0/359 frames, max 0/33 joints**) — no human has ever been in frame. Real
+confidence-*decay* profiles, spike magnitudes under fast motion, the 0.35 m cap's responsiveness, palm
+behaviour, trunk/root post-P0 comparison and avatar visual behaviour all need a person.
+→ Run [`python-sidecar~/guided_capture.py`](../python-sidecar~/guided_capture.py) — prompts through blocks
+A–J on a countdown and reports every metric **per block**.
+
+**Gotchas found:**
+- **Do NOT run the unfiltered EditMode suite** — it aborts the Editor via a MediaPipe native
+  `CHECK failed: 1 == ChannelSize()` (`image_frame.cc:362`) on the prebuild domain reload. Scope runs to
+  the `VirtualMirror.Tests` assembly. Not a P0 defect.
+- ~~`limbConfidenceThreshold` absent from the scene~~ **FIXED** — now serialized at
+  `Scenes/Bootstrap.unity:173` (`limbConfidenceThreshold: 0.3`).
+- **`model_log` does not start until the VRM avatar binds (~7 s after Play).** Any test injecting data
+  before that gets *no observations* — which is NOT a failure. A first gate run scored a misleading
+  "16/20" for exactly this reason; warm-up is now 12 s. **Absence of observation ≠ evidence of failure.**
+- **L-palm rotation is pinned at the 15°/frame rate limiter** (median == p95 == 14.98°) in the baseline —
+  it is slewing at max rate continuously, not tracking. Pre-existing, unexplained, re-check live.
+- Diagnostic-only instrumentation added (`DIAG-ONLY` comments, +85 Unity / +20 sidecar lines, additive
+  logging only). Baseline logs preserved in `python-sidecar~/pipeline_logs_baseline_audit/`.
+
+**Do NOT start P1** until the capture above is done. Then P1-1 (per-joint temporal state) first —
+rationale in §14 of the report.
+
+---
+
+## 🧭 Retarget regression DIAGNOSED + torso-yaw damped (2026-08-11, ADR-027 + `RETARGET_AUDIT_2026-08-11.md`)
 
 The user's screen recording showed the **debug skeleton correct but the avatar arms/legs/torso wrong** (twisted waist, wrong facing, arms dragged/asymmetric, "inhuman" fingers). Full diagnosis in [`RETARGET_AUDIT_2026-08-11.md`](RETARGET_AUDIT_2026-08-11.md). **Root cause:** Kalidokit derives torso facing from the shoulder/hip-line DEPTH separation (2-pt `rollPitchYaw`), which is hypersensitive to OAK depth noise at range (measured: rest yaw −10°, excursions −119°, ±180° flips). **ADR-025's un-flatten exposed it** → the chest over-twists and drags the arms (M1 was stable only because the trunk was flattened = frontal-locked). An interim "×π over-rotation" claim was **WRONG** — Kalidokit's `rigHips` ×π too; the port is faithful there.
 

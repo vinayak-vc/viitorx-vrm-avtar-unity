@@ -488,6 +488,27 @@ namespace VirtualMirror.App {
                 Transform rh = boundAnimator.GetBoneTransform(HumanBodyBones.RightHand);
                 Transform ll = boundAnimator.GetBoneTransform(HumanBodyBones.LeftLowerArm);
                 Transform rl = boundAnimator.GetBoneTransform(HumanBodyBones.RightLowerArm);
+                // DIAG-ONLY (P0 acceptance §12/§13): leg bones were never logged, so leg rotation behavior
+                // (and the rotation-vs-squash question) could not be evidenced. Read-only.
+                Transform lul = boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperLeg);
+                Transform rul = boundAnimator.GetBoneTransform(HumanBodyBones.RightUpperLeg);
+                Transform lll = boundAnimator.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
+                Transform rll = boundAnimator.GetBoneTransform(HumanBodyBones.RightLowerLeg);
+                // DIAG-ONLY (P0 acceptance §13): live bone LENGTHS. A rotation retarget must keep these
+                // CONSTANT; logging them turns "does the avatar squash?" into a measurement, not an opinion.
+                float femurL = (lul != null && lll != null) ? Vector3.Distance(lul.position, lll.position) : 0f;
+                float shinL = (lll != null && boundAnimator.GetBoneTransform(HumanBodyBones.LeftFoot) != null)
+                    ? Vector3.Distance(lll.position, boundAnimator.GetBoneTransform(HumanBodyBones.LeftFoot).position) : 0f;
+                float upArmL = (boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm) != null && ll != null)
+                    ? Vector3.Distance(boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm).position, ll.position) : 0f;
+                float foreArmL = (ll != null && lh != null) ? Vector3.Distance(ll.position, lh.position) : 0f;
+                // DIAG-ONLY (P0 acceptance §6): the live LimbGate states, so the log PROVES the Unity gate
+                // held (1 = HELD, 0 = VALID) rather than inferring it from the Python-side hold.
+                int gLA = 0, gRA = 0, gLL = 0, gRL = 0, hLA = 0, hRA = 0, hLL = 0, hRL = 0;
+                if (kalidokitControlRig != null) {
+                    kalidokitControlRig.GetGateStates(out gLA, out gRA, out gLL, out gRL,
+                                                      out hLA, out hRA, out hLL, out hRL);
+                }
                 string line = "{\"seq\":" + seq
                     + ",\"hipsY\":" + LogF(hips != null ? hips.eulerAngles.y : 0f)
                     + ",\"hipsFwd\":" + LogV(hips != null ? hips.forward : Vector3.zero)
@@ -497,6 +518,15 @@ namespace VirtualMirror.App {
                     + ",\"rlow\":" + LogV(rl != null ? rl.eulerAngles : Vector3.zero)
                     + ",\"lhandF\":" + LogV(lh != null ? lh.forward : Vector3.zero)
                     + ",\"rhandF\":" + LogV(rh != null ? rh.forward : Vector3.zero)
+                    + ",\"lupleg\":" + LogV(lul != null ? lul.eulerAngles : Vector3.zero)
+                    + ",\"rupleg\":" + LogV(rul != null ? rul.eulerAngles : Vector3.zero)
+                    + ",\"llowleg\":" + LogV(lll != null ? lll.eulerAngles : Vector3.zero)
+                    + ",\"rlowleg\":" + LogV(rll != null ? rll.eulerAngles : Vector3.zero)
+                    + ",\"gate\":{\"lArm\":" + gLA + ",\"rArm\":" + gRA + ",\"lLeg\":" + gLL + ",\"rLeg\":" + gRL
+                    + ",\"hLArm\":" + hLA + ",\"hRArm\":" + hRA + ",\"hLLeg\":" + hLL + ",\"hRLeg\":" + hRL + "}"
+                    + ",\"boneLen\":{\"femur\":" + LogF(femurL) + ",\"shin\":" + LogF(shinL)
+                    + ",\"upArm\":" + LogF(upArmL) + ",\"foreArm\":" + LogF(foreArmL) + "}"
+                    + ",\"tApply\":" + (System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
                     + ",\"llowF\":" + LogV(ll != null ? ll.forward : Vector3.zero)
                     + ",\"rlowF\":" + LogV(rl != null ? rl.forward : Vector3.zero)
                     + "}";

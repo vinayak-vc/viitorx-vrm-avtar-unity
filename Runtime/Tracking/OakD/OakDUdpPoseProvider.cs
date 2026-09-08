@@ -271,6 +271,10 @@ namespace VirtualMirror.Tracking.OakD {
             JObject root = JObject.Parse(json);
             long seq = root["seq"] != null ? root["seq"].Value<long>() : -1;
             Interlocked.Exchange(ref lastSeq, seq);
+            // DIAG-ONLY (P0 acceptance §16): the sidecar's SEND epoch seconds, echoed so latency can be
+            // computed against a comparable clock. `clock.Elapsed` is a Stopwatch since provider start and
+            // is NOT comparable to the sidecar's time.time(). Read-only; drives no behavior.
+            double sendEpoch = root["t"] != null ? root["t"].Value<double>() : 0.0;
             JArray landmarks = root["lm"] as JArray;
             if (landmarks == null || landmarks.Count == 0) {
                 target.MarkInvalid(timestampSeconds);
@@ -322,8 +326,13 @@ namespace VirtualMirror.Tracking.OakD {
 
             ParseHands(root, timestampSeconds);
             if (pipelineLog != null) {
-                WriteRecvLog(target, workerHandFrame, seq, timestampSeconds);
+                WriteRecvLog(target, workerHandFrame, seq, timestampSeconds, sendEpoch);
             }
+        }
+
+        // DIAG-ONLY: mirrors KalidokitControlRigDriver.Min3 so the logged confidence matches the gate's input.
+        private static float Min3(float a, float b, float c) {
+            return Mathf.Min(a, Mathf.Min(b, c));
         }
 
         private static string F(float v) {
@@ -333,12 +342,24 @@ namespace VirtualMirror.Tracking.OakD {
         // One recv_log.jsonl line: seq + key CONVERTED landmarks (shoulders/hips/wrists, Unity space) + the
         // derived palm quaternions. Diff against sender_log.jsonl (should match modulo the axis convention)
         // and model_log.jsonl (to localize where jitter/spin enters). Receive-thread only.
-        private void WriteRecvLog(PoseFrame t, HandFrame h, long seq, double ts) {
+        private void WriteRecvLog(PoseFrame t, HandFrame h, long seq, double ts, double sendEpoch) {
             try {
                 Vector3 sL = t.GetLandmark((JointId)11).Position, sR = t.GetLandmark((JointId)12).Position;
                 Vector3 hL = t.GetLandmark((JointId)23).Position, hR = t.GetLandmark((JointId)24).Position;
                 Vector3 wL = t.GetLandmark((JointId)15).Position, wR = t.GetLandmark((JointId)16).Position;
                 Vector3 eL = t.GetLandmark((JointId)13).Position, eR = t.GetLandmark((JointId)14).Position;
+                // DIAG-ONLY (P0 acceptance §9): knees/ankles were never logged, so leg frame-to-frame
+                // displacement could not be measured. Read-only.
+                Vector3 kL = t.GetLandmark((JointId)25).Position, kR = t.GetLandmark((JointId)26).Position;
+                Vector3 aL = t.GetLandmark((JointId)27).Position, aR = t.GetLandmark((JointId)28).Position;
+                // DIAG-ONLY (P0 acceptance §6/§10): the EXACT four per-limb confidences LimbGate consumes,
+                // using the same Kalidokit cross-map as KalidokitControlRigDriver.Apply. Logging these makes
+                // the Unity gate's HOLD/VALID decision reproducible offline from the log alone.
+                float cLArm = Min3(t.GetLandmark((JointId)12).Confidence, t.GetLandmark((JointId)14).Confidence, t.GetLandmark((JointId)16).Confidence);
+                float cRArm = Min3(t.GetLandmark((JointId)11).Confidence, t.GetLandmark((JointId)13).Confidence, t.GetLandmark((JointId)15).Confidence);
+                float cLLeg = Min3(t.GetLandmark((JointId)24).Confidence, t.GetLandmark((JointId)26).Confidence, t.GetLandmark((JointId)28).Confidence);
+                float cRLeg = Min3(t.GetLandmark((JointId)23).Confidence, t.GetLandmark((JointId)25).Confidence, t.GetLandmark((JointId)27).Confidence);
+                double recvEpoch = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
                 Quaternion lp = h.LeftWristRotation, rp = h.RightWristRotation;
                 string line = "{\"seq\":" + seq + ",\"t\":" + ts.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
                     + ",\"sh\":[[" + F(sL.x) + "," + F(sL.y) + "," + F(sL.z) + "],[" + F(sR.x) + "," + F(sR.y) + "," + F(sR.z) + "]]"
@@ -347,6 +368,12 @@ namespace VirtualMirror.Tracking.OakD {
                     + ",\"wr\":[[" + F(wL.x) + "," + F(wL.y) + "," + F(wL.z) + "],[" + F(wR.x) + "," + F(wR.y) + "," + F(wR.z) + "]]"
                     + ",\"lpalm\":[" + F(lp.x) + "," + F(lp.y) + "," + F(lp.z) + "," + F(lp.w) + "],\"ltrk\":" + (h.LeftWristTracked ? "true" : "false")
                     + ",\"rpalm\":[" + F(rp.x) + "," + F(rp.y) + "," + F(rp.z) + "," + F(rp.w) + "],\"rtrk\":" + (h.RightWristTracked ? "true" : "false")
+                    // DIAG-ONLY (P0 acceptance): legs + per-limb gate confidence + comparable epoch clocks.
+                    + ",\"kn\":[[" + F(kL.x) + "," + F(kL.y) + "," + F(kL.z) + "],[" + F(kR.x) + "," + F(kR.y) + "," + F(kR.z) + "]]"
+                    + ",\"an\":[[" + F(aL.x) + "," + F(aL.y) + "," + F(aL.z) + "],[" + F(aR.x) + "," + F(aR.y) + "," + F(aR.z) + "]]"
+                    + ",\"cf\":{\"lArm\":" + F(cLArm) + ",\"rArm\":" + F(cRArm) + ",\"lLeg\":" + F(cLLeg) + ",\"rLeg\":" + F(cRLeg) + "}"
+                    + ",\"tSend\":" + sendEpoch.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"tRecv\":" + recvEpoch.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
                     + "}";
                 pipelineLog.WriteLine(line);
             } catch (Exception) {

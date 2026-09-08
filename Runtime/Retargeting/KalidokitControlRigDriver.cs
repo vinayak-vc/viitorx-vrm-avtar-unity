@@ -428,6 +428,31 @@ namespace VirtualMirror.Retargeting {
             limbConfidenceThreshold = Mathf.Clamp01(threshold);
         }
 
+        /// <summary>DIAG-ONLY (P0 acceptance §6): the live per-limb gate state, so an applied-frame log can
+        /// PROVE the Unity LimbGate itself entered HOLD (rather than inferring it from the Python hold).
+        /// Encoding per limb: 1 = HELD, 0 = VALID. Read-only; drives no behavior.</summary>
+        public void GetGateStates(out int lArm, out int rArm, out int lLeg, out int rLeg,
+                                  out int lArmHeldFrames, out int rArmHeldFrames,
+                                  out int lLegHeldFrames, out int rLegHeldFrames) {
+            lArm = leftArmGate.CurrentState == LimbGate.State.Held ? 1 : 0;
+            rArm = rightArmGate.CurrentState == LimbGate.State.Held ? 1 : 0;
+            lLeg = leftLegGate.CurrentState == LimbGate.State.Held ? 1 : 0;
+            rLeg = rightLegGate.CurrentState == LimbGate.State.Held ? 1 : 0;
+            lArmHeldFrames = leftArmGate.HeldFrames;
+            rArmHeldFrames = rightArmGate.HeldFrames;
+            lLegHeldFrames = leftLegGate.HeldFrames;
+            rLegHeldFrames = rightLegGate.HeldFrames;
+        }
+
+        /// <summary>DIAG-ONLY (P0 acceptance §6/§8): cumulative gate counters — hold starts and re-acquires
+        /// per limb, for the acceptance evidence table.</summary>
+        public void GetGateCounters(out long holds, out long reacquires, out long confFailures) {
+            holds = leftArmGate.HoldEvents + rightArmGate.HoldEvents + leftLegGate.HoldEvents + rightLegGate.HoldEvents;
+            reacquires = leftArmGate.ReacquireEvents + rightArmGate.ReacquireEvents + leftLegGate.ReacquireEvents + rightLegGate.ReacquireEvents;
+            confFailures = leftArmGate.ConfidenceFailures + rightArmGate.ConfidenceFailures
+                         + leftLegGate.ConfidenceFailures + rightLegGate.ConfidenceFailures;
+        }
+
         /// <summary>Optional diagnostics sink for P0-1. Logs only limb VALID↔HELD transitions + periodic
         /// aggregates — never per-frame for healthy joints.</summary>
         public void SetLogger(ILogService log) {
