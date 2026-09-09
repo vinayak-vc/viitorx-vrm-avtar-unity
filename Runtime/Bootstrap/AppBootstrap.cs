@@ -77,6 +77,21 @@ namespace VirtualMirror.App {
                  "packet interval at ~21 fps is ~48 ms, so 35-50 ms usually always has a future sample.")]
         [SerializeField] private float poseInterpolationDelayMs = 40f;
 
+        [Tooltip("ARM RETARGET V1: solve the arms with the quaternion aim solver (elbow-plane roll) instead of " +
+                 "the Kalidokit Euler branch. The audit measured the Euler branch at 28.2 deg mean / 47.5 deg " +
+                 "max direction error with 20.2 deg L/R asymmetry on symmetric input; the aim solver measures " +
+                 "0.0 deg on the same fixtures. Untick to A/B against the old path or to roll back. " +
+                 "Live-tunable.")]
+        [SerializeField] private bool kalidokitAimArms = true;
+
+        [Tooltip("DIAG-ONLY (retargeting audit §12): log, per traced bone, the WANTED bone direction (from the " +
+                 "landmarks the solver consumed) next to the ACHIEVED normalized-bone direction plus the error " +
+                 "angle. Turns 'the skeleton looks right but the avatar looks wrong' into a number. Drives no " +
+                 "behaviour. Leave OFF except while auditing — it is chatty.")]
+        [SerializeField] private bool kalidokitDirectionTrace = false;
+        [Tooltip("Throttle for the direction trace: log every Nth applied pose frame (~21 fps, so 60 is ~3 s).")]
+        [SerializeField] private int kalidokitDirectionTraceEveryFrames = 60;
+
         [Tooltip("P0-1: a limb (arm/leg) accepts a fresh Kalidokit solve only when its weakest driving joint's " +
                  "confidence is at least this; below it, the limb HOLDS its last valid rotation instead of " +
                  "collapsing toward the origin on an invalid/occluded joint. 0 disables the gate.")]
@@ -340,6 +355,8 @@ namespace VirtualMirror.App {
                         kalidokitControlRig.SetSpineBendDynamics(kalidokitSpineBendBaselineTau);
                         kalidokitControlRig.SetTorsoYawScale(kalidokitTorsoYawScale);
                         kalidokitControlRig.SetLimbConfidence(limbConfidenceThreshold); // P0-1 live-tunable gate
+                        kalidokitControlRig.SetUseAimArms(kalidokitAimArms);            // ARM RETARGET V1 (live A/B)
+                        kalidokitControlRig.SetDirectionTrace(kalidokitDirectionTrace, kalidokitDirectionTraceEveryFrames);
                         kalidokitControlRig.Apply(filtered);
                     }
                 } else {

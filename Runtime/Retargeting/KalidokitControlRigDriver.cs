@@ -139,6 +139,39 @@ namespace VirtualMirror.Retargeting {
         private long appliedFrameCounter;
         private const int AggregateLogEvery = 300;       // ~10-15 s: periodic held/reacquire aggregate
 
+        // ARM RETARGET V1 (docs/UNITY_ARM_RETARGET_V1_2026-09-08.md). The Kalidokit arm branch was measured
+        // at 28.2 deg mean / 47.5 deg max direction error with 20.2 deg of left/right asymmetry on a
+        // SYMMETRIC input; <see cref="ArmAimSolver"/> replaces it with a quaternion-native aim solve whose
+        // roll is pinned by the elbow plane. The rest basis is MEASURED from this rig at Bind (never
+        // hardcoded), so an A-pose avatar needs no calibration. useAimArms=false restores the old Euler
+        // path unchanged, for A/B and rollback.
+        private bool useAimArms = true;
+        private ArmRestBasis leftArmRest;
+        private ArmRestBasis rightArmRest;
+        private ArmRollState leftArmRoll;
+        private ArmRollState rightArmRoll;
+        private ArmAimResult leftArmAim;      // last solve, for the direction trace
+        private ArmAimResult rightArmAim;
+
+        // DIAG-ONLY (UNITY_RETARGETING_AUDIT_2026-09-08 §12): direction trace. When enabled, logs — per traced
+        // bone, every Nth applied frame — the WANTED bone direction (derived from the same landmark array the
+        // solver consumed) next to the ACHIEVED normalized-bone direction, plus the error angle and the solver
+        // euler that produced it. This is what makes "the skeleton is right but the avatar is wrong" a measured
+        // number instead of an impression. Default OFF; drives no behaviour, allocates nothing per frame.
+        //
+        // "Wanted" accounts for the two conventions the retarget already relies on:
+        //  * Kalidokit's left/right CROSS-map — the avatar's LEFT arm is solved from the source RIGHT arm
+        //    (landmarks 12/14/16), so the trace compares against those same landmarks; and
+        //  * the mirror — a mirror reflects across the sagittal plane, so the wanted direction is the source
+        //    segment with X negated. Together these two are the intended mirror behaviour, not an error.
+        // Both the control-rig bones and PoseFrame live in the avatar-model frame (X = avatar's LEFT, Y = up,
+        // Z = avatar's BACK), and ApplyRootPosition only TRANSLATES the root, so world directions are
+        // directly comparable.
+        private bool traceDirections;
+        private int traceEveryFrames = 60;
+        private Transform leftFoot;      // diag-only: needed to read the lower-leg direction
+        private Transform rightFoot;
+
         public bool IsBound {
             get {
                 return bound;
@@ -184,6 +217,8 @@ namespace VirtualMirror.Retargeting {
             leftLowerLeg = controlRig.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
             rightUpperLeg = controlRig.GetBoneTransform(HumanBodyBones.RightUpperLeg);
             rightLowerLeg = controlRig.GetBoneTransform(HumanBodyBones.RightLowerLeg);
+            leftFoot = controlRig.GetBoneTransform(HumanBodyBones.LeftFoot);    // diag-only (direction trace)
+            rightFoot = controlRig.GetBoneTransform(HumanBodyBones.RightFoot);
             // Raw skeleton hands for the post-Process wrist bend (the control rig writes to these via Process
             // each frame, so the wrist must be applied to them AFTER Process — see ApplyWrist / AppBootstrap).
             UnityEngine.Animator rawAnimator = vrm.GetComponentInChildren<UnityEngine.Animator>();
@@ -195,6 +230,7 @@ namespace VirtualMirror.Retargeting {
             rightArmGate.Reset();
             leftLegGate.Reset();
             rightLegGate.Reset();
+            BuildArmRestBases();      // ARM RETARGET V1: measure this rig's arm rest orientation, once
             BindFingers();
             bound = hips != null || leftUpperArm != null || rightUpperArm != null;
         }
@@ -318,11 +354,23 @@ namespace VirtualMirror.Retargeting {
                 ApplyBone(chest, new Vector3(bend * 0.5f, spineYaw * ChestYawDamp, spineRoll * ChestYawDamp));
             }
             // P0-1: confidence-gated arms. Kalidokit cross-maps sides — pose.*Left is solved from landmarks
-            // 12/14/16 (right shoulder/elbow/wrist), pose.*Right from 11/13/15 — so gate on those.
-            ApplyLimb(leftArmGate, "leftArm", Min3(conf[12], conf[14], conf[16]),
-                      leftUpperArm, pose.UpperArmLeft, leftLowerArm, pose.LowerArmLeft);
-            ApplyLimb(rightArmGate, "rightArm", Min3(conf[11], conf[13], conf[15]),
-                      rightUpperArm, pose.UpperArmRight, rightLowerArm, pose.LowerArmRight);
+            // 12/14/16 (right shoulder/elbow/wrist), pose.*Right from 11/13/15 — so gate on those. ARM
+            // RETARGET V1 keeps that cross-map (it IS the intended mirror) and only replaces the maths that
+            // turns those three landmarks into two rotations. The old Euler path stays reachable via
+            // useAimArms=false for A/B and rollback.
+            if (useAimArms) {
+                ApplyAimArm(leftArmGate, "leftArm", Min3(conf[12], conf[14], conf[16]),
+                            leftUpperArm, leftLowerArm, leftArmRest, ref leftArmRoll,
+                            12, 14, 16, out leftArmAim);
+                ApplyAimArm(rightArmGate, "rightArm", Min3(conf[11], conf[13], conf[15]),
+                            rightUpperArm, rightLowerArm, rightArmRest, ref rightArmRoll,
+                            11, 13, 15, out rightArmAim);
+            } else {
+                ApplyLimb(leftArmGate, "leftArm", Min3(conf[12], conf[14], conf[16]),
+                          leftUpperArm, pose.UpperArmLeft, leftLowerArm, pose.LowerArmLeft);
+                ApplyLimb(rightArmGate, "rightArm", Min3(conf[11], conf[13], conf[15]),
+                          rightUpperArm, pose.UpperArmRight, rightLowerArm, pose.LowerArmRight);
+            }
             // Hands: Kalidokit derives the Hand rotation from the body-pose hand points (wrist + pinky/index
             // MCPs — indices 15/17/19 for the right, 16/18/20 for the left). On the OAK whole-body stream
             // those hand points (17-22) are often ALL ZERO (not provided), so FindRotation(wrist, origin)
@@ -347,6 +395,9 @@ namespace VirtualMirror.Retargeting {
             ApplyBone(hips, new Vector3(0f, hipsYaw * HipsYawDamp, hipsRoll * HipsYawDamp));
 
             appliedFrameCounter = appliedFrameCounter + 1;
+            if (traceDirections) {
+                TraceDirections(pose);
+            }
             if (limbLogService != null && appliedFrameCounter % AggregateLogEvery == 0) {
                 limbLogService.Log(LogLevel.Info,
                     "[P0-1] aggregate frames=" + appliedFrameCounter
@@ -384,6 +435,232 @@ namespace VirtualMirror.Retargeting {
             return Mathf.Min(a, Mathf.Min(b, c));
         }
 
+        // ==================== ARM RETARGET V1 ====================
+
+        /// <summary>
+        /// Switch the arm branch between <see cref="ArmAimSolver"/> (true, default) and the original
+        /// Kalidokit Euler path (false). Flipping it resets the arm gates + roll state, because the gate's
+        /// held payload and the roll history are per-formulation — holding one path's pose into the other
+        /// would apply a stale rotation for one frame.
+        /// </summary>
+        public void SetUseAimArms(bool enabled) {
+            if (useAimArms == enabled) {
+                return;
+            }
+            useAimArms = enabled;
+            leftArmGate.Reset();
+            rightArmGate.Reset();
+            leftArmRoll.Reset();
+            rightArmRoll.Reset();
+        }
+
+        // The control-rig REST FRAME: the frame in which every control bone rests at identity rotation.
+        // UniVRM parents the control bones under a "Runtime Control Rig" transform that itself starts at
+        // identity, so that transform's live rotation IS the rest frame. Reading it per frame (instead of
+        // assuming world == model) keeps the solve correct if the avatar root is ever rotated.
+        private Quaternion RigFrame() {
+            if (hips != null && hips.parent != null) {
+                return hips.parent.rotation;
+            }
+            return Quaternion.identity;
+        }
+
+        // Measure both arms' rest orientation from the live rig at bind time. `lateral` and `up` are derived
+        // from the rig itself (upper-arm span and hip->spine), so the rest elbow hinge needs no world
+        // constant and no per-avatar tuning.
+        private void BuildArmRestBases() {
+            leftArmRest = default(ArmRestBasis);
+            rightArmRest = default(ArmRestBasis);
+            leftArmRoll.Reset();
+            rightArmRoll.Reset();
+            Quaternion toRig = Quaternion.Inverse(RigFrame());
+            Vector3 leftUpper = RestSegment(toRig, leftUpperArm, leftLowerArm);
+            Vector3 leftLower = RestSegment(toRig, leftLowerArm, leftHand);
+            Vector3 rightUpper = RestSegment(toRig, rightUpperArm, rightLowerArm);
+            Vector3 rightLower = RestSegment(toRig, rightLowerArm, rightHand);
+            // Lateral = right upper arm -> left upper arm, i.e. the avatar's LEFT. Up = hips -> spine.
+            Vector3 lateral = Vector3.zero;
+            if (leftUpperArm != null && rightUpperArm != null) {
+                lateral = toRig * (leftUpperArm.position - rightUpperArm.position);
+            }
+            Vector3 up = RestSegment(toRig, hips, spine);
+            if (up.sqrMagnitude < 1e-8f) {
+                up = Vector3.up;
+            }
+            leftArmRest = ArmAimSolver.BuildRestBasis(leftUpper, leftLower, lateral, up);
+            rightArmRest = ArmAimSolver.BuildRestBasis(rightUpper, rightLower, lateral, up);
+            if (limbLogService != null) {
+                limbLogService.Log(LogLevel.Info,
+                    "[ARM-V1] rest basis measured: left(valid=" + leftArmRest.Valid
+                    + " upper=" + Fmt(leftArmRest.UpperDir) + " lower=" + Fmt(leftArmRest.LowerDir)
+                    + " hinge=" + Fmt(leftArmRest.BendNormal) + ")"
+                    + " right(valid=" + rightArmRest.Valid
+                    + " upper=" + Fmt(rightArmRest.UpperDir) + " lower=" + Fmt(rightArmRest.LowerDir)
+                    + " hinge=" + Fmt(rightArmRest.BendNormal) + ")");
+            }
+        }
+
+        private static Vector3 RestSegment(Quaternion toRig, Transform bone, Transform child) {
+            if (bone == null || child == null) {
+                return Vector3.zero;
+            }
+            return toRig * (child.position - bone.position);
+        }
+
+        /// <summary>
+        /// Solve + apply one arm through <see cref="ArmAimSolver"/>, still behind the P0-1 confidence gate.
+        /// <paramref name="shoulderIndex"/>/<paramref name="elbowIndex"/>/<paramref name="wristIndex"/> are
+        /// the source landmarks for THIS avatar bone under Kalidokit's cross-map (preserved deliberately).
+        /// </summary>
+        private void ApplyAimArm(LimbGate gate, string name, float limbConf,
+                                 Transform upperBone, Transform lowerBone,
+                                 ArmRestBasis rest, ref ArmRollState roll,
+                                 int shoulderIndex, int elbowIndex, int wristIndex,
+                                 out ArmAimResult result) {
+            // The solver works in the rig rest frame; landmarks[] is Kalidokit convention (Y DOWN).
+            result = ArmAimSolver.Solve(
+                KalidokitToRig(landmarks[shoulderIndex]),
+                KalidokitToRig(landmarks[elbowIndex]),
+                KalidokitToRig(landmarks[wristIndex]),
+                rest, ref roll, !mirrorX);
+
+            // A degenerate solve (missing shoulder/elbow) is treated as zero confidence, so the gate HOLDS
+            // the last valid rotation instead of the caller inventing one.
+            float effectiveConf = result.Valid ? limbConf : 0f;
+            Quaternion targetUpper;
+            Quaternion targetLower;
+            bool transitioned;
+            if (gate.Resolve(effectiveConf, limbConfidenceThreshold, result.UpperRig, result.LowerRig,
+                             out targetUpper, out targetLower, out transitioned)) {
+                // Rig-frame rotation -> bone-local. The upper arm's parent may be Shoulder or Chest (either
+                // way it is driven or left at rest by the existing torso path, which this task does not
+                // touch), so read the parent's live rotation rather than assuming the chain.
+                Quaternion rigFrame = RigFrame();
+                if (upperBone != null) {
+                    Quaternion parentRig = upperBone.parent != null
+                        ? Quaternion.Inverse(rigFrame) * upperBone.parent.rotation
+                        : Quaternion.identity;
+                    ApplyBoneRotation(upperBone, Quaternion.Inverse(parentRig) * targetUpper);
+                }
+                // The forearm is expressed relative to the upper arm, so the rig frame cancels exactly.
+                ApplyBoneRotation(lowerBone, Quaternion.Inverse(targetUpper) * targetLower);
+            }
+            if (transitioned && limbLogService != null) {
+                bool held = gate.CurrentState == LimbGate.State.Held;
+                limbLogService.Log(LogLevel.Info,
+                    "[P0-1] limb=" + name + " conf=" + effectiveConf.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                    + " thr=" + limbConfidenceThreshold.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                    + " state=" + gate.CurrentState + " action=" + (held ? "HOLD" : "REACQUIRE")
+                    + " heldFrames=" + gate.HeldFrames + " confFailures=" + gate.ConfidenceFailures);
+            }
+        }
+
+        // landmarks[] is in Kalidokit convention (X = subject's LEFT, Y DOWN, Z = BACK); the control-rig rest
+        // frame is the same but Y UP. Pure component map, so it serves for positions and deltas alike.
+        private static Vector3 KalidokitToRig(Vector3 v) {
+            return new Vector3(v.x, -v.y, v.z);
+        }
+
+        /// <summary>DIAG-ONLY: enable the per-bone direction trace (see the <c>traceDirections</c> field).
+        /// Default OFF. <paramref name="everyFrames"/> throttles the log (1 = every applied frame).</summary>
+        public void SetDirectionTrace(bool enabled, int everyFrames) {
+            traceDirections = enabled;
+            traceEveryFrames = everyFrames > 0 ? everyFrames : 1;
+        }
+
+        // DIAG-ONLY. Reads the CURRENT control-rig bone directions (the transforms were written moments ago in
+        // Apply, so the hierarchy is already up to date) and compares each against the direction the source
+        // landmarks call for. Logs nothing when the logger is absent or this frame is throttled out.
+        private void TraceDirections(KalidokitFullPose pose) {
+            if (limbLogService == null || appliedFrameCounter % traceEveryFrames != 0) {
+                return;
+            }
+            TraceBone("leftUpperArm", leftUpperArm, leftLowerArm, 12, 14, pose.UpperArmLeft);
+            TraceBone("leftLowerArm", leftLowerArm, leftHand, 14, 16, pose.LowerArmLeft);
+            TraceBone("rightUpperArm", rightUpperArm, rightLowerArm, 11, 13, pose.UpperArmRight);
+            TraceBone("rightLowerArm", rightLowerArm, rightHand, 13, 15, pose.LowerArmRight);
+            TraceBone("leftUpperLeg", leftUpperLeg, leftLowerLeg, 24, 26, pose.UpperLegLeft);
+            TraceBone("leftLowerLeg", leftLowerLeg, leftFoot, 26, 28, pose.LowerLegLeft);
+            TraceBone("rightUpperLeg", rightUpperLeg, rightLowerLeg, 23, 25, pose.UpperLegRight);
+            TraceBone("rightLowerLeg", rightLowerLeg, rightFoot, 25, 27, pose.LowerLegRight);
+            if (useAimArms) {
+                // ARM RETARGET V1 §21: the aim solver's own inputs/outputs, so a live log can separate a
+                // direction error from a roll error (a spinning roll at 0 deg direction error is the
+                // helicopter failure mode, and direction accuracy alone would hide it).
+                TraceAimArm("leftArm", leftArmAim, leftUpperArm, leftLowerArm, leftHand);
+                TraceAimArm("rightArm", rightArmAim, rightUpperArm, rightLowerArm, rightHand);
+            }
+            // Torso facing: the chest's forward axis vs the source shoulder line's normal. This is the DOF
+            // torsoYawScale gates, so it is traced separately from the limb directions.
+            if (chest != null) {
+                Vector3 shoulderLine = KalidokitToRig(landmarks[11] - landmarks[12]);
+                Vector3 sourceForward = Vector3.Cross(Vector3.up, shoulderLine);
+                Vector3 wantForward = MirrorX(sourceForward);
+                Vector3 gotForward = chest.forward * -1f;   // avatar faces -Z in the model frame
+                LogTrace("chestFacing", wantForward, gotForward, Vector3.zero);
+            }
+        }
+
+        private void TraceBone(string name, Transform bone, Transform child, int sourceFrom, int sourceTo, Vector3 solvedEuler) {
+            if (bone == null || child == null) {
+                return;
+            }
+            Vector3 want = MirrorX(KalidokitToRig(landmarks[sourceTo] - landmarks[sourceFrom]));
+            Vector3 got = child.position - bone.position;
+            LogTrace(name, want, got, solvedEuler);
+        }
+
+        // DIAG-ONLY (ARM RETARGET V1 §21).
+        private void TraceAimArm(string name, ArmAimResult aim, Transform upperBone, Transform lowerBone, Transform hand) {
+            if (!aim.Valid || upperBone == null || lowerBone == null) {
+                return;
+            }
+            Quaternion toRig = Quaternion.Inverse(RigFrame());
+            Vector3 gotUpper = toRig * (lowerBone.position - upperBone.position);
+            Vector3 gotLower = hand != null ? toRig * (hand.position - lowerBone.position) : Vector3.zero;
+            float upperErr = gotUpper.sqrMagnitude > 1e-8f ? Vector3.Angle(aim.TargetUpperDir, gotUpper) : -1f;
+            float lowerErr = gotLower.sqrMagnitude > 1e-8f ? Vector3.Angle(aim.TargetLowerDir, gotLower) : -1f;
+            System.Globalization.CultureInfo ci = System.Globalization.CultureInfo.InvariantCulture;
+            limbLogService.Log(LogLevel.Info,
+                "[ARM-V1-TRACE] frame=" + appliedFrameCounter + " arm=" + name
+                + " targetUpperDir=" + Fmt(aim.TargetUpperDir) + " gotUpperDir=" + Fmt(gotUpper.normalized)
+                + " upperErrDeg=" + upperErr.ToString("F1", ci)
+                + " targetForearmDir=" + Fmt(aim.TargetLowerDir) + " gotForearmDir=" + Fmt(gotLower.normalized)
+                + " forearmErrDeg=" + lowerErr.ToString("F1", ci)
+                + " bendDeg=" + aim.BendDeg.ToString("F1", ci)
+                + " rollDeg=" + aim.RollDeg.ToString("F1", ci)
+                + " bendNormal=" + Fmt(aim.BendNormal)
+                + " normalSource=" + aim.NormalSource);
+        }
+
+        private void LogTrace(string name, Vector3 want, Vector3 got, Vector3 solvedEuler) {
+            if (want.sqrMagnitude < 1e-8f || got.sqrMagnitude < 1e-8f) {
+                return;
+            }
+            want = want.normalized;
+            got = got.normalized;
+            float error = Vector3.Angle(want, got);
+            limbLogService.Log(LogLevel.Info,
+                "[RETARGET-TRACE] frame=" + appliedFrameCounter
+                + " bone=" + name
+                + " want=" + Fmt(want) + " got=" + Fmt(got)
+                + " errDeg=" + error.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)
+                + " solverEulerDeg=" + Fmt(solvedEuler * Mathf.Rad2Deg));
+        }
+
+        // A mirror reflects across the sagittal plane; combined with Kalidokit's left/right cross-map this is
+        // the intended mirror behaviour (see the traceDirections field comment). When mirrorX is ON the input
+        // landmarks were ALREADY reflected before the solve, so reflecting again would compare against the
+        // wrong side — hence the conditional rather than an unconditional negate.
+        private Vector3 MirrorX(Vector3 v) {
+            return mirrorX ? v : new Vector3(-v.x, v.y, v.z);
+        }
+
+        private static string Fmt(Vector3 v) {
+            System.Globalization.CultureInfo ci = System.Globalization.CultureInfo.InvariantCulture;
+            return "(" + v.x.ToString("F2", ci) + "," + v.y.ToString("F2", ci) + "," + v.z.ToString("F2", ci) + ")";
+        }
+
         // Torso-yaw conditioner (ADR-027): rate-limit (rejects the +/-180 ambiguity flips while still
         // following a genuine gradual turn) -> low-pass -> soft dead-zone (small/noisy yaw snaps to frontal).
         // Self-seeds per signal (NaN sentinel) so there is no startup slew. Input/output radians.
@@ -410,6 +687,19 @@ namespace VirtualMirror.Retargeting {
             // (matches three-vrm getNormalizedBoneNode). Slerp for damping.
             Quaternion target = KMath.ThreeEulerToUnity(eulerRadians, eulerSigns, flipQuat);
             bone.localRotation = Quaternion.Slerp(bone.localRotation, target, lerpAmount);
+        }
+
+        /// <summary>
+        /// Quaternion form of <see cref="ApplyBone"/>, for the quaternion-native arm solver: identical
+        /// ownership and identical <see cref="lerpAmount"/> damping, minus the Euler round-trip that
+        /// <c>ThreeEulerToUnity</c> would otherwise force (ARM RETARGET V1 §5). Normalized-bone rest is
+        /// identity, so the supplied rotation IS the absolute local rotation.
+        /// </summary>
+        private void ApplyBoneRotation(Transform bone, Quaternion localRotation) {
+            if (bone == null) {
+                return;
+            }
+            bone.localRotation = Quaternion.Slerp(bone.localRotation, localRotation, lerpAmount);
         }
 
         public void SetFingerTuning(Vector3 curlAxis, float weight) {
@@ -491,6 +781,8 @@ namespace VirtualMirror.Retargeting {
             spineYawRate = float.NaN;
             hipsYawSmooth = 0f;
             spineYawSmooth = 0f;
+            leftArmRoll.Reset();          // ARM RETARGET V1: drop the carried elbow-plane roll history
+            rightArmRoll.Reset();
         }
 
         // Median of a small buffer (used to seed the spine-bend baseline robustly against a startup outlier).

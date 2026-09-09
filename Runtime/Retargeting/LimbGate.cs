@@ -23,7 +23,18 @@ namespace VirtualMirror.Retargeting {
 
         private Vector3 lastUpper;
         private Vector3 lastLower;
+        // ARM RETARGET V1: the aim solver is quaternion-native (no Euler round-trip), so the arm path holds
+        // quaternions in these parallel slots. Same state machine, same counters, same hold/reacquire
+        // semantics — only the payload type differs. The leg path keeps using the Vector3 slots unchanged.
+        private Quaternion lastUpperRotation = Quaternion.identity;
+        private Quaternion lastLowerRotation = Quaternion.identity;
         private bool hasValid;
+
+        private enum Decision {
+            Fresh,     // confidence OK → apply the fresh solve
+            Hold,      // confidence low, but a valid pose exists → hold it
+            Nothing,   // confidence low and nothing valid ever seen → leave the bones alone
+        }
 
         public State CurrentState = State.Valid;
         public int HeldFrames;
@@ -41,28 +52,69 @@ namespace VirtualMirror.Retargeting {
         /// </summary>
         public bool Resolve(float limbConf, float threshold, Vector3 freshUpper, Vector3 freshLower,
                             out Vector3 targetUpper, out Vector3 targetLower, out bool transitioned) {
+            Decision decision = Step(limbConf, threshold, out transitioned);
+            if (decision == Decision.Fresh) {
+                lastUpper = freshUpper;
+                lastLower = freshLower;
+                targetUpper = freshUpper;
+                targetLower = freshLower;
+                return true;
+            }
+            if (decision == Decision.Hold) {
+                targetUpper = lastUpper;
+                targetLower = lastLower;
+                return true;
+            }
+            // Nothing valid ever seen — do NOT invent a rotation (that would be the origin-collapse bug).
+            targetUpper = Vector3.zero;
+            targetLower = Vector3.zero;
+            return false;
+        }
+
+        /// <summary>
+        /// Quaternion form of <see cref="Resolve(float,float,Vector3,Vector3,out Vector3,out Vector3,out bool)"/>,
+        /// used by the ARM RETARGET V1 aim solver. Identical gate semantics: fresh solve when confident,
+        /// otherwise the last valid rotation; false only when nothing valid has ever been seen (the caller
+        /// then leaves the bones at rest rather than snapping them to identity).
+        /// </summary>
+        public bool Resolve(float limbConf, float threshold, Quaternion freshUpper, Quaternion freshLower,
+                            out Quaternion targetUpper, out Quaternion targetLower, out bool transitioned) {
+            Decision decision = Step(limbConf, threshold, out transitioned);
+            if (decision == Decision.Fresh) {
+                lastUpperRotation = freshUpper;
+                lastLowerRotation = freshLower;
+                targetUpper = freshUpper;
+                targetLower = freshLower;
+                return true;
+            }
+            if (decision == Decision.Hold) {
+                targetUpper = lastUpperRotation;
+                targetLower = lastLowerRotation;
+                return true;
+            }
+            targetUpper = Quaternion.identity;
+            targetLower = Quaternion.identity;
+            return false;
+        }
+
+        // The shared VALID/HELD state machine + counters. Both Resolve overloads run exactly this, so the
+        // arm (quaternion) and leg (euler) paths cannot drift apart in gate behaviour.
+        private Decision Step(float limbConf, float threshold, out bool transitioned) {
             transitioned = false;
             if (limbConf >= threshold) {
                 if (CurrentState == State.Held && hasValid) {
                     ReacquireEvents = ReacquireEvents + 1;
                     transitioned = true;
                 }
-                lastUpper = freshUpper;
-                lastLower = freshLower;
                 hasValid = true;
                 HeldFrames = 0;
                 CurrentState = State.Valid;
-                targetUpper = freshUpper;
-                targetLower = freshLower;
-                return true;
+                return Decision.Fresh;
             }
 
             ConfidenceFailures = ConfidenceFailures + 1;
             if (!hasValid) {
-                // Nothing valid ever seen — do NOT invent a rotation (that would be the origin-collapse bug).
-                targetUpper = Vector3.zero;
-                targetLower = Vector3.zero;
-                return false;
+                return Decision.Nothing;
             }
             if (CurrentState != State.Held) {
                 HoldEvents = HoldEvents + 1;
@@ -70,9 +122,7 @@ namespace VirtualMirror.Retargeting {
             }
             CurrentState = State.Held;
             HeldFrames = HeldFrames + 1;
-            targetUpper = lastUpper;
-            targetLower = lastLower;
-            return true;
+            return Decision.Hold;
         }
 
         public void Reset() {
