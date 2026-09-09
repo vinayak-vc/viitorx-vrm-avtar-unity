@@ -17,12 +17,22 @@ namespace VirtualMirror.Retargeting {
     /// Per-arm roll continuity state. The elbow plane is the roll reference, and a straight arm has no
     /// elbow plane — so the last well-determined normal is carried across those frames instead of letting
     /// the roll snap to an arbitrary value. Reset on bind / recalibrate.
+    ///
+    /// V2 (docs/UNITY_ARM_RETARGET_V2_FORENSICS_2026-09-09.md §2) adds the hysteresis latch and the
+    /// flip-confirmation counter that together stop the elbow plane chattering around a single bend
+    /// threshold. All fields are value types — the struct stays allocation-free on the per-frame path.
     /// </summary>
     public struct ArmRollState {
-        public Vector3 BendNormal;   // last well-determined bend normal (rig frame); zero = none yet
+        public Vector3 BendNormal;      // last ACCEPTED bend normal (rig frame); zero = none yet
+        public bool PlaneLocked;        // hysteresis latch: currently trusting the elbow plane
+        public Vector3 PendingNormal;   // a candidate the continuity guard rejected, under confirmation
+        public int PendingCount;        // consecutive self-consistent proposals of PendingNormal
 
         public void Reset() {
             BendNormal = Vector3.zero;
+            PlaneLocked = false;
+            PendingNormal = Vector3.zero;
+            PendingCount = 0;
         }
     }
 
@@ -31,6 +41,9 @@ namespace VirtualMirror.Retargeting {
         ElbowPlane = 0,   // the elbow is meaningfully bent: the source geometry determines the roll
         Held = 1,         // arm (near) straight: carried the previous normal, re-orthogonalised
         RestCarried = 2,  // arm (near) straight and no history: rest normal through the roll-free swing
+        Guarded = 3,      // elbow bent enough, but the candidate normal was rejected as an implausible
+                          // one-frame roll jump (or an outright plane reversal) and the previous one held
+        Slewed = 4,       // a confirmed large roll change, being stepped in at the bounded rate
     }
 
     public struct ArmAimResult {
@@ -80,19 +93,87 @@ namespace VirtualMirror.Retargeting {
     /// by <see cref="ArmRollState"/>. No world up-vector and no global reference enters the per-frame
     /// solve — only the rest basis, measured once from the rig.
     ///
+    /// ROLL V2 (live evidence, 2026-09-09). "Cannot flip by itself" is true of the cross product but NOT of
+    /// the arm: passing THROUGH straight swaps the plane's sign, and near straight the landmark noise does
+    /// the same. V1 switched roll source on a single bend threshold, and the live capture found the flips
+    /// piled up exactly there — 7 of 10 roll steps above 90 deg inside the 10.0-12.5 deg bend bin that
+    /// straddles it, none at all above 12.5 deg. Three additions, all confined to the roll reference:
+    /// (1) HYSTERESIS — separate enter/exit bends, whose dead band contains the whole hot zone;
+    /// (2) a CONTINUITY GUARD — a candidate plane that reverses, or implies more than
+    /// <see cref="RollStepMaxDeg"/> of roll in one frame, is not believed;
+    /// (3) DEBOUNCED RE-ACQUISITION — a rejected candidate that keeps being proposed coherently while the
+    /// elbow is clearly bent is eventually accepted, stepped in at <see cref="RollSlewMaxDeg"/> per frame.
+    /// Bone DIRECTIONS are untouched by all three: <c>LookRotation(dir, normal)</c> maps forward onto
+    /// <c>dir</c> whatever the normal is, so the guard can only ever change the roll.
+    ///
     /// Allocation-free and branch-light: pure struct math, safe on the per-frame path.
     /// </summary>
     public static class ArmAimSolver {
         /// <summary>
-        /// sin(elbow bend) below which the elbow plane is treated as carrying no roll information.
-        /// 0.2 ~= 11.5 deg of bend (or 168.5 deg — a hyperextended arm is equally uninformative). Chosen so
-        /// a hanging, essentially straight arm holds its roll instead of chasing landmark noise, while any
-        /// deliberate bend drives the roll from real geometry.
+        /// sin(elbow bend) required to START trusting the elbow plane. 0.35 ~= 20.5 deg.
+        ///
+        /// V2, measured. The V1 value was a SINGLE threshold at sin 0.2 (11.54 deg), and the live capture of
+        /// 2026-09-09 showed the failure sitting exactly on it: binning every wrapped roll step of the dense
+        /// (~40 Hz) trace by elbow bend gave 7 of the 10 steps above 90 deg inside the 10.0-12.5 deg bin
+        /// (n=79, p90 63.8 deg, p99 165.3 deg, max 176.9 deg), 2 more in 7.5-10 deg, and ZERO anywhere above
+        /// 12.5 deg (n=2310, worst p99 18.6 deg). A single threshold inside that band makes the solver
+        /// alternate between ElbowPlane and Held from frame to frame, and each alternation can reverse
+        /// cross(upper, forearm) — a 180 deg roll flip.
+        ///
+        /// 0.35 clears the whole measured unreliable region by ~8 deg. Above it the live data contains
+        /// no >90 deg roll step at all and a single >45 deg step in 2125 samples (0.05%).
         /// </summary>
-        public const float BendSinMin = 0.2f;
+        public const float BendSinEnter = 0.35f;
+
+        /// <summary>
+        /// sin(elbow bend) below which a locked elbow plane is RELEASED. 0.15 ~= 8.6 deg.
+        ///
+        /// Deliberately below the 10.0-12.5 deg hot zone, so an elbow hovering near the old 11.5 deg
+        /// threshold cannot toggle the state at all: the dead band [8.6 deg, 20.5 deg] strictly contains it.
+        /// Live dwell measurement justifies the width — bend lingers in [11.5, 20) deg for a median of 4 and
+        /// a 95th-percentile of 17 consecutive dense samples (100-425 ms), i.e. long enough for a single
+        /// threshold to chatter many times per crossing.
+        /// </summary>
+        public const float BendSinExit = 0.15f;
+
+        /// <summary>
+        /// Largest roll change, in degrees about the bone axis, that one frame's fresh elbow plane may
+        /// imply before it is treated as implausible rather than real. The live dense trace contains ZERO
+        /// wrapped roll steps above 90 deg once the elbow is bent past 12.5 deg, and 90 deg in one ~4 ms
+        /// render frame is ~22 000 deg/s — orders of magnitude beyond a human forearm.
+        /// </summary>
+        public const float RollStepMaxDeg = 90f;
+
+        /// <summary>
+        /// Consecutive self-consistent proposals a guard-rejected normal needs before it is believed.
+        /// Without this a genuine re-bend the other way would be locked out forever; with it, noise (which
+        /// does not repeat coherently) cannot overturn a held roll. Only counted while the elbow is bent
+        /// past <see cref="BendSinEnter"/>.
+        /// </summary>
+        public const int FlipConfirmFrames = 6;
+
+        /// <summary>
+        /// Once a large roll change is confirmed, the reference normal is rotated toward it by at most this
+        /// many degrees per solve, so the roll can never step more than this in a single frame. This is a
+        /// bounded rate on ONE signal — the roll reference — not a smoothing filter: bone DIRECTIONS are
+        /// untouched by it, and in normal motion it never engages (the live dense p99 roll step at ~40 Hz is
+        /// 18.9 deg, and the solver runs ~6x faster still). Per-frame rather than per-second to match the
+        /// existing per-frame <c>lerpAmount</c> slerp in the driver.
+        /// </summary>
+        public const float RollSlewMaxDeg = 30f;
 
         // Below this the source segment is degenerate (zero-filled landmark, coincident joints).
         private const float MinSegment = 1e-4f;
+
+        // sin(5 deg)^2. Below this the roll reference is effectively ALONG the bone and carries no twist
+        // information for it — see the fallback in Solve.
+        private const float RollDegenerateSinSq = 0.0076f;
+
+        // cos(RollStepMaxDeg) and cos(RollSlewMaxDeg). The guard compares cosines rather than angles so
+        // the per-frame path carries no acos; the two are equivalent because both bounds are fixed and
+        // cos is monotonically decreasing over [0, 180].
+        private const float CosRollStepMax = 0f;             // cos(90 deg)
+        private const float CosRollSlewMax = 0.8660254f;     // cos(30 deg)
 
         /// <summary>
         /// Measure one arm's rest basis from the live control rig. Call at bind time, once.
@@ -163,12 +244,18 @@ namespace VirtualMirror.Retargeting {
 
             Vector3 cross = Vector3.Cross(upper, fore);
             float bendSin = cross.magnitude;
+            // HYSTERESIS (V2). A higher bar to START trusting the elbow plane than to KEEP trusting it, so
+            // an elbow hovering near the old single threshold cannot alternate between the two roll sources
+            // (that alternation was the measured 180 deg flip — see BendSinEnter).
+            float gate = state.PlaneLocked ? BendSinExit : BendSinEnter;
             Vector3 normal;
-            if (bendSin >= BendSinMin) {
-                normal = cross / bendSin;
-                state.BendNormal = normal;
-                result.NormalSource = ArmNormalSource.ElbowPlane;
+            if (bendSin >= gate) {
+                state.PlaneLocked = true;
+                normal = ResolveNormal(cross / bendSin, upper, bendSin, ref state, out result.NormalSource);
             } else {
+                state.PlaneLocked = false;
+                state.PendingNormal = Vector3.zero;
+                state.PendingCount = 0;
                 normal = CarryNormal(upper, rest, ref state, out result.NormalSource);
             }
             if (normal.sqrMagnitude < MinSegment) {
@@ -182,8 +269,19 @@ namespace VirtualMirror.Retargeting {
             // plane instead of inventing one (§9).
             Quaternion restUpperFrame = Quaternion.LookRotation(rest.UpperDir, rest.BendNormal);
             Quaternion restLowerFrame = Quaternion.LookRotation(rest.LowerDir, rest.BendNormal);
+            // A roll reference lying ALONG a bone cannot orient that bone's twist, and LookRotation would
+            // silently substitute an arbitrary up — the exact pop this guard exists to prevent. The normal
+            // is perpendicular to `upper` by construction, so only the forearm can hit it, and only when a
+            // held normal meets a forearm that has swung onto it (reachable at the guard's rejection
+            // boundary, where held sits ~90 deg from the candidate). Fall back for THAT BONE ONLY to the
+            // roll-free carried reference: FromToRotation has no roll degree of freedom, so it cannot
+            // helicopter, and the upper arm keeps the shared normal.
+            Vector3 lowerUp = normal;
+            if (Vector3.Cross(fore, normal).sqrMagnitude < RollDegenerateSinSq) {
+                lowerUp = Quaternion.FromToRotation(rest.LowerDir, fore) * rest.BendNormal;
+            }
             result.UpperRig = Quaternion.LookRotation(upper, normal) * Quaternion.Inverse(restUpperFrame);
-            result.LowerRig = Quaternion.LookRotation(fore, normal) * Quaternion.Inverse(restLowerFrame);
+            result.LowerRig = Quaternion.LookRotation(fore, lowerUp) * Quaternion.Inverse(restLowerFrame);
 
             result.TargetUpperDir = upper;
             result.TargetLowerDir = fore;
@@ -195,6 +293,93 @@ namespace VirtualMirror.Retargeting {
             result.RollDeg = Vector3.SignedAngle(carried, normal, upper);
             result.Valid = true;
             return result;
+        }
+
+        /// <summary>
+        /// CONTINUITY GUARD (V2). The elbow is bent enough to determine a plane, but a fresh
+        /// <c>cross(upper, forearm)</c> can still reverse — the arm passing through straight swaps its sign,
+        /// and a noisy landmark near straight does the same. Accepting that verbatim is a 180 deg roll flip.
+        ///
+        /// So a candidate is believed only when it is a PLAUSIBLE continuation of the held normal: same
+        /// hemisphere, and no more than <see cref="RollStepMaxDeg"/> of roll about the current bone axis.
+        /// A rejected candidate that keeps being proposed, coherently, while the elbow stays clearly bent is
+        /// eventually believed (<see cref="FlipConfirmFrames"/>) — otherwise a genuine re-bend the other way
+        /// would be locked out forever — and even then it is stepped in at <see cref="RollSlewMaxDeg"/> per
+        /// frame rather than snapped.
+        ///
+        /// Both comparisons are made about the CURRENT bone axis, so swinging the arm is never mistaken for
+        /// rolling it.
+        /// </summary>
+        private static Vector3 ResolveNormal(Vector3 candidate, Vector3 upper, float bendSin,
+                                             ref ArmRollState state, out ArmNormalSource source) {
+            source = ArmNormalSource.ElbowPlane;
+            Vector3 held = Orthogonalise(state.BendNormal, upper);
+            Vector3 fresh = Orthogonalise(candidate, upper);
+            if (held.sqrMagnitude < MinSegment || fresh.sqrMagnitude < MinSegment) {
+                // No usable history (first frame after a reset), or the candidate is parallel to the bone:
+                // nothing to be inconsistent with.
+                state.PendingNormal = Vector3.zero;
+                state.PendingCount = 0;
+                state.BendNormal = candidate;
+                return candidate;
+            }
+            // Both vectors are unit and perpendicular to `upper`, so their dot IS cos(roll step). Every
+            // test here is against a FIXED angle, so comparing cosines decides exactly the same way as
+            // comparing angles — without an acos on the per-frame path (measured: the acos was most of
+            // this guard's cost). The angle itself is only ever needed on the rare slew branch.
+            float cosStep = Vector3.Dot(held, fresh);
+            bool reversed = Vector3.Dot(candidate, state.BendNormal) < 0f;
+            bool believable = cosStep >= CosRollStepMax && !reversed;
+
+            if (believable) {
+                state.PendingNormal = Vector3.zero;
+                state.PendingCount = 0;
+            } else {
+                // Count an implausible candidate as evidence only while the elbow is unambiguously bent —
+                // a candidate computed near the straight limit is exactly the noise this guard rejects.
+                if (bendSin >= BendSinEnter && state.PendingNormal.sqrMagnitude > MinSegment
+                        && Vector3.Dot(candidate, state.PendingNormal) > 0f) {
+                    state.PendingCount = state.PendingCount + 1;
+                } else {
+                    state.PendingCount = bendSin >= BendSinEnter ? 1 : 0;
+                }
+                state.PendingNormal = candidate;
+                if (state.PendingCount < FlipConfirmFrames) {
+                    source = ArmNormalSource.Guarded;
+                    return held;
+                }
+                // Sustained and self-consistent: a real reversal, so let it through the bound below.
+            }
+
+            // ONE rate bound, on BOTH paths. Applying it only to confirmed reversals left the ordinary
+            // accept path free to snap the remainder once the held normal came within RollStepMaxDeg of the
+            // candidate — measured as a 60 deg single-frame jump while walking a reversal in. With the bound
+            // here instead, "no frame moves the roll by more than RollSlewMaxDeg" is an invariant of the
+            // solver rather than a property of one branch.
+            if (cosStep < CosRollSlewMax) {
+                float sign = Vector3.Dot(Vector3.Cross(held, fresh), upper) < 0f ? -1f : 1f;
+                Vector3 stepped = Quaternion.AngleAxis(RollSlewMaxDeg * sign, upper) * held;
+                state.BendNormal = stepped;
+                source = ArmNormalSource.Slewed;
+                return stepped;
+            }
+            state.PendingNormal = Vector3.zero;
+            state.PendingCount = 0;
+            state.BendNormal = candidate;
+            return candidate;
+        }
+
+        // Project a vector onto the plane perpendicular to the bone axis and normalise it. Returns zero when
+        // the vector is (near) parallel to the axis, i.e. carries no roll information about it.
+        private static Vector3 Orthogonalise(Vector3 v, Vector3 axis) {
+            if (v.sqrMagnitude < MinSegment) {
+                return Vector3.zero;
+            }
+            Vector3 projected = v - axis * Vector3.Dot(v, axis);
+            if (projected.sqrMagnitude < 1e-8f) {
+                return Vector3.zero;
+            }
+            return projected.normalized;
         }
 
         // Arm (nearly) straight: the elbow plane carries no roll information. Prefer the last

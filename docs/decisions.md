@@ -489,3 +489,106 @@ Development input is a **video file** (`VideoFileCaptureService`, `sampleVRMFile
   them produce phantom 300° spikes; these fields make joint inversion and rotation spikes measurable.
 - **Consequence:** do not enable sidecar `--recovery`. Do not begin palm/foot work with it on.
   Next step is the upstream F-08 measurement-quality audit, not another downstream layer.
+
+---
+
+## ADR-033 — Arm retargeting V1 (`ArmAimSolver`) confirmed live; kept ON as the default
+
+- **Status:** Accepted 2026-09-09. Implementation ADR context:
+  [`UNITY_ARM_RETARGET_V1_2026-09-08.md`](UNITY_ARM_RETARGET_V1_2026-09-08.md). Live report:
+  [`UNITY_ARM_RETARGET_V1_LIVE_VALIDATION_2026-09-09.md`](UNITY_ARM_RETARGET_V1_LIVE_VALIDATION_2026-09-09.md).
+- **Context:** the V1 arm solver was accepted on offline maths but its §12 on-camera sign-off was
+  outstanding, so `kalidokitAimArms = true` was shipping on deterministic evidence alone. The brief
+  required a live A/B over nine arm motions with a real subject, and explicitly warned that
+  `upperErrDeg`/`forearmErrDeg` measure only the solve→rig→bone path and must **not** be read as
+  proof that tracking is correct.
+- **Decision:** keep `kalidokitAimArms = true`. **No code changed** to reach this decision — the run
+  was evidence-only, as briefed.
+- **Method:** the A/B metric is `[RETARGET-TRACE] errDeg`, whose `want` is the raw landmark direction
+  (exactly what `PoseDebugSkeleton` draws) and whose `got` is the achieved avatar bone. That answers
+  "does the VRM follow the green skeleton" independently of how good the tracking was in a given take,
+  which the solver's own self-check cannot. Both branches ran inside one Play session with the branch
+  toggled mid-Play, so camera, model warm-up and subject were shared.
+- **Evidence (nine motions, both branches):**
+  - avatar-vs-landmark error **35.78° → 0.46°** mean (78×), p95 **107.30° → 0.90°**
+  - elbow reproduction error **21.98° → 0.31°** mean; achieved elbow range **97.9–175.1° → 28.6–179.9°**,
+    i.e. the saturated `lowerArm.x` clamp is gone
+  - L/R asymmetry **22.6° → 0.5°** mean overall, **≤0.2° in every motion** except the one containing
+    a P0 gate hold — the "avatar raises one arm" failure
+  - **within-run control:** leg bones (untouched by the change) moved **1.06×** between branches while
+    arms moved **78×**, so the effect is the code under test, not the subject
+  - the old branch fails **even when tracking is good**: motion 4 landmarks supplied an 86.9° arm
+    elevation and the old avatar reached only 73.0°
+  - bone-length spread **0.00000 m** in both branches; 0 Unity console errors; latency unchanged
+    (p50 24.0 ms sidecar-send → avatar-apply)
+- **Residuals, and where they belong:**
+  - **arm retargeting:** 31 single-frame forearm *twist* pops > 45°, 68 % at elbow bend < 15°, median
+    bend 12.3° against `BendSinMin`'s ≈11.5° threshold; 10 roll steps > 90° in 45 s of dense trace, all
+    below 15° of bend and **zero** above it. Bone *direction* is unaffected. Left unchanged by design.
+  - **upstream landmark/tracking:** now the dominant error source — a 121° elbow reported for a
+    straight hanging arm, and arms held overhead missed entirely for one 15 s window (max tracked
+    elevation 23.7°). The avatar reproduced both faithfully. This is F-08 territory, not retargeting.
+- **Rejected alternative — a custom rig.** Ruled out by measurement: the VRM rig reproduces the tracked
+  pose to **0.31° mean** elbow error and **≤0.1°** arm elevation, with bone lengths constant to five
+  decimals. A new rig cannot improve a 0.3° reproduction error and would reproduce the same wrong
+  landmarks just as faithfully.
+- **Consequence:** next change inside arm scope is `BendSinMin`, validated as its own controlled task.
+  The higher-impact work is upstream 2D elbow/wrist localisation. Roll back at any time with
+  `kalidokitAimArms = false`; the old branch is byte-for-byte intact and was exercised live.
+
+---
+
+## ADR-034 — Arm roll V2: hysteresis + continuity guard on the elbow-plane reference
+
+- **Status:** Accepted 2026-09-09. Report:
+  [`UNITY_ARM_RETARGET_V2_FORENSICS_2026-09-09.md`](UNITY_ARM_RETARGET_V2_FORENSICS_2026-09-09.md).
+  Supersedes the `BendSinMin` limitation recorded as ADR-033 / V1 §16.4.
+- **Context:** V1's live validation left exactly one defect attributable to the arm code — forearm twist
+  pops near a straight elbow. Binning every wrapped roll step of the dense live trace by elbow bend put
+  **7 of the 10 steps above 90° inside the single 10.0–12.5° bin** that straddles `BendSinMin`'s 11.54°,
+  with **none above 12.5°**. The fault was the SINGLE THRESHOLD itself, not its value: any single
+  threshold in that band makes the roll source alternate between `ElbowPlane` and `Held` frame to frame,
+  and each alternation can reverse `cross(upper, forearm)` — a 180° flip.
+- **Decision:** replace the single threshold with a state machine confined to the roll reference:
+  hysteresis (`BendSinEnter` 0.35 / `BendSinExit` 0.15, a dead band that strictly contains the measured
+  hot zone), a continuity guard (reject a reversed candidate, or one implying >90° of roll in a frame),
+  and debounced re-acquisition (6 coherent frames at a clear bend) stepped in at 30°/frame. Bone
+  DIRECTIONS are untouched by construction: `LookRotation(dir, normal)` maps forward onto `dir`
+  whatever the normal is.
+- **Evidence — V1 vs V2 replayed on BYTE-IDENTICAL recorded video input** (a live A/B cannot do this;
+  the subject moves differently in the two passes):
+  - roll steps > 90°: **6 → 0**; > 45°: **10 → 3**; worst single-frame step **145.56° → 65.29°**
+  - bend at the > 45° events: p50 **11.4° → 35.6°** — the residuals are no longer near-straight
+  - the offline model was cross-checked against the shipped C# (Unity live max 63.31° vs model 65.29°)
+  - live video: guard engages 0.2–0.5 % of frames, 0 steps > 90° on either arm
+  - 0 bytes allocated; 1.593 µs/solve, still under the pre-V1 Kalidokit branch's 3.435 µs/frame
+- **Bug caught before shipping:** the rate bound initially applied only to the confirmed-flip branch, so
+  the ordinary accept path snapped the remainder once within 90° — an offline replay measured a 60°
+  single-frame jump. The bound now applies on both paths, making "no frame moves the roll more than
+  `RollSlewMaxDeg`" an invariant rather than a branch property.
+- **Consequence:** `BendSinMin` no longer exists. Eight deterministic tests pin the behaviour. The
+  EditMode suite still needs a batch-mode run (the MCP Test Runner closes this Editor — see ADR-035).
+
+---
+
+## ADR-035 — The rendered VRM is NOT where the arm goes crooked
+
+- **Status:** Accepted 2026-09-09. Report:
+  [`UNITY_ARM_RETARGET_V2_FORENSICS_2026-09-09.md`](UNITY_ARM_RETARGET_V2_FORENSICS_2026-09-09.md) §3/§4.
+- **Context:** the avatar was reported to look crooked even when the green `PoseDebugSkeleton` looked
+  right, and V1's near-zero direction error was suspected of measuring the wrong thing.
+- **It was measuring the control rig.** `AppBootstrap`'s `GetComponentInChildren<Animator>()` resolves,
+  on a control-rig-enabled `Vrm10Instance`, to `Vrm10ControlBone:*` — NOT the skinned
+  `metarig/.../upper_arm.L`. The skinned bones are reachable only via `Vrm10Instance.Humanoid`. So a
+  naive "control vs VRM" check reads 0.000 by construction and proves nothing.
+- **Decision / finding:** measured against the ACTUAL skinned bones, the pipeline is exact.
+  **Stage control-rig → rendered VRM bone = 0.000000° maximum across 13 308 video-driven samples** and
+  0.000° on all six deterministic poses; bone-length delta **0.000000 m**. Source → control is 0.000° on
+  exact input and 0.0485° median under video motion (the pre-existing `lerpAmount = 0.5` slerp lag).
+- **Classification:** SOLVER, CONTROL and VRM-mapping are ruled out by measurement; MESH is not
+  implicated; **SOURCE (upstream landmarks) is the remaining candidate**, consistent with ADR-033.
+- **Consequence:** no fix was implemented — the brief forbids one until a stage is proven bad, and none
+  was. Do not look for the crookedness in the rig. Two latent issues were recorded and NOT fixed:
+  `rawLeftHand`/`rawRightHand` also resolve to control bones (inert only because
+  `wristRotationWeight = 0` — fix before palm work), and `PoseBuffer.Push` silently drops every packet
+  from a sidecar that restarts its `seq` while Unity stays in Play.

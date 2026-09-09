@@ -306,5 +306,295 @@ namespace VirtualMirror.Tests {
                                         out tu, out tl, out transitioned),
                            "with nothing valid ever seen the bones must be left at rest");
         }
+
+        // ===================================================================================
+        // ARM RETARGET V2 - near-straight-elbow roll stability.
+        // docs/UNITY_ARM_RETARGET_V2_FORENSICS_2026-09-09.md section 2.
+        //
+        // The V1 live capture measured 31 forearm roll pops above 45 deg, 68% of them below 15 deg of
+        // elbow bend, with 7 of the 10 steps above 90 deg inside the single 10.0-12.5 deg bend bin that
+        // straddles the old sin-0.2 (11.54 deg) threshold. These tests pin the state machine that
+        // replaced it: hysteresis, a continuity guard, and a bounded, debounced re-acquisition.
+        // ===================================================================================
+
+        /// <summary>
+        /// Build a source arm whose elbow is bent by <paramref name="bendDeg"/>, on the side of the upper
+        /// arm picked by <paramref name="side"/> (+1 / -1 give OPPOSITE elbow-plane normals). The upper arm
+        /// is always the same direction, so any change in the solved upper direction would be the solver
+        /// leaking roll into the aim.
+        /// </summary>
+        private static ArmAimResult SolveBend(ref ArmRollState state, ArmRestBasis rest,
+                                              float bendDeg, float side) {
+            Vector3 shoulder = SourceLeftShoulder;
+            Vector3 axis = Vector3.right;
+            Vector3 elbow = shoulder + axis * UpperLength;
+            float a = bendDeg * Mathf.Deg2Rad;
+            Vector3 fore = (axis * Mathf.Cos(a) + Vector3.back * side * Mathf.Sin(a)).normalized;
+            return ArmAimSolver.Solve(shoulder, elbow, elbow + fore * ForeLength, rest, ref state, true);
+        }
+
+        private static float RollStep(float previous, float current) {
+            return Mathf.Abs(Mathf.DeltaAngle(previous, current));
+        }
+
+        [Test]
+        public void V2_ThresholdChatter_DoesNotFlipTheRoll() {
+            // (1) THRESHOLD CHATTER. Oscillate the bend across the OLD single threshold (11.54 deg) with
+            // the plane sign alternating - exactly the 10.0-12.5 deg bin where the live capture put 7 of
+            // its 10 roll steps above 90 deg. Hysteresis must keep the state put: the dead band
+            // [8.6 deg, 20.5 deg] strictly contains this oscillation, so the plane is never entered.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            SolveBend(ref state, rest, 60f, 1f);        // establish a real normal
+            SolveBend(ref state, rest, 2f, 1f);         // straighten: releases the hysteresis latch
+            float previous = SolveBend(ref state, rest, 2f, 1f).RollDeg;
+            float worst = 0f;
+            int flips = 0;
+            for (int i = 0; i < 40; i++) {
+                // 10.5 / 12.5 deg straddles the OLD sin-0.2 threshold (11.54 deg): under V1 this alternated
+                // Held / ElbowPlane every frame. The plane side alternates too, so every entry V1 allowed
+                // would have reversed the normal.
+                float bend = (i % 2 == 0) ? 10.5f : 12.5f;
+                float side = (i % 2 == 0) ? 1f : -1f;
+                ArmAimResult r = SolveBend(ref state, rest, bend, side);
+                Assert.IsTrue(r.Valid);
+                Assert.AreNotEqual(ArmNormalSource.ElbowPlane, r.NormalSource,
+                                   "the elbow plane must not be entered inside the hysteresis dead band");
+                float step = RollStep(previous, r.RollDeg);
+                worst = Mathf.Max(worst, step);
+                if (step > 90f) {
+                    flips = flips + 1;
+                }
+                previous = r.RollDeg;
+            }
+            Assert.AreEqual(0, flips, "threshold chatter must not produce a single roll flip");
+            Assert.Less(worst, ArmAimSolver.RollSlewMaxDeg,
+                        "roll must stay put while the bend chatters across the old threshold");
+
+            // The other half of hysteresis: once the plane IS entered, a drop back into the dead band must
+            // NOT release it (that asymmetry is what a single threshold lacked).
+            ArmAimResult entered = SolveBend(ref state, rest, 45f, 1f);
+            Assert.AreEqual(ArmNormalSource.ElbowPlane, entered.NormalSource);
+            ArmAimResult stillLocked = SolveBend(ref state, rest, 15f, 1f);
+            Assert.AreEqual(ArmNormalSource.ElbowPlane, stillLocked.NormalSource,
+                            "15 deg is above the exit threshold: a locked plane must stay locked");
+        }
+
+        [Test]
+        public void V2_StraightToBendToStraight_KeepsRollContinuous() {
+            // (2) STRAIGHT -> BEND -> STRAIGHT. Passing through straight reverses cross(upper, forearm).
+            // The roll must not snap when the arm re-bends on the other side.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            float previous = SolveBend(ref state, rest, 70f, 1f).RollDeg;
+            float worst = 0f;
+            float[] bends = new float[] { 60f, 40f, 25f, 12f, 4f, 0f, 4f, 12f, 25f, 40f, 60f, 70f };
+            for (int i = 0; i < bends.Length; i++) {
+                float side = i < 6 ? 1f : -1f;
+                ArmAimResult r = SolveBend(ref state, rest, bends[i], side);
+                Assert.IsTrue(r.Valid);
+                worst = Mathf.Max(worst, RollStep(previous, r.RollDeg));
+                previous = r.RollDeg;
+            }
+            for (int i = 0; i < 30; i++) {
+                ArmAimResult r = SolveBend(ref state, rest, 70f, -1f);
+                worst = Mathf.Max(worst, RollStep(previous, r.RollDeg));
+                previous = r.RollDeg;
+            }
+            Assert.LessOrEqual(worst, ArmAimSolver.RollSlewMaxDeg + DirTolerance,
+                               "no frame may move the roll more than the bounded slew rate");
+        }
+
+        [Test]
+        public void V2_StraightToShallowBend_HoldsRatherThanEntering() {
+            // (3) STRAIGHT -> SHALLOW BEND. A bend that never reaches the enter threshold must not take
+            // over the roll; the previously established normal keeps it.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            ArmAimResult seeded = SolveBend(ref state, rest, 70f, 1f);
+            Assert.AreEqual(ArmNormalSource.ElbowPlane, seeded.NormalSource);
+            Vector3 seededNormal = seeded.BendNormal;
+
+            SolveBend(ref state, rest, 2f, 1f);                          // straighten: releases the latch
+            ArmAimResult shallow = SolveBend(ref state, rest, 15f, -1f); // shallow, and on the other side
+            Assert.AreNotEqual(ArmNormalSource.ElbowPlane, shallow.NormalSource,
+                               "15 deg is inside the dead band: the plane must not be entered");
+            Assert.Less(Vector3.Angle(seededNormal, shallow.BendNormal), 5f,
+                        "a sub-threshold bend must not steal the roll reference");
+
+            // ...but a bend past the enter threshold still does drive it, so roll steering is not lost.
+            ArmAimResult deep = SolveBend(ref state, rest, 45f, 1f);
+            Assert.AreEqual(ArmNormalSource.ElbowPlane, deep.NormalSource,
+                            "a clear bend must still drive the roll from real geometry");
+        }
+
+        [Test]
+        public void V2_ShallowBendNoisyCrossing_ProducesNoFlip() {
+            // (4) SHALLOW BEND, NOISY CROSSING. Pseudo-random bends around the old threshold with a random
+            // plane side - the live near-straight noise case. Deterministic seed, so this is reproducible.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            SolveBend(ref state, rest, 55f, 1f);
+            float previous = SolveBend(ref state, rest, 55f, 1f).RollDeg;
+            Random.InitState(20260909);
+            float worst = 0f;
+            int flips = 0;
+            for (int i = 0; i < 400; i++) {
+                float bend = Random.Range(0f, 18f);
+                float side = Random.value < 0.5f ? 1f : -1f;
+                ArmAimResult r = SolveBend(ref state, rest, bend, side);
+                Assert.IsTrue(r.Valid);
+                float step = RollStep(previous, r.RollDeg);
+                worst = Mathf.Max(worst, step);
+                if (step > 90f) {
+                    flips = flips + 1;
+                }
+                previous = r.RollDeg;
+            }
+            Assert.AreEqual(0, flips, "noisy near-straight crossings must not flip the roll");
+            Assert.LessOrEqual(worst, ArmAimSolver.RollSlewMaxDeg + DirTolerance,
+                               "worst single-frame roll step under near-straight noise");
+        }
+
+        [Test]
+        public void V2_OppositeNormal_IsRejected_NotAcceptedImmediately() {
+            // (5) OPPOSITE-NORMAL REJECTION. A single frame proposing the exactly-reversed plane, at a bend
+            // where the plane WOULD otherwise be trusted, must not be taken.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            ArmAimResult held = SolveBend(ref state, rest, 60f, 1f);
+            Assert.AreEqual(ArmNormalSource.ElbowPlane, held.NormalSource);
+            Vector3 heldNormal = held.BendNormal;
+
+            ArmAimResult flipped = SolveBend(ref state, rest, 60f, -1f);
+            Assert.AreEqual(ArmNormalSource.Guarded, flipped.NormalSource,
+                            "a reversed plane must be guarded, not adopted");
+            Assert.Greater(Vector3.Dot(heldNormal, flipped.BendNormal), 0.99f,
+                           "the held normal must survive the reversed candidate unchanged");
+
+            // Sustained and coherent, it is eventually believed - otherwise a genuine re-bend the other way
+            // would be locked out forever. It arrives via the bounded slew, never as a snap.
+            ArmNormalSource last = ArmNormalSource.Guarded;
+            for (int i = 0; i < ArmAimSolver.FlipConfirmFrames + 2; i++) {
+                last = SolveBend(ref state, rest, 60f, -1f).NormalSource;
+            }
+            Assert.AreEqual(ArmNormalSource.Slewed, last,
+                            "a sustained coherent reversal must eventually be accepted, via the slew");
+        }
+
+        [Test]
+        public void V2_NoRollStepAbove90Degrees_AcrossAnAdversarialSequence() {
+            // (6) NO ROLL JUMP ABOVE 90 deg. One long adversarial sequence: sweeps, chatter, reversals,
+            // straightening and re-bending. Not one frame may move the roll more than the bounded rate.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            Random.InitState(4242);
+            float previous = SolveBend(ref state, rest, 50f, 1f).RollDeg;
+            float worst = 0f;
+            int over90 = 0;
+            int over45 = 0;
+            for (int i = 0; i < 2000; i++) {
+                float bend;
+                if (i % 5 == 0) {
+                    bend = Random.Range(0f, 12f);          // near straight
+                } else if (i % 5 == 1) {
+                    bend = Random.Range(9f, 22f);          // straddling both thresholds
+                } else {
+                    bend = Random.Range(20f, 140f);        // clearly bent
+                }
+                float side = Random.value < 0.35f ? -1f : 1f;
+                ArmAimResult r = SolveBend(ref state, rest, bend, side);
+                Assert.IsTrue(r.Valid);
+                float step = RollStep(previous, r.RollDeg);
+                worst = Mathf.Max(worst, step);
+                if (step > 90f) {
+                    over90 = over90 + 1;
+                }
+                if (step > 45f) {
+                    over45 = over45 + 1;
+                }
+                previous = r.RollDeg;
+            }
+            Assert.AreEqual(0, over90, "no single frame may change the roll by more than 90 deg");
+            Assert.AreEqual(0, over45, "and in fact none may exceed the 30 deg slew bound");
+            Assert.LessOrEqual(worst, ArmAimSolver.RollSlewMaxDeg + DirTolerance);
+        }
+
+        [Test]
+        public void V2_DirectionsAreUnchangedByTheRollStateMachine() {
+            // (7) DIRECTION PRESERVED EXACTLY. LookRotation(dir, normal) maps forward onto dir whatever the
+            // normal is, so the guard can only ever change roll. Drive the same adversarial sequence and
+            // assert BOTH bone directions still equal the mirrored source directions to numerical
+            // precision - including on the frames where the guard rejected or slewed.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            Random.InitState(4242);
+            Vector3 axis = Vector3.right;
+            float worstUpper = 0f;
+            float worstFore = 0f;
+            int guarded = 0;
+            for (int i = 0; i < 2000; i++) {
+                float bend;
+                if (i % 5 == 0) {
+                    bend = Random.Range(0f, 12f);
+                } else if (i % 5 == 1) {
+                    bend = Random.Range(9f, 22f);
+                } else {
+                    bend = Random.Range(20f, 140f);
+                }
+                float side = Random.value < 0.35f ? -1f : 1f;
+                float a = bend * Mathf.Deg2Rad;
+                Vector3 fore = (axis * Mathf.Cos(a) + Vector3.back * side * Mathf.Sin(a)).normalized;
+                ArmAimResult r = SolveBend(ref state, rest, bend, side);
+                Assert.IsTrue(r.Valid);
+                if (r.NormalSource == ArmNormalSource.Guarded || r.NormalSource == ArmNormalSource.Slewed) {
+                    guarded = guarded + 1;
+                }
+                Vector3 gotUpper = r.UpperRig * rest.UpperDir;
+                Vector3 gotFore = r.LowerRig * rest.LowerDir;
+                worstUpper = Mathf.Max(worstUpper, Vector3.Angle(Mirror(axis), gotUpper));
+                worstFore = Mathf.Max(worstFore, Vector3.Angle(Mirror(fore), gotFore));
+            }
+            Assert.Greater(guarded, 0, "the sequence must actually exercise the guard");
+            Assert.Less(worstUpper, DirTolerance,
+                        "upper-arm direction must be untouched by the roll state machine");
+            Assert.Less(worstFore, DirTolerance,
+                        "forearm direction must be untouched by the roll state machine");
+        }
+
+        [Test]
+        public void V2_HysteresisThresholds_MatchTheMeasuredLiveDistribution() {
+            // The constants are evidence, not taste: the enter threshold must sit ABOVE the entire measured
+            // unreliable region (all 10 live roll steps above 90 deg were at bend below 12.5 deg) and the
+            // exit threshold BELOW it, so the dead band contains the 10.0-12.5 deg hot zone outright.
+            float enterDeg = Mathf.Asin(ArmAimSolver.BendSinEnter) * Mathf.Rad2Deg;
+            float exitDeg = Mathf.Asin(ArmAimSolver.BendSinExit) * Mathf.Rad2Deg;
+            Assert.Less(exitDeg, 10f, "exit must sit below the measured 10.0-12.5 deg hot zone");
+            Assert.Greater(enterDeg, 12.5f, "enter must sit above the measured hot zone");
+            Assert.Greater(enterDeg - exitDeg, 8f, "the dead band must be wide enough to stop chatter");
+            Assert.LessOrEqual(ArmAimSolver.RollSlewMaxDeg, ArmAimSolver.RollStepMaxDeg);
+        }
+
+        [Test]
+        public void V2_GuardIsRateBounded_AtExactlyTheDocumentedAngles() {
+            // The guard compares COSINES so the per-frame path carries no acos. That is only equivalent
+            // to comparing angles while the cosine constants match the degree constants, and the two are
+            // declared separately — so pin the relationship rather than trusting it.
+            //
+            // Driven by a sustained reversal, the roll must advance in steps of exactly RollSlewMaxDeg.
+            ArmRollState state = new ArmRollState();
+            ArmRestBasis rest = RightRest();
+            SolveBend(ref state, rest, 60f, 1f);
+            float previous = SolveBend(ref state, rest, 60f, 1f).RollDeg;
+            float largestStep = 0f;
+            for (int i = 0; i < 40; i++) {
+                ArmAimResult r = SolveBend(ref state, rest, 60f, -1f);
+                largestStep = Mathf.Max(largestStep, RollStep(previous, r.RollDeg));
+                previous = r.RollDeg;
+            }
+            Assert.AreEqual(ArmAimSolver.RollSlewMaxDeg, largestStep, 0.2f,
+                            "the slew must move the roll by exactly the documented bound per frame — a "
+                            + "mismatch means the cosine constants have drifted from the degree constants");
+        }
     }
 }

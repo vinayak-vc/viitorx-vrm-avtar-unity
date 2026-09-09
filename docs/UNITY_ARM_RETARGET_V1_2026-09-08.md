@@ -27,11 +27,18 @@ Every objectively measurable acceptance criterion in the brief's §22 passes, in
 | allocation per frame | 0 B | **0 B** |
 | EditMode tests | — | **70/70 pass** (23 new arm tests) |
 
-The condition: **§12 live Unity and §13 SR.mp4 A/B were NOT EXECUTED.** Both need the OAK-D sidecar
-running with a subject in front of the camera, which is not available in this session, and an SR.mp4 A/B
-additionally needs a *new* recording (the existing one is the old build). The maths, the integration path,
-P0 safety and performance are verified; the on-camera sign-off is outstanding. §12/§13 give the exact
-procedure.
+> **UPDATE 2026-09-09 — the condition below has been discharged.** §12 and §13 were executed live
+> against a real subject; see `docs/UNITY_ARM_RETARGET_V1_LIVE_VALIDATION_2026-09-09.md`. Live result:
+> avatar-vs-landmark error **35.78° → 0.46°** mean over nine motions, elbow reproduction
+> **21.98° → 0.31°**, L/R asymmetry **22.6° → 0.5°**. Live verdict **CONDITIONAL PASS** — retargeting
+> fixed; one arm-side defect remains (near-straight-elbow forearm roll pops, `BendSinMin`), and the
+> dominant remaining error is now upstream landmark quality, not the retarget.
+
+The original condition, kept for the record: **§12 live Unity and §13 SR.mp4 A/B were NOT EXECUTED.**
+Both need the OAK-D sidecar running with a subject in front of the camera, which was not available in
+that session, and an SR.mp4 A/B additionally needs a *new* recording (the existing one is the old
+build). The maths, the integration path, P0 safety and performance were verified there; the on-camera
+sign-off was outstanding. §12/§13 give the exact procedure that was subsequently followed.
 
 ---
 
@@ -350,9 +357,14 @@ zero direction error throughout. `StraightArm_HoldsPreviousRoll_InsteadOfSnappin
 
 ## 12. Live Unity results (§17)
 
-**NOT EXECUTED.** The Unity Editor is attached this session (the tests, the benchmark and every table above
-ran in it), but a live run needs the OAK-D sidecar streaming and a subject in front of the camera — neither
-is available here. Not claiming a result for it.
+**EXECUTED 2026-09-09.** Full results in
+`docs/UNITY_ARM_RETARGET_V1_LIVE_VALIDATION_2026-09-09.md`; headline numbers in the update box in §1.
+The procedure below is the one that was run (via `python-sidecar~/arm_v1_live_capture.py`, which drives
+the nine motions on a countdown and records per-motion epoch windows for the analysis).
+
+*Original text, for the record:* NOT EXECUTED. The Unity Editor was attached that session (the tests, the
+benchmark and every table above ran in it), but a live run needs the OAK-D sidecar streaming and a
+subject in front of the camera — neither was available then.
 
 The Editor-side verification that *was* possible has been done: the project compiles clean (0 errors,
 0 warnings), the whole EditMode suite passes 70/70, the solver is exercised on the actual VRMs' measured
@@ -382,10 +394,12 @@ Procedure to run it:
 
 ## 13. SR.mp4 comparison (§18)
 
-**NOT EXECUTED**, and it cannot be a like-for-like A/B: `SR.mp4` is a recording of the *old* build, so
-comparing needs a **new** OAK-D capture of the same six blocks with `kalidokitAimArms` on.
+**EXECUTED 2026-09-09** as a live A/B rather than a video comparison — `SR.mp4` is a recording of the
+*old* build, so the branch was toggled mid-Play instead, giving both branches the same camera, the same
+model warm-up and the same subject. Outcome per symptom is in §5 of the live-validation report; every
+row below except the hand/forearm one is confirmed fixed on camera.
 
-What the deterministic results predict for each failure the audit mapped out of that video:
+What the deterministic results predicted for each failure the audit mapped out of that video:
 
 | SR.mp4 symptom (audit §14) | old, measured | new, measured | expected on camera |
 |---|---|---|---|
@@ -435,8 +449,9 @@ read per arm application.
 
 ## 16. Known limitations
 
-1. **Live and video validation outstanding** (§12, §13). Everything measurable off-camera passes; the
-   on-camera run has not happened.
+1. ~~**Live and video validation outstanding** (§12, §13).~~ **CLOSED 2026-09-09** — executed; see
+   `docs/UNITY_ARM_RETARGET_V1_LIVE_VALIDATION_2026-09-09.md`. It surfaced one new live-only finding,
+   recorded against limitation 4 below.
 2. **Wrist and hand are still inert, by design.** The hand landmarks (17–22) are never populated by the
    sidecar — 21 of 33 slots arrive — and `wristRotationWeight: 0`. Explicitly out of scope; the arms will be
    correct while the hands stay at rest.
@@ -449,6 +464,14 @@ read per arm application.
    reads ~10–15° of spurious bend, which is why the threshold sits at ~11.5°. If live data shows roll
    jitter on a nearly-straight arm, raise it; if a shallow deliberate bend fails to steer the roll, lower it.
    It is a `const` — deliberately not exposed as a live knob until live data justifies a value.
+
+   **Live data now exists, and it says raise it.** 2026-09-09: 31 single-frame forearm roll pops above
+   45° were measured, **68 % of them at an elbow bend below 15°**, median bend **12.3°** against this
+   threshold's ≈11.5°. Roll steps above 90° number **10 in 45 s** at bend < 15° and **zero** at any
+   larger bend; roll-step p99 is 130.9°/134.1° below 15° of bend versus 10.2°/7.3° above 40°. The
+   bone *direction* is unaffected (0.0–0.2° in the same windows) — what flips is the twist about the
+   forearm. Deliberately **not changed** in that task, which was evidence-only. This is the highest-
+   impact change available inside the arm retargeting scope.
 5. **No temporal smoothing was added.** The only damping is the pre-existing `lerpAmount = 0.5` slerp in
    `ApplyBoneRotation`. That is intentional (it keeps the deterministic tests exact), but it means the noise
    figures in §1 are the *unsmoothed* solver's. If live fast motion shows jitter, the fix belongs in the
@@ -488,6 +511,14 @@ Every §22 criterion is met, measured in the shipping C#:
 - [x] latency does not materially regress — 2.215 µs vs 3.435 µs, 0 B allocated
 - [x] all existing tests pass — 70/70
 
-Accepted on the maths, the integration path, P0 safety and performance. **The one thing still owed is the
-live sign-off** (§12) and, if wanted, a fresh OAK-D capture for the SR.mp4 A/B (§13). Roll back at any time
-by unticking `kalidokitAimArms` — the old branch is untouched.
+Accepted on the maths, the integration path, P0 safety and performance.
+
+**Live sign-off completed 2026-09-09** (§12, §13) — see
+`docs/UNITY_ARM_RETARGET_V1_LIVE_VALIDATION_2026-09-09.md`. Live verdict **CONDITIONAL PASS**: every
+SR.mp4 retargeting symptom is fixed on camera (error 35.78° → 0.46° mean, asymmetry 22.6° → 0.5°, elbow
+range 97.9–175.1° → 28.6–179.9°), the old branch was shown to fail *even when tracking is good*, and the
+two residuals are (a) near-straight-elbow forearm roll pops, see limitation 4, and (b) upstream landmark
+quality, which is now the dominant error source and is not an arm-retargeting problem.
+
+Roll back at any time by unticking `kalidokitAimArms` — the old branch is untouched, and was exercised
+live in that run.
