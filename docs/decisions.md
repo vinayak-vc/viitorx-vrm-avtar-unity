@@ -592,3 +592,219 @@ Development input is a **video file** (`VideoFileCaptureService`, `sampleVRMFile
   `rawLeftHand`/`rawRightHand` also resolve to control bones (inert only because
   `wristRotationWeight = 0` — fix before palm work), and `PoseBuffer.Push` silently drops every packet
   from a sidecar that restarts its `seq` while Unity stays in Play.
+
+## ADR-036 — Torso yaw re-enabled at 0.75 and validated on the real OAK-D path (Conditional)
+
+- **Context:** ADR-027 zeroed `kalidokitTorsoYawScale` because the OAK depth-derived yaw over-twisted the
+  chest and dragged the arms under the old Euler arm path. V3 measured that workaround as the dominant
+  remaining defect (shoulder-yaw error to 50.84°, arms wrong *relative to the body* by up to 51.10°,
+  hands pulled inside the torso), and ARM V1/V2 removed the arm-drag mechanism by dividing the parent
+  rotation out. The scale was restored to **0.75** and swept; the original validation could not exercise
+  the OAK-D path and recorded that as the reason for a CONDITIONAL verdict.
+- **Decision:** keep `kalidokitTorsoYawScale = 0.75`, and treat the OAK-D evidence below as the gate on
+  promoting it to a settled default. Do not change the torso algorithm on this evidence alone.
+- **Evidence (this task, real depth path — the earlier "OAK-D not testable" finding was wrong on both
+  counts: `depthai 2.32.0.0` is installed, and 111,119 recorded frames across 11 captures carry the
+  signal because `--flatten-trunk` defaults to FALSE):**
+  - **Stable.** ±180° ambiguity flips **2 in 55,408 valid frames**; output sign reversals **0 at every
+    scale in every capture**; live device max frame step **2.11°** with zero flips. The ADR-027 rate
+    limiter does its job.
+  - **No arm regression.** Source → *actual skinned* bone direction: live OAK **p50 0.057–0.171°, max
+    ≤0.78°**; on video, p50/p95 **flat or better** as the torso rotates (0.265°/2.065° frozen →
+    0.329°/1.871° at scale 1.0). Only the tail doubles (5.05° → 11.75°), which is the bounded
+    `lerpAmount = 0.5` parent transient, halving per applied frame.
+  - **The 1.4× over-gain is confirmed live**: measured gain **1.194** at scale 1.0 on the OAK path
+    versus the held-frame 1.230, arrived at independently.
+  - **Gain is not a property of the scalar.** The same 0.75 yields **0.167** on `video.webm`, **0.522**
+    live on OAK, **0.923** held — a 5.5× spread driven only by motion bandwidth.
+- **Consequence — two costs, both new and both measured:**
+  1. **The torso path has NO confidence gate.** `CalcHipsAndSpine` reads `lm[11/12/23/24]`
+     unconditionally (P0-1 `LimbGate` covers arms and legs only), so an absent detection makes
+     `atan2(0,0)` command **exactly +90° of yaw**. Caught live on an empty room at 0.75: landmark
+     confidence **0.71**, hallucinated depth → 40.46° source yaw → **avatar torso twisted 23.82°**.
+     `torsoYawScale = 0` was masking this; restoring the scalar arms it. **Fix this before shipping
+     0.75** — gate the trunk on landmark plausibility and hold the last good value.
+  2. **Rest jitter of 5.4–7.6° stdev while the subject is still**, against exactly 0.000° at scale 0;
+     it scales linearly with the scalar. **0.50 roughly halves both costs** (jitter 5.42° → 3.61°,
+     worst output 128.7° → 85.8°) for little tracking loss, and is the better value if 0.75 ships
+     without the gate.
+- **Still open:** the guided OAK-D motion list (slow/fast yaw, left-right turns, ~90°, ~180°) was NOT
+  completed with a live subject, so whether a deliberate 180° turn produces an ambiguity flip on this
+  device is unanswered. Harness is built and committed (`oak_guided_v4.py`, `oak_guided_v4.ps1`).
+- **Evidence:** `docs/UNITY_TORSO_YAW_V4_VALIDATION_2026-09-09.md` §5 (rewritten), §4d;
+  `python-sidecar~/oak_v4_evidence/`.
+
+## ADR-037 — Torso V5: trunk validity gate + relative-yaw composition (Accepted, conditional)
+
+- **Context:** ADR-036 restored `kalidokitTorsoYawScale` but recorded two structural faults it could not
+  fix with a scalar. (1) The composition summed **two absolute yaws** — `0.70·hipYaw` at the Hips and
+  `(0.45+0.25)·shoulderYaw` across Spine+Chest — and because the bones nest, the rendered shoulder line
+  came out as their sum. Measured consequences: a rigid turn over-rotated **1.4×**, opposing hip/shoulder
+  yaw **cancelled** (gain +0.116), and a 52° twist **inverted** the torso (gain −2.944). No scalar can fix
+  a gain ranging −2.944…+1.230. (2) `CalcHipsAndSpine` read `lm[11/12/23/24]` with **no validation**, so an
+  absent detection made `atan2(0,0)` command **exactly +90° of yaw** — caught live on an empty room with
+  landmark confidence 0.71 twisting the avatar 23.82°.
+- **Decision:**
+  1. Add `TrunkGate` — a **geometric + continuity** validity layer for the 4-point trunk. Not
+     confidence-based: 0.71 confidence was measured accompanying a hallucination, so confidence does not
+     separate the populations. Thresholds measured over 111,546 frames: span floor **0.10 m** (degenerate
+     p95 0.054/0.091 vs real p01 0.156/0.123; costs 0.000 %/0.195 % of real frames), span ceiling 1.0 m,
+     jump ceiling **500 °/s** (real p99.9 is 435 °/s; costs 0.078 %). Hip and shoulder are gated
+     **together** because the composition consumes their difference. Invalid → HOLD; never valid yet → frontal.
+  2. Replace the composition: **Hips ← absolute hip yaw** (gain 1.0); **Spine/Chest/UpperChest ← relative
+     twist `shoulderYaw − hipYaw`** with weights **0.20/0.40/0.40 summing to exactly 1.0**, renormalised
+     when a rig lacks a bone. The chain then equals `shoulderYaw` identically for every hip/shoulder ratio.
+  3. **Bind `UpperChest`** — it was never fetched in `Bind()`, so a quarter of the trunk was rigid by omission.
+  4. `kalidokitTorsoYawScale = 1`; it is no longer a compensation for a broken composition, only a
+     frontal-lock fallback at 0.
+- **Evidence:** controlled torso probe on the real UDP wire, measured on the **actual skinned VRM bones**:
+  rigid ±45° and +90°, twist ±35°, and hips +30/shoulders −30 all reproduce with **gain 1.000, exact to
+  0.01°** (the old form gave 1.400 / 0.700 / **0.000** on the same inputs). Ghost test (real → all-zero
+  landmarks → real, confidence 0.75 on the wire): **0 frames within 15° of ±90°**, avatar held to a
+  **0.0044° stdev**, 3587 `ShoulderSpan` rejections, immediate resume. Trunk gate rejected **0 of 21,173**
+  valid probe frames. On the recorded OAK corpus, tracking error falls **49 %/61 %/58 %** and rest jitter
+  improves **21 %** and **95 %** on two captures (unchanged on the third). ARM V2 unchanged: p50
+  **0.0000°**, p95 0.1153° through 90° torso turns. **Full EditMode suite 94/94 pass** (invoked directly;
+  the MCP Test Runner closes this Editor).
+- **Consequence — the cost, stated:** V5 at gain 1.0 is *faithful*, so bad source depth now reaches the
+  avatar more completely. On the poor-depth `p14` capture the time beyond 45° roughly doubles
+  (8.11 % → 15.71 %) even though tracking error falls 58 %. **Upstream trunk-landmark depth quality is now
+  the binding constraint on torso realism**, which is sidecar work.
+- **Still open:** the guided **OAK-D live motion list** (slow/fast yaw, reversal, ~45/90/180°) was NOT run —
+  this round was directed to video input. Verdict is therefore CONDITIONAL PASS.
+- **Evidence:** `docs/UNITY_TORSO_V5_RELATIVE_YAW_2026-09-09.md`; `python-sidecar~/oak_v4_evidence/`.
+
+## ADR-038 — F-09: no torso-yaw quality gate on this evidence; the measurement is under-resolved
+
+- **Context:** ADR-037 (V5) left one problem open — bad shoulder/torso depth produces a *plausible but
+  incorrect* torso yaw, and V5, being faithful, reproduces it. F-09 asked whether that measurement can
+  be assigned a reliable quality score. 22,727 frames across the 5 captures carrying per-joint depth
+  diagnostics (`audit_log.jsonl` joined to `sender_log.jsonl`); label = the 2-D/3-D disagreement rule
+  (shoulder pixel span is independent of the per-shoulder depth difference that produces the yaw).
+- **Decision:** **do NOT add a torso quality gate.** Nothing was changed.
+- **Root cause, measured:** the yaw is **under-resolved, not merely noisy**. `yaw = atan2(dx, dz)`, and
+  `dz` carries only stereo disparity resolution: one depth step is **6.3–11.3° of commanded yaw**, and on
+  **60.1 % of frames both shoulders land on the same quantised level**, forcing yaw to exactly 0. p75 of
+  the raw shoulder depth difference is 161 mm = **27.4°**. The signal is close to ternary; the one-euro
+  depth filter hides the staircase temporally without adding information.
+- **Evidence against each candidate gate:**
+  - `hipLenErr` (3-D hip segment length error) is a genuinely independent predictor, **AUC 0.897**, and
+    still **unsafe**: at its ROC-optimal 0.17 it rejects **19.7 % of image-confirmed genuine turns** to
+    catch 75.9 % of BAD; in counterfactual replay it worsens **rest jitter on 3 of 5 captures**
+    (`f08` 6.72 → 18.42), triples the rejection rate, and pushes p95 recovery latency to **13.9 s**, all
+    for under 1° of mean-error gain.
+  - **F-08's signals do not transfer to torso yaw**: `validFracMin` AUC **0.482**, `surfCrossSh` 0.516,
+    `_absTrunkDz` 0.412 (*inverted* — bad frames have SMALLER shoulder-vs-hip depth disagreement).
+  - Confidence reaches AUC 0.773 but is ruled out: V4 measured 0.71 confidence on a hallucinated person.
+  - Combining features made it worse than the best single feature.
+- **What V5 already handles:** of 553 BAD frames, the shipped `TrunkGate` rejects **56.3 %** (39.1 % span
+  + 17.2 % jump). The residual is **242 frames = 1.086 % of all frames**, with **|yaw3D| p50 = 169°** —
+  the ±180° ambiguity, not a general quality problem.
+- **Consequence / next:** (1) a targeted ±180° 2-D/3-D consistency check is the right candidate, but this
+  report **cannot validate it because it is the rule used to define the label** — it needs a live session
+  with known torso headings. (2) Architecturally, take yaw **magnitude from 2-D foreshortening** (pixel
+  resolution) and only the **sign** from depth (1 bit, which disparity can support); that is sidecar work.
+  (3) Reducing quantisation (closer subject, wider baseline, sub-pixel disparity) attacks the cause.
+- **Verdict:** CONDITIONAL PASS — predictor found, gate not safe, correct candidate needs live ground truth.
+- **Evidence:** `docs/F09_TORSO_YAW_QUALITY_AUDIT_2026-09-10.md`; `python-sidecar~/oak_v4_evidence/f09_*`.
+
+## ADR-039 — F-10: hybrid yaw REFUTED on the sign; the 2-D magnitude is validated
+
+- **Context:** F-09 (ADR-038) found the torso yaw under-resolved and proposed taking MAGNITUDE from 2-D
+  shoulder foreshortening and SIGN from depth. F-10 tested that against ground truth: a real subject at
+  physically self-evident headings (0 deg square to the lens; +-90 deg shoulders edge-on), 2520 labelled
+  frames at 1.44 m, shipping sidecar unmodified.
+- **Decision:** **NO-GO for `hybrid = sign(yaw3D) * abs(yaw2D)` as specified. Nothing implemented.**
+  Retain V5. The magnitude half is recorded as VALIDATED so the next attempt starts from it.
+- **Evidence — the proposal splits cleanly in two:**
+  - **MAGNITUDE, validated 4.5x.** yaw2D **MAE 5.90 deg** vs production yaw3D **26.70 deg** (RMSE 9.28 vs
+    43.26). Per-block yaw3D medians show a structured collapse, not noise: **7.7 deg when the truth is
+    +90**, **180.0 deg when the truth is -90**, and **21.1 deg at the first 0 deg block**. The shoulder
+    pixel span independently confirms the poses (60-64 px face-on -> 10.4 px at +90 -> **1.4 px** at -90).
+  - **SIGN, refuted.** **78.49 %** accuracy over 860 frames; **89.52 %** excluding the +-180 wrap;
+    **63.45 %** at |heading| >= 90. Confusion: true+ 486/486 correct, **true- only 189/374 (50.5 %)** --
+    for a left turn the depth sign is a coin flip. yaw3D reports positive on 78 % of frames regardless of
+    truth, i.e. a biased constant rather than a sign detector.
+  - Hybrid with a wrap guard: signed MAE 13.09 deg vs production 61.08 deg -- a 4.7x gain, but still 2.2x
+    worse than the magnitude alone, and every bit of that gap is the sign.
+- **Criteria:** 1 (resolution) PASS, 2 (sign reliable) **FAIL**, 3 (MAE/RMSE) PASS, 4 (no sign flips)
+  **FAIL**, 5 (real-time) PASS, 6/7 (V5, ARM V2) untouched. The brief's rule on 2/4 failing is NO-GO.
+- **Next source to try, for the SIGN only:** the **nose (or any face keypoint) relative to the shoulder
+  midpoint in the image** -- when a subject turns right the nose shifts toward the left shoulder, which is
+  1 bit from a 2-D signal with no disparity quantisation. **Untestable here only because neither
+  `audit_log.jsonl` nor `sender_log.jsonl` records the nose**; adding it is a one-line diagnostic change
+  and would make this testable against THE CAPTURE ALREADY RECORDED, with no new subject time.
+- **Consequence for V5:** unchanged and still correct. V5 reproduces its input with gain 1.000; F-10 now
+  shows with ground truth that the input is wrong by 26.70 deg on average and catastrophic at +-90 deg.
+  **The torso problem is entirely upstream of the retarget.**
+- **Limits:** one distance (1.44 m), one subject, one room; +-45 deg headings were eyeballed; the
+  torso-twist blocks were compromised by protocol confusion and carry no conclusion.
+- **Evidence:** `docs/F10_TORSO_YAW_GROUND_TRUTH_2026-09-10.md`; `oak_v4_evidence/f10_near_analysis.txt`.
+
+## ADR-040 — F-11: the 2-D face sign measures HEAD yaw, not torso yaw — NO-GO
+
+- **Context:** F-10 (ADR-039) validated the 2-D foreshortening MAGNITUDE (MAE 5.90 deg vs production
+  26.70 deg) and refuted the depth SIGN. F-11 tested whether a 2-D face/shoulder relation supplies it.
+- **Decision:** **NO-GO. V6 not implemented. No production behaviour changed.** Do not pursue any other
+  face landmark either -- nose, eyes and ears sit on the same rigid body and fail identically.
+- **The F-10 archive could not answer it** (`AUDIT_JOINTS` starts at COCO 5; face is 0-4; no RGB kept),
+  so a diagnostic-only logging addition was made -- `AUDIT_FACE_JOINTS` plus a 5-entry loop inside
+  `if audit_f is not None:`, kept OUT of `AUDIT_JOINTS` so the depthQuality aggregate is unchanged --
+  and a new 11-block capture recorded (1457 labelled frames, 4 of them head/torso DECOUPLING blocks
+  added specifically to test the predicted failure mode).
+- **Result — the decoupling test is decisive.** A head-only turn (torso square, head +-45) produces a
+  LARGER signal than a genuine 45 deg torso turn:
+  | signal | true torso +-45 | false: head-only | ratio |
+  | nose offset B | 0.1472 | **0.3369** | **2.3x** |
+  | ear asymmetry | 0.0355 | **0.2745** | **7.7x** |
+  No threshold separates them: the false signal is on the wrong side of the true one. And ambiguity is
+  not the issue -- |B| is below 2x its frontal value on only 3.7 % of turned frames. **The signal is
+  confident and wrong**, which is worse than uncertain.
+- **Static accuracy, for the record:** nose B **87.84 %** overall (positive **75.39 %**, negative 100 %);
+  ear asymmetry **97.49 %**. At +-45 deg B is 100 %; at **true +90 deg it is 53.33 % -- chance** (a
+  normalisation failure: the shoulder span collapses to a few px so B = A/span divides by ~0).
+  Confusion is systematically one-directional: all 63 errors are positive turns read as negative.
+- **Hybrid is worse than what it replaces:** `sign(faceB)*|yaw2D|` signed MAE **31.60 deg** vs the
+  depth-sign hybrid's 13.09 deg, because its errors land at +-90 where each costs ~180 deg (p95 166.8).
+- **What did work, and why it misled:** with the body turned and the face on the camera the sign IS
+  recovered (99.3 % / 100 %) -- because the SHOULDER MIDPOINT shifts under foreshortening, not because
+  the nose points anywhere. The measurement is a difference between two independently-moving things.
+- **Next, all offline-testable on captures already in hand (no new subject time):** (1) temporal sign
+  continuity seeded at a known-frontal pose -- |yaw2D| is accurate and its sign can only change through
+  zero; (2) hip-line depth sign -- the hips do not rotate with the head; (3) shoulder-occlusion ordering.
+- **Evidence:** `docs/F11_FACE_SIGN_TORSO_YAW_2026-09-10.md`; `oak_v4_evidence/f11_gt_score.txt`.
+
+## ADR-041 — F-12: temporal sign continuity cannot supply the torso-yaw sign — NO-GO
+
+- **Context:** F-10 validated the 2-D yaw MAGNITUDE (MAE 5.90 deg vs 26.70) and refuted the depth SIGN;
+  F-11 (ADR-040) refuted the face SIGN (it measures head yaw). F-12 tested temporal continuity: seed a
+  sign at a known-frontal pose, hold it, and flip only at genuine zero crossings.
+- **Decision:** **NO-GO. Nothing implemented. No production or diagnostic file changed.**
+- **Root reason — the information is absent, not merely noisy.** For a subject at +45 returning to 0,
+  `|yaw2D|` traces 45 -> 0; whether they then go to -45 or back to +45, it traces 0 -> 45 IDENTICALLY.
+  The two futures are the same signal, so no causal filter over `|yaw2D|` can separate them.
+- **The parameter sweep proves it empirically.** Static sign accuracy for algorithm C swings by up to
+  **75.4 percentage points from a single +-1 step in the debounce count**, hitting **0.00 %** at
+  (Z=3, N=4) and **96.01 %** at (Z=8, N=4) whose neighbours read 79.48 % and 57.86 %. That is the flip
+  COUNT accidentally aligning with the protocol's alternation, not a tuning optimum.
+- **A methodological trap, recorded so it is not repeated:** every designed zero visit in every capture
+  is followed by a REVERSAL. So the trivial rule "flip at every zero dip" scores ~100 % on this data by
+  construction, and no parameter search over it means anything. The discriminating case -- zero, then
+  back to the SAME side -- has never been recorded.
+- **Other measured failures:** sign flips **2-4 times per 10 s with the torso genuinely at 0 deg** (the
+  commonest pose in a mirror app); flip rate in motion is **0.40-1.01/s** against a subject reversing at
+  most ~0.5/s. Explicitly NOT the problem: false crossings from noise (2.07-2.51 % of held frames) and
+  head dependence (|yaw2D| uses only the shoulder span, confirmed on the F-11 decoupling blocks).
+- **A separate finding that outlives the sign question:** `|yaw2D| = acos(...)` is **bounded to [0,90]**,
+  so a 180 deg turn and a 90-and-back produce the SAME magnitude trace (m_180 measured max 83.7 deg).
+  **The magnitude estimator itself is ambiguous beyond 90 deg** -- even a perfect sign source could not
+  distinguish a 120 deg turn from a 60 deg one. If beyond-90 tracking is needed, F-10's magnitude needs
+  revisiting too.
+- **Operator error, disclosed:** the F-11 capture ran with `--distance near` and OVERWROTE
+  `f10_gt_marks_near.json`, destroying the F-10 block windows. They were reconstructed by a two-parameter
+  alignment search validated against previously-published per-block medians (all 7 static blocks within
+  3.8 deg, stretch 1.000) and written to `f10_gt_marks_near_RECOVERED.json`, flagged `"RECOVERED": true`.
+- **Next:** the **hip-line depth sign** is the one remaining untested candidate and the only one that does
+  not try to recover the sign after the magnitude estimator discarded it -- the hips do not rotate with
+  the head, and sign is 1 bit rather than a magnitude. Offline-testable on captures already in hand.
+- **Evidence:** `docs/F12_TEMPORAL_SIGN_TORSO_YAW_2026-09-10.md`; `oak_v4_evidence/f12_*.txt`.

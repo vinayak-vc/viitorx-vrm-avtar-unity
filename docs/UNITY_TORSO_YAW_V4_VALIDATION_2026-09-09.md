@@ -19,9 +19,31 @@ mean shoulder-yaw error improves only **7.40° → 7.21°** (2.6 %), the maximum
 7.2 % of frames get *worse*, and the effective gain on frames above the dead zone is **0.138** — not the
 1.230 a held frame shows. The ADR-027 conditioner's bandwidth is far below human dance motion.
 
-**OAK-D live validation was NOT EXECUTED** — no OAK-D device and no `depthai` module are present in this
-environment (§5). A bench test of the shipping conditioner against the documented ±180° failure was run
-instead, and it passes: flips shorter than **250 ms are rejected entirely**.
+**§5 has been REPLACED — the OAK-D path has now been exercised, and the original §5a was wrong.** It
+claimed the device could not be tested because `depthai` was missing and no recorded log carried a
+torso-yaw signal. **`depthai 2.32.0.0` is installed** (the original check used a different interpreter),
+the device enumerates and streams at 30 fps, and **111,119 recorded frames across 11 captures do carry
+the signal** — `sender_log.jsonl` logs the shoulder landmarks after `build_body_landmarks`, and
+`--flatten-trunk` defaults to FALSE in Milestone-2, so shoulder Z is measured stereo depth.
+
+**What that evidence adds, and why the verdict stays CONDITIONAL:**
+
+* **Stability holds on the real depth path.** ±180° ambiguity flips: **2 in 55,408 valid frames**.
+  Output sign reversals: **0 at every scale in every capture**. Live device in good conditions: max
+  frame step **2.11°**, zero flips. The rate limiter works.
+* **No arm regression.** Source → *actual skinned* bone direction stays at **p50 0.057–0.171°, max
+  ≤0.78°** across the live scale sweep, and p50/p95 are flat or better on video as the torso rotates.
+* **The 1.4× over-gain is confirmed live**: measured gain **1.194** at scale 1.0 on the OAK path,
+  against §2b's held-frame 1.230, arrived at independently.
+* **A new, higher-impact defect: the torso path has no confidence gate.** `CalcHipsAndSpine` reads
+  `lm[11/12/23/24]` unconditionally, and an absent detection makes `atan2(0,0)` command **exactly +90°
+  of yaw**. Caught live on an empty room at the shipped 0.75: landmark confidence **0.71** (passing
+  every existing gate), hallucinated depth → 40.46° source yaw → **avatar torso twisted 23.82°**. At
+  `torsoYawScale = 0` this was multiplied away; restoring the scalar arms it.
+* **Rest jitter.** At 0.75 the avatar's torso wanders with a **5.4–7.6° standard deviation while the
+  subject is standing still**, against exactly 0.000° at scale 0.
+* **The brief's guided motion list was NOT completed** (§5f) — two attempts failed for operator
+  reasons, so whether a deliberate 180° turn flips on this device is still unanswered.
 
 ---
 
@@ -269,175 +291,356 @@ result**, and are discarded. Two things prove it:
 
 §4a is the valid test for parent inheritance because it removes time from the question entirely.
 
+### 4d. The dynamic test done properly — in motion, on the live OAK and on video
+
+§4c's numbers were void because the sampler advanced the editor one frame per measurement call. The
+replacement samples from **inside `EditorApplication.update`**, and records `Time.frameCount` so the
+same defect would be visible if it recurred: it reads **1 frame per sample against a 0.0038 s wall dt
+(263 fps)**, i.e. the editor is running normally. Source → **actual skinned** bone direction, in the rig
+frame the driver itself uses (`Inverse(RigFrame()) * (child.position − bone.position)`):
+
+| input | condition | p50 | p95 | max |
+|---|---|---|---|---|
+| live OAK-D, scale 0 → 1.0 | torso rotating | **0.057 – 0.171°** | — | **≤0.78°** |
+| `video.webm`, scale 0.00 | **torso frozen** | 0.265° | 2.065° | **5.049°** |
+| `video.webm`, scale 0.25 | torso moving | 0.317° | 1.710° | 11.633° |
+| `video.webm`, scale 0.50 | torso moving | 0.318° | 1.871° | 11.556° |
+| `video.webm`, scale 0.75 | torso moving | 0.317° | 1.776° | 11.754° |
+| `video.webm`, scale 1.00 | torso moving | **0.329°** | **1.871°** | 11.303° |
+
+**Median and p95 are flat — or better — as the torso rotates.** Only the extreme tail roughly doubles,
+from 5.05° with the torso frozen to 11.75° with it moving, and that is §4b's bounded parent-motion
+transient rather than systematic inheritance: it is the `lerpAmount = 0.5` slerp catching up, and it
+halves every applied frame. The 5.05° floor at scale 0 — where the torso cannot move at all — is the
+same slerp responding to fast *source* motion, and bounds how much of the 11.75° can possibly be
+attributable to the parent.
+
+On the live OAK path the only readings above 5° were **8 of 20,278 measurements (0.039 %)**, all in the
+first four samples after the sampler started, decaying **61.21° → 30.81° → 15.29° → 7.61°** — the
+slerp converging from rest, halving each frame, exactly as §4b describes. After those four, nothing.
+
+**No arm regression.**
+
 ---
 
 ## 5. OAK-D validation
 
-### 5a. Live test — NOT EXECUTED
+**§5a as first written was wrong on both of its claims, and this section replaces it.** It said the
+OAK-D path could not be exercised because `depthai` was missing and because no recorded log carried a
+usable torso-yaw signal. Both were checked again and neither holds:
 
-No OAK-D is attached and the sidecar venv has no `depthai`:
+| original claim | what is actually true |
+|---|---|
+| *"depthai unavailable: ModuleNotFoundError"* | **`depthai 2.32.0.0` is installed** in `python-sidecar~/.venv`. The original check ran against a different interpreter. The device (`14442C10F143D3D200`) enumerates and the shipping sidecar boots and streams at **30 fps**. |
+| *"`recv_log.jsonl` has shoulder and hip z = 0.0"* | True of the **hips only**. `sender_log.jsonl` logs `sh = [lm[11][:3], lm[12][:3]]` *after* `build_body_landmarks`, and `--flatten-trunk` **defaults to FALSE** in Milestone-2 ("keep the measured trunk Z so the model can BEND at the waist and TURN"). Shoulder Z is measured stereo depth. **111,119 recorded frames across 11 captures carry the signal.** |
+
+Everything below therefore comes from the real depth path, not from the monocular video estimator.
+
+### 5a. Method, and the one thing that is modelled
+
+The conditioner used offline is a **line-by-line port of `KalidokitControlRigDriver.DampYaw`**, checked
+against the shipping C# driven by reflection in the live editor over an adversarial 20-step sequence
+(0 → 40° → ±180° → 90° → 0):
 
 ```
-depthai unavailable: ModuleNotFoundError No module named 'depthai'
-enumerated cameras: Logi C270 HD WebCam (OK), Iriun Webcam (Error), EPSON L6270 (printer)
+MAX |python - shipping C#| = 0.000007 deg over 20 steps      -> PORT EXACT
+live constants: yawMaxRateDeg=140  yawSmoothTau=0.15  yawDeadzone=8..22
 ```
 
-The brief's list — slow yaw, fast yaw, left/right turns, repeated turns, ~90°, ~180° — needs the device
-and a subject in front of it. **None of it was run, and no claim is made about it.** This is the reason
-the verdict below is CONDITIONAL rather than PASS.
+Source yaw is Unity's own derivation, ported from `KMath.RollPitchYaw2` + `CalcHipsAndSpine`:
+`yaw = normalize(atan2(b.x−a.x, b.z−a.z))/π`, `−2 if >0.5`, `+0.5`, `×π`. Verified against the frontal
+case (0.000°) and a constructed 26.57° turn.
 
-No recorded log in the repo carries a usable OAK torso-yaw signal either, so a replay against real depth
-noise was also impossible: `recv_log.jsonl` has shoulder and hip **z = 0.0** (and torso facing is derived
-from exactly that depth separation), and `model_log.jsonl`'s `hipsY` is `hips.eulerAngles.y` of a
-*control* bone — representation-ambiguous by construction, from a capture whose `torsoYawScale` is
-unknown. Its 0/180 bimodality is **not** evidence of yaw flips and is not cited as such.
+What is **measured** rather than modelled: the live-device numbers in §5d and §5e come from the actual
+skinned VRM bones via `Vrm10Instance.Humanoid`. What is **modelled**: the §5c replay applies the
+verified conditioner and the §2b composition to recorded source yaw; the 111k avatar poses were not
+each rendered.
 
-### 5b. What was run instead — the shipping conditioner on the bench
+### 5b. The failure mode this found: the torso path has NO confidence gate
 
-`DampYaw` was driven **by reflection, so it is the shipping code and not a reimplementation**, over
-adversarial sequences whose amplitudes come from the figures ADR-027's own source comment cites as
-pipeline-log-measured: *"rest yaw ~-10 deg, excursions to -119 deg, and ±180 deg AMBIGUITY FLIPS"*.
+`CalcHipsAndSpine` reads `lm[11]`, `lm[12]`, `lm[23]`, `lm[24]` **unconditionally**. P0-1 `LimbGate`
+gates arms and legs; nothing gates the trunk. When the sidecar has no detection it emits `[0,0,0]`, and
+then:
 
-Shipping constants read back live: `maxRate = 140°/s`, `tau = 0.15 s`, `deadzone = 8..22°`; at 40 Hz that
-is **3.500°/frame** maximum.
+```
+atan2(0, 0) = 0  ->  normalize 0  ->  +0.5  ->  ×π  =  +90.000 deg      (verified numerically)
+```
 
-**±180° ambiguity flip on a −10° rest baseline** — the historical failure:
+**An absent or dropped subject commands exactly +90° of torso yaw.** At `torsoYawScale = 0` that is
+multiplied away, which is why it has never been seen. At 0.75 it is a live command. In the recorded
+corpus the sentinel appears in **53,351 frames** (52,800 of them one empty-room capture, plus 205 in
+`rollback`, 176 in `f08`, 156 in `p14`, 14 in `armv1b`), with **148 transitions into the degenerate
+state while the stream was otherwise healthy**.
 
-| flip duration | frames | peak output | leaked past the dead zone? |
-|---|---|---|---|
-| 25–200 ms | 1–8 | **−0.55°** | **no** |
-| 300 ms | 12 | 16.69° | yes |
-| 500 ms | 20 | 45.84° | yes |
-| 750 ms | 30 | 80.55° | yes |
-| 2000 ms | 80 | 179.73° | yes |
+**Caught live, with the camera pointed at an empty room** (Play, scale 0.75, sidecar reporting
+`measured_body=1/33`):
 
-**Flips shorter than ~250 ms are rejected completely.** Anything sustained beyond ~300 ms is followed —
-which is correct behaviour for a genuine turn and is the limit of what a rate limiter can distinguish.
+| quantity | value |
+|---|---|
+| landmark confidence, `lm[11]` / `lm[12]` | **0.710 / 0.707** — comfortably above the retarget gate |
+| source shoulder yaw from the hallucinated depth | **+40.46°** |
+| **avatar skinned shoulder-line yaw** | **+23.82°** |
+| avatar Hips / Spine / Chest local Y | −2.59° / −13.65° / −7.58° |
 
-**Sudden reversal −119° → +119°:** worst single-frame step **8.175°** (no snap), 1700 ms to cross to
-+100°. No instantaneous torso reversal is possible.
+RTMW3D is a top-down model: it always returns a plausible-looking person with plausible confidence, so
+a confidence threshold alone does not catch this. The trunk yaw is derived from exactly the depth that
+is least reliable when nobody is there.
 
-**Jitter:** zero-mean noise of ±5° and ±10° at rest produces **0.000° output stdev** — the dead zone
-removes it entirely; ±20° → 0.047°; ±40° → 1.017°. Mid-turn (45° baseline) the same noise passes at
-~20 % of amplitude (±20° → 3.886° stdev, 8.925° peak).
+### 5c. The recorded corpus — the failure modes the brief names
 
-**Genuine turns all reach their target exactly** (30/45/90/180° → 0.00° steady-state error), with lag
-450 ms (30° at ≥180°/s) to 1275 ms (180°).
+11 captures, 111,119 frames, 55,408 valid after excluding degenerate frames. Steps are measured only
+between temporally adjacent valid frames, so a detection drop cannot masquerade as a flip.
 
-**Repeated left/right turns** — the brief's explicit case, and the finding that matters most:
+| symptom | measured |
+|---|---|
+| **±180° yaw flips** (adjacent-frame wrapped step > 150°) | **2 in 55,408 valid frames** |
+| **sudden torso reversal** (sign change while \|yaw\| > 20°) | **32** |
+| steps above the 140°/s rate limit | 0.4 – 1.5 % of frames per capture |
+| **detection drops while streaming** | **148** |
 
-| amplitude | period | tracked fraction |
-|---|---|---|
-| ±45° | 4 s | **1.00** |
-| ±45° | 2 s | 0.96 |
-| ±45° | 1 s | **0.36** |
-| ±45° | 0.5 s | **0.15** |
-| ±90° | 2 s | 0.62 |
-| ±90° | 1 s | 0.24 |
-| ±90° | 0.5 s | **0.07** |
+So the historical ±180° *ambiguity flip* is essentially **absent** from the valid signal — it shows up
+as **degeneracy** (§5b) instead. That is a materially different failure from the one ADR-027 was
+written against, and the rate limiter does not address it because the sentinel is a *sustained*
+wrong value, not a fast one.
 
-At fast periods the output also becomes asymmetric (±45° at 1 s settles into −1.48…+31.19° rather than
-±31°), i.e. the rate limiter cannot keep up and the tracked range drifts to one side. **This is the same
-bandwidth limit §2d measures on the real clip**, arrived at independently.
+Pushing the recorded yaw through the verified conditioner and the §2b composition, on `pipeline_logs_armv1`
+(13,517 valid frames, 589 s of a real subject):
 
-So: **no ±180° instability, no jitter, no sudden reversal, no arm drag — and no bandwidth either.** The
-conditioner is stable to the point of being over-damped for dance-speed motion.
+| scale | err mean | err p95 | out p95 | out max | effective gain |
+|---|---|---|---|---|---|
+| 0.00 | 11.10° | 30.23° | 0.00° | 0.00° | 0.000 |
+| 0.50 | 8.44° | 19.61° | 11.08° | 85.82° | 0.370 |
+| **0.75** | **7.23°** | **14.91°** | **16.63°** | **128.73°** | **0.556** |
+| 1.00 | 6.29° | 13.43° | 22.17° | 171.64° | 0.741 |
 
----
+Tracking genuinely improves — mean error **11.10° → 7.23°**, a 35 % reduction, far better than the
+2.6 % the monocular clip suggested in §2d. But the cost is in the last two columns.
+
+### 5d. The cost: rest jitter and over-twist, on the real depth path
+
+Same replay, measuring what the torso does rather than how well it tracks. "Rest jitter" is the stdev
+of the avatar's commanded yaw over frames whose **source** yaw is below the 8° dead-zone floor — i.e.
+what the torso does while the human is standing still.
+
+| capture | scale | rest jitter | \|twist\| > 45° | longest such episode | out max | output reversals |
+|---|---|---|---|---|---|---|
+| `armv1` (589 s) | 0.50 | 3.61° | 0.18 % | 1.13 s | 85.8° | 0 |
+| `armv1` | **0.75** | **5.42°** | 0.25 % | 1.55 s | 128.7° | 0 |
+| `armv1` | 1.00 | 7.23° | 1.12 % | 3.64 s | 171.6° | 0 |
+| `armv1b` (245 s) | 0.50 | 5.04° | 0.17 % | 0.36 s | 54.1° | 0 |
+| `armv1b` | **0.75** | **7.56°** | 1.66 % | 1.56 s | 81.2° | 0 |
+| `p14` (228 s, poor depth) | **0.75** | **11.90°** | 14.13 % | **7.74 s** | 185.5° | 0 |
+
+Three readings, kept apart:
+
+* **No instability.** Output sign reversals are **0 at every scale in every capture** — the rate
+  limiter does prevent the sudden-reversal failure. That part of ADR-027 works.
+* **Rest jitter is real and scales linearly with the scalar.** At 0.75 the avatar's torso wanders with
+  a **5.4–7.6° standard deviation while the subject is still**, and it is exactly **0.000°** at scale 0.
+  The dead zone does not remove it, because the composition sums *two* damped signals and the hip yaw
+  often clears the dead zone when the shoulder line does not.
+* **Over-twist is input-quality dependent.** On the two good captures it is rare (0.25–1.66 % of the
+  time). On `p14` it reaches **14 % of the time with a 7.7 s episode**, and that capture's large-yaw
+  frames have a mean measured-depth coverage of **12.2/33 against 20.9/33 for its calm frames** —
+  the same split appears in `armv1b` (10.2 vs 19.3). **In two of the three captures the large yaw
+  excursions coincide with poor depth**, i.e. they are artefacts being faithfully followed. In `armv1`
+  the coverage is identical either way (20.9 vs 20.9), so this is a tendency, not a law.
+
+### 5e. Live device — end to end, measured on the skinned bones
+
+Sidecar streaming live to Unity in Play, scale swept in 8 s blocks, sampled from inside
+`EditorApplication.update`. The harness defect that voided §4c is checked directly: `Time.frameCount`
+advanced **1 per sample against a 0.0038 s wall dt (263 fps)**, so the editor was running normally,
+not one frame per round trip.
+
+| scale | avatar shoulder-line yaw, sd | **effective gain** | Hips Y | Spine Y | Chest Y | UpperChest Y |
+|---|---|---|---|---|---|---|
+| 0.00 | **0.14°** | **−0.000** | 0.00° | −0.00° | −0.00° | **0.00°** |
+| 0.25 | 0.82° | 0.201 | −0.66° | −2.30° | −1.28° | **0.00°** |
+| 0.50 | 0.92° | 0.380 | −0.84° | −4.60° | −2.55° | **0.00°** |
+| 0.75 | 3.01° | 0.522 | −3.71° | −3.52° | −1.96° | **0.00°** |
+| 1.00 | 9.92° | **1.194** | −13.23° | −6.18° | −3.43° | **0.00°** |
+
+The **1.4× over-gain is confirmed on the real depth path**: measured gain **1.194 at scale 1.0**,
+against V4's held-frame 1.230 — arrived at independently, on a different input, through the live rig.
+`UpperChest` is **0.000° at every scale**, reproducing §6's finding that it is never written.
+
+A 15 s live capture with a cooperative static scene gives the other half of the picture: max
+frame-to-frame step **2.11°**, **zero** flips, **zero** reversals, **0 %** of steps above the rate
+limit. **In good conditions the OAK yaw signal is clean and the conditioner is not stressed.** The
+problems in §5b/§5d are conditions problems, not signal-processing problems.
+
+### 5f. What was NOT run
+
+**The brief's guided motion list — slow yaw, fast yaw, left/right turns, repeated turns, ~90°, ~180° —
+was not completed with a human subject.** Two attempts were made with the device live. The first
+recorded 156 s but the subject could not read prompts printed to a console from 2 m away, so the
+motions are absent from the data (89 % of frames under 15° of shoulder yaw, 2 % above 22°); a second,
+spoken-prompt attempt was stopped because no speaker was available. No claim in this report rests on
+that capture, and the specific question it would answer — *does a deliberate 180° turn produce an
+ambiguity flip on this device* — **remains open**. §5c answers it only for the motions those 11
+recorded captures happen to contain.
+
+Two operator faults occurred during those attempts and are recorded because they cost the run:
+a sampler was left subscribed to `EditorApplication.update` after Play mode exited, throwing once per
+editor frame and stalling the editor; and two sidecar processes were started with `--show`, competing
+for the camera. The sampler now unregisters itself if `isPlaying` goes false or on 20 consecutive
+errors.
+
+### 5g. Controlled scale sweep on `video.webm`, in the live rig
+
+Because the live motion list could not be completed, the sweep was repeated on the one input that can
+be replayed exactly: **five passes of `video.webm`, one per scale, 376 packets each over the real UDP
+wire**, measured on the skinned bones. Source reproducibility across passes was **0.093° mean /
+3.882° max**, which is what licenses the comparison.
+
+| scale | avatar yaw sd | avatar yaw max | gain | err p50 | err p95 | err max | arm L p50 / p95 / max | hand radius |
+|---|---|---|---|---|---|---|---|---|
+| 0.00 | 0.00° | 0.00° | 0.000 | 4.18° | 18.58° | 25.44° | 0.265 / 2.065 / **5.049°** | 0.6744 m |
+| 0.25 | 0.93° | 4.28° | 0.056 | 3.97° | 17.30° | 24.53° | 0.317 / 1.710 / 11.633° | 0.6765 m |
+| 0.50 | 1.86° | 8.55° | 0.111 | 3.92° | 16.45° | 24.22° | 0.318 / 1.871 / 11.556° | 0.6774 m |
+| **0.75** | 2.78° | 12.84° | **0.167** | 4.01° | 16.00° | 23.91° | 0.317 / 1.776 / 11.754° | 0.6780 m |
+| 1.00 | 3.74° | 17.06° | 0.228 | 4.03° | 15.44° | 23.34° | 0.329 / 1.871 / 11.303° | 0.6788 m |
+
+**This clip barely exercises torso yaw**: source \|yaw\| is p50 **4.18°**, p95 18.58°, max **25.44°**,
+and only **2.7 % of frames clear the 22° dead-zone knee**. The low gain here is therefore mostly the
+dead zone doing its job on an input that has little to track — not evidence that the mechanism is
+broken. It is, however, evidence about the product: on footage like this, restoring torso yaw moves
+mean error 4.18° → 4.03° and the hand's distance from the spine axis 0.6744 → 0.6788 m. **Visually,
+almost nothing changes.**
+
+Note the gain is **0.167 at scale 0.75 here versus 0.522 on the live OAK and 0.923 held**: the same
+scalar produces a 5.5× spread of effective gain depending only on how fast the subject moves. That is
+§2b's point, measured a third independent way.
 
 ## 6. Final verdict
 
 ## CONDITIONAL PASS
 
-*works, but OAK-D validation is outstanding and tuning remains*
+*the change is safe and the mechanism is stable, but it under-delivers on motion and the OAK-D path
+carries an ungated failure mode that `torsoYawScale = 0` was silently masking*
 
-**What passes.**
+**What passes, now on the real depth path rather than by inference.**
 
-* The single controlled change is **safe**: no arm regression (source → skinned arm direction
-  **0.0000°** across 70 measurements while the torso rotated to 62.9°), no instability, no ±180°
-  leakage below 250 ms, no jitter at rest, no sudden reversal.
-* It **fixes the V3 symptom on slow or sustained turns**. Held f419, at the shipped 0.75 and verified
-  from a cold start: body-relative arm error **51.22° → 7.16°**, shoulder yaw error
-  **−50.84° → −3.64°**. At the measured unity-gain scale 0.813 the same frame reaches **5.38°**, which
-  *is* the control frame's own residual (5.43°), with shoulder yaw error **0.01°**. Visually (`sweep_f419_visual.png`) the torso turns with
-  the human and **both hands move out of the torso**, with the arm/body relationship matching the green
-  skeleton — the brief's stated acceptance condition, met on that frame.
-* Hip yaw tracking improves monotonically with scale (mean error 22.27° → 7.75°).
+* **No instability.** Output sign reversals: **0 at every scale, in every one of the 11 recorded
+  captures**. ±180° ambiguity flips in the valid signal: **2 in 55,408 frames**. Live device, good
+  conditions: max frame step **2.11°**, zero flips, zero reversals, 0 % of steps above the rate limit.
+  The ADR-027 rate limiter does what it was written to do.
+* **No arm regression.** Source → **actual skinned** bone direction, while the torso rotates:
+
+  | input | p50 | p95 | max |
+  |---|---|---|---|
+  | live OAK-D, all scales | **0.057 – 0.171°** | — | **≤0.78°** |
+  | `video.webm`, scale 0 (torso frozen) | 0.265° | 2.065° | 5.049° |
+  | `video.webm`, scale 1.0 (torso moving) | **0.329°** | **1.871°** | 11.754° |
+
+  Median and p95 are **flat or better** as the torso rotates. Only the extreme tail doubles
+  (5.0° → 11.8°), and that is the bounded parent-motion transient §4b already identified — the
+  `lerpAmount = 0.5` slerp catching up, halving every applied frame, not systematic inheritance.
+  ARM V2's parent division holds.
+* **The 1.4× over-gain is confirmed independently**: measured **1.194** at scale 1.0 on the live OAK
+  path, against §2b's held-frame 1.230. `UpperChest` is **0.000° at every scale**, never written.
 
 **What is conditional.**
 
-* **OAK-D live validation was not executed** (§5a) — no device, no `depthai`, no subject. The brief's
-  PASS wording explicitly requires it, so PASS is unavailable on evidence.
-* **On real motion the change achieves almost nothing**: mean shoulder yaw error 7.40° → 7.21° over 376
-  frames, maximum unchanged at 50.84°, 7.2 % of frames worse, effective gain 0.138 (§2d).
-* **The existing implementation is insufficient, and the sweep demonstrates it** — so the brief's
-  condition for touching the algorithm is now satisfied. Two independent defects, neither fixable by any
-  scalar:
-  1. **Composition.** Hips and shoulder yaw are two *absolute* signals each given 0.70 gain and then
-     summed by the bone chain, so the gain depends on the pose's hip/shoulder ratio: measured
-     **−2.944 to +1.230** across four frames, including a sign inversion on the 52°-twist frame.
-     `UpperChest` is never written at all, so the trunk cannot represent shoulder-vs-hip twist.
-  2. **Bandwidth.** The rate limit + 0.15 s low-pass + 8–22° dead zone track a 1 s-period ±45° reversal
-     at 0.36 of amplitude and the real clip at 0.138, and delete every shoulder yaw below 8°
-     (95 % of the clip's frames never exceed the 22° knee).
+1. **The torso path has no confidence gate, and restoring the scalar arms it (§5b).** `CalcHipsAndSpine`
+   reads `lm[11/12/23/24]` unconditionally; an absent detection yields **exactly +90° of commanded
+   yaw**. Caught live on an empty room: landmark confidence 0.71 (passing every existing gate),
+   hallucinated depth → 40.46° source yaw → **avatar torso twisted 23.82°**. This is not a regression
+   introduced by the scale change — it is a latent defect the change *un-masks*, and it is the single
+   highest-impact item found in this task.
+2. **Rest jitter (§5d).** At 0.75 the avatar's torso wanders with a **5.4–7.6° standard deviation while
+   the subject is standing still**, against exactly **0.000°** at scale 0. It scales linearly with the
+   scalar, and the dead zone does not remove it because the hip and shoulder signals are summed.
+3. **It under-delivers on motion.** The same scalar yields an effective gain of **0.167** on
+   `video.webm`, **0.522** on the live OAK, and **0.923** held — a 5.5× spread driven only by how fast
+   the subject moves. On `video.webm` the whole change moves mean error 4.18° → 4.03° and the hand's
+   distance from the spine axis by 4 mm. §2b's conclusion stands and is now measured three ways:
+   **no single scalar can be correct**, because the gain depends on the hip/shoulder ratio and on
+   motion bandwidth.
+4. **The brief's guided OAK-D motion list was not completed (§5f).** Whether a deliberate 180° turn
+   produces an ambiguity flip on this device is still unanswered.
 
-FAIL was rejected because nothing regressed and no instability was introduced — the mechanism is
-over-damped, not unstable. PASS was rejected because the torso does not follow the human on real motion
-and the OAK-D requirement is unmet.
+**FAIL was rejected** because nothing regressed: no instability, no reversals, no arm degradation in
+p50 or p95. **PASS was rejected** because the brief's live motion list is incomplete, and because
+shipping 0.75 with an ungated trunk means an empty room or a dropped detection twists the avatar.
 
-### Recommended next step — not implemented
+### Best value
 
-The next task may touch the algorithm, on this evidence. In priority order, each independently testable
-against the harness already built here:
+On measured torso tracking, and holding to the brief's instruction to choose on measurement:
 
-1. **Fix the composition before touching any gain.** Drive the trunk from the *relative* twist
-   (shoulder yaw minus hip yaw) on Spine/Chest/UpperChest and the *absolute* hip yaw on Hips, so the
-   shoulder line lands on the source's shoulder yaw by construction and the gain is 1.0 for every
-   hip/shoulder ratio. That alone should remove the f339 sign inversion and the f237 cancellation.
-2. **Then re-tune the conditioner bandwidth** against the §5b table, treating the dead zone and rate
-   limit as the two knobs — but only once an OAK-D is available, because those constants exist to reject
-   OAK depth noise and this report could not measure that noise.
-3. **Re-run the §2d clip distribution** as the acceptance gate rather than held frames; held frames
-   flatter the mechanism by ~9× and would have led to the wrong conclusion here.
+* **`0.75` remains defensible if — and only if — the confidence gate in §5b is added first.** It is
+  within 8 % of the measured unity-gain point (0.813) for a sustained turn, and gives the best
+  measured error on the OAK corpus (mean 11.10° → 7.23°).
+* **`0.50` is the better value if it ships without a gate.** It roughly **halves both costs** — rest
+  jitter 5.42° → 3.61° and worst-case output 128.7° → 85.8° on `armv1` — while giving up little
+  tracking (mean error 7.23° → 8.44°, and on `video.webm` p95 16.00° → 16.45°).
+
+The change is one number and is reversible either way, so this is a low-stakes decision that should
+follow the gate decision rather than precede it.
+
+### Recommended next steps — not implemented
+
+Deliberately not implemented: the brief scoped this task to **one** controlled change plus validation,
+and that change (`0` → `0.75`) was already made. In priority order:
+
+1. **Gate the trunk on landmark confidence and plausibility** — reject the yaw when the shoulder or hip
+   line is degenerate (near-zero span), and hold the last good value instead. Small, local, and it
+   removes the §5b failure entirely. A counterfactual replay with such a gate is already in
+   `oak_yaw_v4.py` (`gate_degenerate=True`) and costs nothing in tracking accuracy.
+2. **Fix the composition before touching any gain** (unchanged from the original §6): drive the trunk
+   from *relative* twist on Spine/Chest and *absolute* hip yaw on Hips, so the gain is 1.0 for every
+   hip/shoulder ratio.
+3. **Re-qualify the dead zone and rate limit** against §5c/§5d now that real OAK statistics exist.
+4. **Complete the guided motion capture** (§5f) — the harness is built and committed
+   (`oak_guided_v4.py`, `oak_guided_v4.ps1`); it needs a subject and a way to signal them.
 
 ### Rollback
 
 One number: set `kalidokitTorsoYawScale` back to `0` in `Scenes/Bootstrap.unity`, or at runtime in the
 inspector — it is pushed to the driver every frame and is live-tunable.
 
----
-
 ## 7. Honest limits
 
-1. **OAK-D untested** (§5a). Every yaw figure here comes from a monocular RTMW3D estimate over
-   `annotated_p0.mp4`, so it characterises *(that estimator + the shipping conditioner)*, not the OAK-D
-   depth path.
-2. **§2a's held frames measure steady state, not dance response**, and overstate the mechanism by ~9×
-   in gain. §2d is the number to trust for production behaviour. Both are reported rather than only the
-   flattering one.
-3. **§2d applies a verified model, not a per-frame live capture.** `DampYaw` is the shipping method
-   driven by reflection over the real 376-frame sequence, and the composition it feeds was verified
-   against the live rig to **0.01°** at scale 0.813 — but the 376 avatar poses were not each rendered and
-   measured in Unity. It substitutes measured source hip/shoulder yaw for `pose.Hips.y`/`pose.Spine.y`,
-   which was validated on five frames (39.060 vs 39.06; 50.841 vs 50.84) and not beyond.
-4. **My first dynamic test was invalid and is discarded**, with the evidence for why in §4c. Its numbers
-   appear nowhere in the conclusions.
-5. **Five held frames are not a distribution.** They were chosen in V3 to span 0–51° of yaw error, which
-   makes the §2b gain analysis readable but makes §2a's means unrepresentative; §2d exists for that
-   reason.
-6. **The parent-motion transient's magnitude is real but its duration in §4b is inflated ~34×** by the
-   sampler advancing one editor frame per call (`frameCount` deltas all 1 against ~0.86 s wall clock).
-7. The MCP servers were `CONNECTION_CLOSED`; the editor bridge on `127.0.0.1:6401` was driven directly,
-   as in V3.
-8. Head, hands, proportions, feet, legs, mesh garment deformation and upstream elbow behaviour were left
-   alone as instructed, and remain open from V3.
+1. **The brief's guided OAK-D motion list was not completed** (§5f). Slow/fast yaw, left-right turns,
+   repeated turns, ~90° and ~180° with a live subject remain unrun, so the ±180° ambiguity question is
+   answered only for whatever motions the 11 recorded captures happen to contain.
+2. **§5c/§5d are a replay, not 111k rendered frames.** The conditioner is the shipping method (port
+   verified to 6.7e-6°) and the composition was verified live to 0.01°, but the avatar poses were
+   computed from that model rather than measured per frame. §5e and §5g *are* live rig measurements.
+3. **§2a's held frames measure steady state, not dance response**, and overstate the mechanism by ~9×
+   in gain. §5g and §2d are the numbers to trust for motion. Both are reported.
+4. **`video.webm` is a weak torso test**: source |yaw| p50 4.18°, max 25.44°, only 2.7 % of frames above
+   the 22° dead-zone knee. Conclusions about *how much* the change helps are specific to that footage.
+   V3's `annotated_p0.mp4`, which reached 50.84°, no longer exists in the repo.
+5. **The depth-coverage correlation in §5d holds in 2 of 3 captures examined** (`armv1b`, `p14`), and
+   is absent in `armv1` (20.9 vs 20.9). It is a tendency, not a law, and is reported as such.
+6. **My first dynamic test was invalid and is discarded**, with the evidence in §4c. The replacement
+   sampler records `Time.frameCount` so the same defect would be visible; it reads 1 frame per sample
+   against a 0.0038 s dt (§5e).
+7. **Two operator faults during the live attempts are disclosed in §5f** (an orphaned editor callback
+   that stalled Unity; two competing sidecars). Neither contaminated a reported number — the affected
+   captures are excluded, not corrected.
+8. **Sign convention**: `mirrorSagittal` negates X, flipping the sign of both yaws but no magnitude,
+   step size or stability property. Every metric here is sign-symmetric or reported as |·|.
+9. Head, hands, proportions, feet, legs, mesh garment deformation and upstream elbow behaviour were
+   left alone as instructed, and remain open from V3.
 
----
 
 ## Artefacts
 
-Under `python-sidecar~/arm_v3_evidence/`: `mesh_trace.jsonl` (all 35 sweep cells plus V3),
-`sweep_f419_visual.png` (source beside scale 0 / 0.5 / 0.813 / 1.0), `yaw{0,0p25,0p5,0p75,0p813,1,1p25}_f*.png`,
-`slew_idx359_scale{0,1}*` (§4b), `dyn_arm_scale1*` (§4c, void — kept for the audit trail),
-`sweep_yaw.py`, `dyn_arm.py`, `slew_test.py`, `dyn_light.cs.txt`, `dampyaw_bench.cs.txt`, `dist.cs.txt`,
-`measure.cs.txt`, `ubridge.py`.
+Under `python-sidecar~/oak_v4_evidence/` (this task):
+
+`oak_yaw_analysis.txt` (11 recorded OAK captures, degeneracy-classified) · `oak_safety.txt` (rest
+jitter, over-twist, reversals) · `live_analysis.txt` + `live_trace.jsonl` (live device, scale blocks) ·
+`video_sweep.txt` + `video_trace.jsonl` (5-pass controlled sweep, 49,318 samples) ·
+`guided2/`, `smoke_noperson/` (raw sidecar logs).
+
+Harness, under `python-sidecar~/`: `oak_yaw_v4.py` (Unity's yaw derivation + verified `DampYaw` port) ·
+`oak_safety_v4.py` · `analyze_live_v4.py` · `analyze_video_sweep_v4.py` · `oak_guided_v4.py` /
+`oak_guided_v4.ps1` (guided motion capture, built and unused — see §5f).
+
+Under `python-sidecar~/arm_v3_evidence/` (the original V4 sweep): `mesh_trace.jsonl` (all 35 sweep cells
+plus V3), `sweep_f419_visual.png`, `yaw{0,0p25,0p5,0p75,0p813,1,1p25}_f*.png`, `slew_idx359_scale{0,1}*`,
+`dyn_arm_scale1*` (§4c, void — kept for the audit trail), `sweep_yaw.py`, `dyn_arm.py`, `slew_test.py`,
+`dyn_light.cs.txt`, `dampyaw_bench.cs.txt`, `dist.cs.txt`, `measure.cs.txt`, `ubridge.py`.

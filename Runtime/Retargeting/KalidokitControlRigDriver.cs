@@ -27,6 +27,7 @@ namespace VirtualMirror.Retargeting {
         private Transform hips;
         private Transform spine;
         private Transform chest;
+        private Transform upperChest;   // TORSO V5: bound where the rig provides it (was never written)
         private Transform leftUpperArm;
         private Transform leftLowerArm;
         private Transform leftHand;
@@ -83,10 +84,47 @@ namespace VirtualMirror.Retargeting {
         // torsoYawScale (0 = frontal-lock fallback, 1 = full damped turn). Kalidokit's per-bone dampeners
         // (Hips 0.7, Spine 0.45, Chest 0.25) are also restored (our path had used 1.0 + a 0.5/0.5 split ->
         // ~1.4x over-twist). See ADR-027.
-        private const float HipsYawDamp = 0.7f;       // Kalidokit rigRotation dampeners (reference demo values)
-        private const float SpineYawDamp = 0.45f;
-        private const float ChestYawDamp = 0.25f;
+        // ROLL keeps Kalidokit's per-bone dampeners. YAW does NOT — see the V5 block below. These are
+        // inert while torsoRoll = 0, and are named for the only channel that still uses them.
+        private const float HipsRollDamp = 0.7f;
+        private const float SpineRollDamp = 0.45f;
+        private const float ChestRollDamp = 0.25f;
+
+        // TORSO V5 (ADR-037): the yaw composition is RELATIVE, not two absolute signals summed.
+        //
+        // The old form gave Hips 0.70*hipYaw and Spine+Chest (0.45+0.25)=0.70*shoulderYaw. Because the
+        // bones NEST, the rendered shoulder line is the SUM of the chain, so it came out as
+        //     0.70*hipYaw + 0.70*shoulderYaw
+        // i.e. two ABSOLUTE yaws added. Measured consequences (V4 §2b): a rigid turn where hipYaw ==
+        // shoulderYaw is multiplied ~1.4x (measured 1.194 live, 1.230 held); opposing hip/shoulder yaw
+        // CANCELS (gain +0.116); and a 52 deg twist INVERTS the torso (gain -2.944). No scalar can fix
+        // a gain that ranges -2.944..+1.230, which is why torsoYawScale was only ever a plaster.
+        //
+        // V5 decomposes it the way the body actually works:
+        //     Hips            <- absolute hipYaw                       (gain 1.0)
+        //     Spine/Chest/UC  <- relative twist (shoulderYaw - hipYaw), weights summing to 1.0
+        // so the chain sums to hipYaw + (shoulderYaw - hipYaw) = shoulderYaw EXACTLY, for every
+        // hip/shoulder ratio. A rigid rotation is therefore never multiplied, and a twist is
+        // reproduced as a twist.
+        //
+        // Weights follow human axial rotation, which is mostly thoracic, not lumbar (lumbar ~5 deg vs
+        // thoracic ~35 deg of the total): Spine(lumbar) least, Chest and UpperChest(thoracic) most.
+        // They MUST sum to 1.0 — the sum is the gain. NormaliseTwistWeights redistributes when a rig
+        // lacks Chest or UpperChest, so the sum stays 1.0 on any humanoid.
+        private const float SpineTwistWeight = 0.20f;
+        private const float ChestTwistWeight = 0.40f;
+        private const float UpperChestTwistWeight = 0.40f;
+
+        // Gain on the whole torso yaw path. 0 = frontal-lock (the ADR-027 fallback, still reachable);
+        // 1 = physically correct follow. It is NO LONGER a compensation for a broken composition —
+        // with V5 the correct value is 1 and anything else is a deliberate partial-follow (ADR-037).
         private float torsoYawScale = 1f;             // 0 = frontal-lock, 1 = full (live-tunable)
+
+        // TORSO V5: 4-point trunk validity (see TrunkGate). Without it a dropped detection makes
+        // atan2(0,0) command exactly +90 deg of yaw — measured live on an empty room.
+        private TrunkGateState trunkGate;
+        private TrunkRejectReason lastTrunkReject;    // diag-only
+        private int trunkRejectCount;                 // diag-only
         private float yawMaxRateDeg = 140f;           // deg/s; below a human turn (~180 deg/s) so flips are rejected but real turns follow
         private float yawSmoothTau = 0.15f;           // s; output low-pass
         private float yawDeadzoneLoDeg = 8f;          // deg; |yaw| below this -> frontal (kills rest noise)
@@ -207,6 +245,11 @@ namespace VirtualMirror.Retargeting {
             hips = controlRig.GetBoneTransform(HumanBodyBones.Hips);
             spine = controlRig.GetBoneTransform(HumanBodyBones.Spine);
             chest = controlRig.GetBoneTransform(HumanBodyBones.Chest);
+            // TORSO V5: UpperChest was never bound, so on a rig that HAS it (this one does — spine.003,
+            // the shoulders' direct parent) a quarter of the trunk chain was rigid by omission rather
+            // than by design. It is optional in the VRM humanoid, so everything downstream treats null
+            // as "redistribute its share" rather than assuming it exists.
+            upperChest = controlRig.GetBoneTransform(HumanBodyBones.UpperChest);
             leftUpperArm = controlRig.GetBoneTransform(HumanBodyBones.LeftUpperArm);
             leftLowerArm = controlRig.GetBoneTransform(HumanBodyBones.LeftLowerArm);
             leftHand = controlRig.GetBoneTransform(HumanBodyBones.LeftHand);
@@ -230,6 +273,9 @@ namespace VirtualMirror.Retargeting {
             rightArmGate.Reset();
             leftLegGate.Reset();
             rightLegGate.Reset();
+            trunkGate.Reset();        // TORSO V5: never carry a held torso yaw across avatars
+            lastTrunkReject = TrunkRejectReason.None;
+            trunkRejectCount = 0;
             BuildArmRestBases();      // ARM RETARGET V1: measure this rig's arm rest orientation, once
             BindFingers();
             bound = hips != null || leftUpperArm != null || rightUpperArm != null;
@@ -338,20 +384,50 @@ namespace VirtualMirror.Retargeting {
                 }
             }
 
-            // Torso YAW (ADR-027): reject the +/-180 ambiguity flips + OAK depth noise, follow real turns.
-            // Applied to hips + spine yaw, scaled by torsoYawScale (0 = frontal-lock). Roll stays gated by
-            // torsoRoll (0 = upright). Bend keeps its own Spine/Chest split (ADR-026).
-            float hipsYaw = DampYaw(pose.Hips.y, ref hipsYawRate, ref hipsYawSmooth, dt) * torsoYawScale;
-            float spineYaw = DampYaw(pose.Spine.y, ref spineYawRate, ref spineYawSmooth, dt) * torsoYawScale;
+            // TORSO V5 (ADR-037), step 1 of 2: GATE the trunk before anything consumes it.
+            // Kalidokit reads landmarks 11/12/23/24 with no validation; an absent detection is [0,0,0]
+            // and atan2(0,0) becomes exactly +90 deg of yaw. Hip and shoulder are gated TOGETHER — the
+            // composition below uses their DIFFERENCE, so mixing a fresh value with a held one would
+            // fabricate a twist the human never made.
+            TrunkGateResult trunkYaw = TrunkGate.Evaluate(
+                landmarks[11], landmarks[12], landmarks[23], landmarks[24],
+                pose.Hips.y, pose.Spine.y, dt, ref trunkGate);
+            if (!trunkYaw.Fresh) {
+                lastTrunkReject = trunkYaw.Reason;
+                trunkRejectCount = trunkRejectCount + 1;
+            }
+
+            // ADR-027 conditioning is unchanged and still runs: rate-limit -> low-pass -> soft dead-zone.
+            // It is now fed the GATED signal, so a degenerate frame can no longer enter its filter state.
+            float hipsYawAbs = DampYaw(trunkYaw.HipYaw, ref hipsYawRate, ref hipsYawSmooth, dt);
+            float shoulderYawAbs = DampYaw(trunkYaw.ShoulderYaw, ref spineYawRate, ref spineYawSmooth, dt);
+
+            // TORSO V5, step 2 of 2: RELATIVE composition. Hips take the absolute hip yaw; the upper
+            // trunk takes only the TWIST that the hips do not already account for. Because the bones
+            // nest, the rendered shoulder line sums to
+            //     hipYaw + (shoulderYaw - hipYaw) = shoulderYaw
+            // exactly, so a rigid turn has gain 1.0 and is never multiplied (the old form summed two
+            // absolute yaws and reached 1.4x, cancelled, or inverted — V4 §2b).
+            float relativeYaw = shoulderYawAbs - hipsYawAbs;
+            float hipsYaw = hipsYawAbs * torsoYawScale;
+            float twist = relativeYaw * torsoYawScale;
+            float wSpine, wChest, wUpperChest;
+            NormaliseTwistWeights(out wSpine, out wChest, out wUpperChest);
+
             float spineRoll = pose.Spine.z * torsoRoll;
             float hipsRoll = pose.Hips.z * torsoRoll;
             float spineShare = chest != null ? 0.5f : 1f;
 
-            // Kalidokit per-bone dampeners on yaw/roll (Hips 0.7, Spine 0.45, Chest 0.25); the waist bend keeps
-            // its intended total (spineShare + 0.5 = 1.0 across Spine+Chest).
-            ApplyBone(spine, new Vector3(bend * spineShare, spineYaw * SpineYawDamp, spineRoll * SpineYawDamp));
+            // Bend (pitch) keeps its existing Spine/Chest split (ADR-026) untouched; roll keeps
+            // Kalidokit's dampeners. Only the YAW channel changes here.
+            ApplyBone(spine, new Vector3(bend * spineShare, twist * wSpine, spineRoll * SpineRollDamp));
             if (chest != null) {
-                ApplyBone(chest, new Vector3(bend * 0.5f, spineYaw * ChestYawDamp, spineRoll * ChestYawDamp));
+                ApplyBone(chest, new Vector3(bend * 0.5f, twist * wChest, spineRoll * ChestRollDamp));
+            }
+            if (upperChest != null) {
+                // Yaw only: adding bend here would change the waist pitch distribution, which is a
+                // separate, already-validated behaviour (ADR-026) and is deliberately left alone.
+                ApplyBone(upperChest, new Vector3(0f, twist * wUpperChest, 0f));
             }
             // P0-1: confidence-gated arms. Kalidokit cross-maps sides — pose.*Left is solved from landmarks
             // 12/14/16 (right shoulder/elbow/wrist), pose.*Right from 11/13/15 — so gate on those. ARM
@@ -392,7 +468,9 @@ namespace VirtualMirror.Retargeting {
             // Hips rotation only (position handled elsewhere); damped yaw (above) + roll gated by torsoRoll,
             // with Kalidokit's Hips 0.7 dampener. Pitch is 0 (Kalidokit sets hips.x = 0). Torso is NOT gated
             // (the audit found it already stable; P0 must not degrade it).
-            ApplyBone(hips, new Vector3(0f, hipsYaw * HipsYawDamp, hipsRoll * HipsYawDamp));
+            // TORSO V5: gain 1.0 on the absolute hip yaw. The old 0.70 dampener was half of the
+            // double-counting that made a rigid turn over-rotate; roll keeps its dampener.
+            ApplyBone(hips, new Vector3(0f, hipsYaw, hipsRoll * HipsRollDamp));
 
             appliedFrameCounter = appliedFrameCounter + 1;
             if (traceDirections) {
@@ -654,6 +732,27 @@ namespace VirtualMirror.Retargeting {
         // wrong side — hence the conditional rather than an unconditional negate.
         private Vector3 MirrorX(Vector3 v) {
             return mirrorX ? v : new Vector3(-v.x, v.y, v.z);
+        }
+
+        /// <summary>
+        /// TORSO V5: the twist weights for the bones this rig actually has, renormalised to sum to
+        /// EXACTLY 1.0. The sum IS the gain of the upper-trunk stage — if a rig lacks UpperChest and
+        /// its share were simply dropped, the shoulder line would under-rotate by that share and the
+        /// composition's defining property (chain total == shoulderYaw) would silently break. Missing
+        /// bones therefore hand their share to the ones that remain, never to nothing.
+        /// </summary>
+        private void NormaliseTwistWeights(out float wSpine, out float wChest, out float wUpperChest) {
+            wSpine = spine != null ? SpineTwistWeight : 0f;
+            wChest = chest != null ? ChestTwistWeight : 0f;
+            wUpperChest = upperChest != null ? UpperChestTwistWeight : 0f;
+            float total = wSpine + wChest + wUpperChest;
+            if (total <= 1e-6f) {
+                return;                       // no trunk bones at all — nothing to drive
+            }
+            float inv = 1f / total;
+            wSpine = wSpine * inv;
+            wChest = wChest * inv;
+            wUpperChest = wUpperChest * inv;
         }
 
         private static string Fmt(Vector3 v) {
