@@ -808,3 +808,493 @@ Development input is a **video file** (`VideoFileCaptureService`, `sampleVRMFile
   not try to recover the sign after the magnitude estimator discarded it -- the hips do not rotate with
   the head, and sign is 1 bit rather than a magnitude. Offline-testable on captures already in hand.
 - **Evidence:** `docs/F12_TEMPORAL_SIGN_TORSO_YAW_2026-09-10.md`; `oak_v4_evidence/f12_*.txt`.
+
+---
+
+## ADR-042 — F-13: the hip-line depth sign is a coin flip — NO-GO; and the SHOULDER sign was rejected for the wrong reason
+
+- **Context:** F-10 validated the 2-D yaw MAGNITUDE and refuted `sign(yaw3D)`; ADR-040 refuted the face
+  sign; ADR-041 refuted temporal continuity. F-13 tested the last cheap candidate: the hips, which do
+  not rotate with the head. Offline only, on the existing F-10 + F-11 ground-truth captures.
+- **Decision:** **NO-GO on the hips. Nothing implemented. No production file and no diagnostic file
+  changed** (the hip depth was already logged by the F-08 audit, so no new logging was needed).
+- **All ten acceptance criteria fail.** Over ALL turned frames the best candidate scores **40.61 %**;
+  conditioned on a sign existing it reaches only 70.51 % on **32.9 % coverage**. Per direction:
+  +45 **63.21 %**, -45 86.67 %, **+90 no signal on any frame**, -90 **10.00 %**.
+- **The block, not the frame, is the unit of evidence.** Over 10 held blocks the hip sign is
+  **4 correct / 2 wrong / 4 no-signal**, and two of the four "correct" win on 41/111 and 1/150 frames.
+- **Root reason is geometric and quantitative.** Depth is quantised to integer disparity with
+  **f*B = 21,216 mm.px**; at the subject's 1326 mm one step is **78-88 mm**. The measured hip separation
+  is **130 mm**, so a 45 deg turn is worth **1.1 disparity steps** and dz is **exactly 0 on 67.1 %** of
+  turned frames. At +-90 the far hip is **occluded by the near one** (pixel span collapses 43.9 -> 10.6)
+  and dz collapses to 0 **with zero spread** -- while the pipeline still reports both joints `measured`
+  100 % of the time. **A confidence gate cannot catch this; any future sign gate must be geometric.**
+- **The hybrid is worse than emitting no sign at all:** `sign(hipDz)*|yaw2D|` gives **MAE 72.46 deg**
+  (wrong sign 50.61 %) against **8.34 deg** for the unsigned magnitude on the same population, and worse
+  than production `yaw3D` (61.08). No threshold helps -- accuracy *falls* to 4.55 % at |dz| > 150 mm.
+- **THE CONSEQUENTIAL FINDING, from the mandated hip-vs-shoulder comparison.** The same harness on the
+  **shoulder** line gets the sign right on **9 of 10 blocks, 0 wrong** (frame level 100.00 % where
+  defined, 87.65 % over all turned frames). F-10 rejected "depth sign" at 78.49 %, but F-10 tested
+  **`sign(yaw3D)`** -- an `atan2(dx, dz)` composition that **WRAPS** when the shoulder line goes edge-on
+  (pixel span 40.5 -> **9.6** px at +-90). A raw depth difference does not wrap. F-10's own report
+  already recorded the symptom without naming the cause: "excluding the +-180 wrap: 89.52 %".
+  **The evidence is that the sign was destroyed by the composition, not missing from the measurement.**
+  The shoulders are ~3x wider than the hips, so the same turn clears ~3x the quantisation step --
+  choosing the hips traded away the only thing making the measurement work.
+- **This is a lead, NOT a result. Do not implement it.** It rests on 10 held blocks, one subject, one
+  distance, one session; motion flip rate is still 0.40-1.61/s against a ~0.5/s physical bound; -90 raw
+  coverage is 3.7 % (only the smoothed variant covers it); and at a true 0 it emits a confident
+  non-flipping sign with |dz| p50 up to 136 mm. Validating it is **F-14**.
+- **Consequence for the F-13 brief's "final rule".** That rule (stop signing `yaw2D`, redesign the
+  representation) is predicated on *all* cheap sign sources being unreliable. **That premise is now in
+  doubt** and the redesign should not start until F-14 settles the shoulder sign.
+- **Unchanged limit:** `|yaw2D|` is still bounded to [0,90] (ADR-041), so even a perfect sign solves
+  only the sign half. Sign and beyond-90 magnitude are separate work items.
+- **Methodological error, disclosed:** the first run of this analysis treated a dz of exactly zero as a
+  NEGATIVE sign, which made all-zero blocks look like perfectly stable signs with zero flips and quoted
+  70.51 % while silently dropping 67 % of frames. Fixed with a three-valued sign (+1/-1/undefined) and
+  explicit coverage columns throughout. Evidence: `oak_v4_evidence/f13_hip_sign.txt`,
+  `docs/F13_HIP_DEPTH_SIGN_TORSO_YAW_2026-09-10.md`.
+
+---
+
+## ADR-043 — F-14: raw shoulder Δz is NOT an independent sign source; a wrap guard on the existing yaw3D is equivalent — CONDITIONAL
+
+- **Context:** F-13 (ADR-042) closed the hip sign and raised an incidental lead: raw shoulder depth
+  difference was correct on 9/10 held blocks while F-10 had rejected "depth sign" at 78.49 %. F-14 tested
+  whether the sign survives in the raw depth **independent of** `yaw3D = atan2(dx, dz)`, which wraps as
+  the shoulder line goes edge-on. Offline only, on the existing F-10 + F-11 ground-truth captures.
+- **Decision:** **CONDITIONAL. Nothing implemented. No production file and no diagnostic file changed.**
+- **THE HYPOTHESIS IS REFUTED.** Over the 854 frames where raw dz is defined, it rescues **0 frames**
+  that `yaw3D` gets wrong (confusion table 853/0/1/0), and where `yaw3D` wraps raw dz is **also silent on
+  89.5 %** of those frames. Raw dz only *appears* better because it **ABSTAINS** exactly where `yaw3D`
+  errs. Abstention is not information.
+- **The decisive experiment.** Brief §14 compares a HELD depth sign against an UNHELD `yaw3D`, which is
+  unfair -- F-10 itself proposed a wrap guard. Giving every estimator the same hold:
+  `sign(emitted dz)` = **8.34 deg MAE / 9.96 RMSE / 0.00 % wrong**, `sign(yaw3D)+wrap guard` = **8.34 /
+  9.96 / 0.00 %**, perfect-sign ceiling = **8.34 / 9.96**. Identical to the decimal on main, main+twist
+  and twist-only populations. **They are the same signal, and both already sit at the ceiling.**
+- **CENTRAL ANSWER: NO** -- the OAK-D shoulder measurement does not contain a usable sign *independent
+  of* the failing composition. **Corollary: no new sign source is needed.** The smallest possible V6 is a
+  **wrap guard** (hold the last sign while `|yaw3D| > 150`), not a new signal.
+- **What DID hold, and matters:** +-45 separates at **AUC 0.000** -- the +45 and -45 raw-dz distributions
+  are completely disjoint (-252..-78 vs +89..+217) with 0.0 %/0.3 % zeros. Block level 9 correct / 0 wrong
+  / 1 no-signal, replicating F-13. Smoothing never inverted a correct raw sign (0/854) and its added
+  coverage was **100 %** correct -- legitimate dithering across a held pose, not an artefact.
+- **The true-zero result vindicates the sign x magnitude decomposition.** A square torso emits a
+  confident sign on up to 100 % of frames with |dz| up to 136 mm, but the resulting avatar error is only
+  **1.60 deg MAE** (vs production `yaw3D`'s **8.72**), because `|yaw2D|` is 0-4 deg there and
+  `sign * ~0 ~ 0`. **A wrong sign only costs where the magnitude is large.**
+- **Why CONDITIONAL, not PASS.** Four acceptance criteria fail: (7) raw dz does not retain a sign where
+  `yaw3D` wraps; (8) coverage is **3.7 % at -90** (11 frames of 294); (11) it does not improve on a
+  guarded `yaw3D`; (12) **session dependence** -- two captures of the same subject, same distance, same
+  day differ by **27 points** on the same estimator (F-10 70.83 % vs F-11 98.04 %; raw-dz coverage 49.0 %
+  vs 74.4 %). That gap is unexplained and is the gating unknown.
+- **+-90 fails for a GEOMETRIC reason.** The shoulder line collapses from 67.6 px front-on to **7.0 px at
+  -90**; two 5x5 depth windows 7 px apart on an edge-on body sample the same surface, and **dsd = 0.0**
+  confirms a perfectly uniform window -- 96.3 % of -90 frames give dz exactly 0. The geometry predicts
+  4.31 disparity steps at 90 deg (shoulder width 359 mm vs an 83 mm step, 2.76x the hips) and the
+  measurement delivers nothing, because the model assumes both shoulders stay independently visible.
+  The pipeline still reports both as `measured` 100 % of the time -- **a confidence gate cannot catch
+  this; any sign gate must be geometric.**
+- **NEXT ACTION -- the first genuinely justified new capture since F-09:** one capture, a **second
+  subject**, same protocol, same ~1.5 m, scored with `f14_shoulder_depth_sign.py` unchanged. If the
+  session gap is subject-specific the path closes; if clean, implement the wrap guard only.
+- **Unchanged limit:** `|yaw2D|` is still bounded to [0,90] (ADR-041). A working sign yields -90..+90
+  only. SIGN and MAGNITUDE-BEYOND-90 remain separate roadmap items.
+- Evidence: `oak_v4_evidence/f14_shoulder_sign.txt`,
+  `docs/F14_SHOULDER_DEPTH_SIGN_TORSO_YAW_2026-09-10.md`. Roadmap restructured as an evidence-driven
+  decision tree with an explicit NEXT PATH.
+
+- **CORRECTION (F-15 preparation, 2026-09-10) — the "session dependence" blocker is mis-stated above.**
+  Controlling for heading, the two captures agree EXACTLY on three of four headings: +45 **100.0 %**
+  vs **100.0 %**, -45 **100.0 %** vs **100.0 %**, +90 **100.0 %** vs **100.0 %**, and -90 **0.0 %** vs
+  **89.1 %**. All the variance is ONE BLOCK (`F-10 h_m90`). The 70.83/98.04 pair was frame-weighted
+  over different block mixes (F-10 is 56.9 % +-90 frames, F-11 34.6 %), which amplified a single-pose
+  failure into an apparent session-wide effect. Two candidate causes were tested and REFUTED:
+  **distance** (F-11 was 13 cm closer, 101 mm -> 78 mm step, but within-capture binning shows FARTHER
+  frames scoring better -- the bins are confounded with heading because turning changes `hipZ`) and
+  **confidence/depth coverage** (identical: 25/25 valid px, conf p10 0.502 both). The remaining
+  uncertainty is therefore **the -90 pose**, not the session. F-15 is retargeted accordingly; the
+  CONDITIONAL verdict and the central "not an independent sign source" finding are unchanged.
+
+---
+
+## ADR-044 — F-15: the torso-yaw sign is validated to +-60 deg on a second subject and unsolvable at +-90 — CONDITIONAL
+
+- **Context:** ADR-043 left the wrap-guarded `yaw3D` as the smallest possible V6, blocked on one
+  uncertainty. That uncertainty was re-characterised during F-15 prep (see the CORRECTION appended to
+  ADR-043): it was never session dependence, it was **the -90 pose**. F-15 captured a **second
+  subject** to test whether it depends on body geometry. New capture, 28 blocks, 2895 labelled frames,
+  1.27 m held to a 13 cm drift, `--headings full` so +-30 and +-60 are held for the first time.
+- **Decision:** **CONDITIONAL. Nothing implemented. No production file changed.**
+- **THE RESULT IS BOUNDED, NOT GENERAL.** On the eight label-validated whole-body blocks:
+  **|heading| <= 60 -> 6 correct, 0 wrong, 0 no-signal** (perfect on a body the estimator had never
+  seen); **|heading| == 90 -> 0 correct, 1 WRONG, 1 NO-SIGNAL**.
+- **Two criteria pass cleanly.** No subject-specific **sign inversion** (all five estimators infer
+  identical polarity on all three captures), and raw shoulder dz again supplies **1 true rescue in 318
+  defined frames, 0 at +-90** -- F-14's "not an independent sign source" **replicates**.
+- **Two criteria fail.** Macro accuracy **97.28 % (F-11) -> 37.85 %**, and the guarded hybrid MAE
+  **5.13 -> 45.29 deg** -- past the brief's 15-point collapse trigger. A strict reading of the brief
+  returns NO-GO; this ADR records CONDITIONAL because the failure is bounded, fully explained and
+  confined to one extreme of the range, and the brief's NO-GO branch (redesign the representation)
+  would over-react to a geometric limit.
+- **The magnitude travelled; the sign did not.** The perfect-sign CEILING moved only **5.13 -> 9.64
+  deg** across subjects, so the 2-D foreshortening magnitude generalises. The entire loss is the sign
+  at +-90.
+- **Cause identified: SHOULDER PIXEL SPAN.** 63.8 px front-on, 41 px at +-45, **17.3 px at +60**,
+  **7-8 px at +-90**. Two 5x5 depth windows that close together on an edge-on torso sample ONE
+  surface, so dz has nothing to compare and `atan2` wraps. **Distance was explicitly tested and
+  REFUTED** as the cause during prep (within-capture binning shows FARTHER frames scoring better; the
+  bins are confounded with heading because turning changes `hipZ`). Confidence and depth coverage were
+  identical between captures.
+- **+-90 is now a three-observation failure**: subject A fails it in F-10, passes in F-11, subject B
+  fails both sides in F-15 despite a controlled distance and a genuine 83 deg turn.
+- **The sign-source search is CLOSED.** Five sources tested and rejected: depth-via-`yaw3D` (F-10),
+  face (F-11), temporal (F-12), hips (F-13), raw shoulder dz (F-14, replicated here). **Do not write
+  another one.** If +-90 is required, the fix is the MEASUREMENT (closer distance, higher resolution,
+  sub-pixel disparity, wider baseline, second viewpoint), not another estimator.
+- **The guard does real work but is not free:** it removes **83.5 %** of the wrap errors it fires on,
+  and carries the +60 block to 100 % where raw coverage has already fallen to 71.3 %. But it held
+  **30.9 %** of frames with a longest hold of **94 frames (~3 s)**. A 3-second stale sign is a visible
+  artefact and likely needs a decay before shipping.
+- **True-zero replicates F-14:** an arbitrary sign at a square torso costs **0.19-1.11 deg**, because
+  `|yaw2D| ~ 0` there. The `sign x magnitude` decomposition remains sound.
+- **NEXT ACTION is a PRODUCT decision, not an engineering one:** *is a +-60 deg torso-yaw range
+  acceptable for the mirror?* If yes, implement the wrap guard alone plus an explicit documented range
+  limit, then validate live. If no, the work is on the measurement, not the estimator.
+- **Unresolved and disclosed:** `dc_body45L_face0` is confidently opposite on 110/110 frames for every
+  estimator, and the nose-based label audit cannot adjudicate it (that block deliberately decouples
+  head from body). Either subject B turned the wrong way on the protocol's most confusing instruction,
+  or four independent extractions failed identically. Both populations (with and without it) are
+  reported.
+- **Unchanged limit:** `|yaw2D|` is still bounded to [0,90] (ADR-041). SIGN and MAGNITUDE-BEYOND-90
+  remain separate problems; F-15 addresses only the first.
+- Evidence: `oak_v4_evidence/f15_cross_session.txt`, `pipeline_logs_f15/`,
+  `oak_v4_evidence/f15/f10_gt_marks_near.json`,
+  `docs/F15_CROSS_SESSION_TORSO_YAW_VALIDATION_2026-09-10.md`.
+- **Tooling note:** system Python carries **depthai 3.7.1** against a `>=2.32,<3` pin, and the sidecar
+  aborts at startup on 3.x (`PresetMode.HIGH_DENSITY` renamed). F-15 was captured from the project
+  `.venv` (2.32.0.0) -- the same depth stack as F-10/F-11. An overwrite guard was added to
+  `f10_gt_capture.py` so a repeat capture can no longer destroy an earlier run's marks.
+
+---
+
+## ADR-045 — V6: ship the wrap guard and an explicit ±60° envelope; the +-90 freeze is now the open defect — CONDITIONAL
+
+- **Context:** ADR-044 closed the sign-source search and authorised the smallest possible V6 within a
+  documented envelope. V6 implements exactly that and nothing else.
+- **Decision:** **IMPLEMENTED, CONDITIONAL.** One new file (`Runtime/Retargeting/TorsoYawGuard.cs`)
+  plus **18 lines** in `KalidokitControlRigDriver`: four fields, one call site, one reset. `TrunkGate`,
+  the V5 composition and weights, `UpperChest`, `DampYaw` and every ADR-027 constant, `ArmAimSolver`,
+  Arm V2, P1-1/P1-2/P1-3, F-08, scene defaults and UDP semantics are **unchanged** (`git diff` verified).
+- **Policy, both thresholds INHERITED not invented.** `|yaw| > 150` -> HOLD the last valid pair
+  (F-10's own guard, scored in F-14, replicated in F-15). `|yaw| > 60` -> **CLAMP** (F-15's measured
+  envelope). States: `Valid` / `WrapGuarded` / `OutOfRange` / `NoValue`. A test asserts both constants,
+  so changing either breaks the build rather than silently invalidating the evidence.
+- **Clamp rather than hold out of range**, deliberately: clamping is continuous (measured max step
+  across the boundary 0.5 deg on a 0.5 deg sweep), deterministic, never extrapolates through the
+  unreliable region, and keeps the SIGN that F-15 validated while dropping only the MAGNITUDE it did
+  not. The held value is stored UNCLAMPED so returning into range is instant. Hip and shoulder are
+  guarded TOGETHER, as in TrunkGate, because V5 composes their difference.
+- **What it fixes, measured on 20,783 real F-15 frames through the shipped C#:** worst frame-to-frame
+  torso step **359.9 -> 38.4 deg**; steps > 30 deg **32 -> 1**; the +-180 flip never reaches the
+  avatar. The 38.4 deg is upstream of the existing 140 deg/s conditioner (5.5 deg/frame at 25.5 fps),
+  so the avatar cannot snap. The guard is **INERT during normal movement** -- 0 holds on the slow,
+  normal, fast and reversal blocks -- firing only at +-90 and in the 180 deg turn.
+- **Tests: 145/145 EditMode, 51 new.** The 94-test V5/Arm baseline is intact. An initial run showed 2
+  failures that were a **harness artefact** (methods carrying both a bare `[Test]` and `[TestCase]`s;
+  the reflection runner invented a zero-arg call) -- product code was never at fault.
+- **WHY CONDITIONAL -- two measured defects, neither fixed by more implementation.**
+  **(1) Worst hold 12.33 s** (314 frames), against the ~3 s flagged in F-15 -- 4x worse. Hold rate is
+  only 4.31 % and the average run 3.19 s, but a subject who turns past +-90 and stays there freezes
+  the avatar's torso for as long as they hold it. **Deliberately NOT damped away** (V6 brief section
+  6): damping would hide staleness rather than fix it, and the fix is a policy choice.
+  **(2) The negative-side sign is weaker than F-15 claimed.** F-15 scored blocks by MAJORITY, which
+  marks a block CORRECT at >50 % agreement. `h_m45` is **58.6 % at frame level** -- a coin flip -- and
+  F-15 recorded it CORRECT. **This ADR corrects that:** the +-60 envelope is solid on the POSITIVE
+  side (100 % every block, every frame) and weaker on the negative side.
+- **The root cause of (2) is NOT V6.** On `h_m45` the raw Kalidokit `yaw3D` reads **-0.1 deg** while
+  F-15 measured `|yaw2D| = 58.6 deg`: the depth-derived yaw does not register that turn at all -- the
+  F-09 under-resolution root cause. **V6 cannot invent a sign for a measurement that reads zero**, and
+  correctly does not try.
+- **+-90 is not solved and is not claimed to be.** The guard converts a wrong-and-flipping torso into
+  a wrong-and-stationary one; `h_m90` holds an incorrect sign for its whole block. That is the
+  documented limit.
+- **`dc_body45L_face0` update.** F-15 left it unresolved. V6's replay adds a second independent
+  signal: raw `yaw3D` reads **+47.3 deg** for a block labelled -45, agreeing with the nose offset
+  (-0.284, the same side as every +45 block) while `|yaw2D|` confirms a genuine ~50 deg turn. Two
+  independent signals now say the subject turned RIGHT during a block labelled LEFT. Still not proof;
+  the block remains in every table.
+- **Validation method, disclosed:** V6 was validated by replaying the **shipped** `TorsoYawGuard` over
+  the **real** F-15 frames with ground-truth labels -- stronger than a fresh live session for
+  measurement, but it stops at the guard's output. **A live end-to-end Play-mode session is OWED** and
+  is the next action; watch specifically for the 12.33 s freeze.
+- **Unchanged limits:** the magnitude is still under-resolved (F-09), and `|yaw2D|` is still bounded
+  to [0,90] (ADR-041). V6 changed WHICH yaw reaches the composition, not how well it is measured, and
+  it does not address beyond-90 magnitude.
+- Evidence: `oak_v4_evidence/f15/v6_guard_replay.txt`,
+  `docs/V6_TORSO_YAW_IMPLEMENTATION_VALIDATION_2026-09-10.md`.
+
+- **LIVE SESSION RESULT (added same day, OAK-D + Play mode, subject A at 1.33 m, 266 s / 58,605
+  avatar frames sampled off the rendered bones at 220 Hz).**
+  **The guard is confirmed:** worst frame-to-frame change in the RENDERED torso yaw is **2.45 deg**
+  with **ZERO** steps above 10 deg, against a V5 baseline of 359.9 deg and 32 steps over 30 deg. No
+  snap is reachable by the viewer. States: Valid 89.33 %, OutOfRange 8.32 %, WrapGuarded 2.35 %.
+  Worst hold **10.7 s** live, independently predicting-and-confirming the offline replay's 12.33 s.
+- **THE LIVE SESSION ALSO ANSWERED THE PRODUCT QUESTION, AND THE ANSWER IS NO.** With the subject
+  standing SQUARE -- confirmed independently by a 66.9 px shoulder span against a ~64 px front-on
+  value -- the avatar's torso sits at **-49.6 deg, stable to 0.2 deg over 150 consecutive frames**.
+  Measured cause on the same frames: raw shoulder dz **-101 mm** against an **89 mm** disparity step
+  at 1.33 m. The two shoulders land on ADJACENT DISPARITY RUNGS -- the smallest non-zero difference
+  the sensor can express -- and that single step becomes ~50 deg of commanded yaw. It is not noise
+  and no filter can remove it.
+- **This is NOT a V6 defect and V6 cannot fix it.** -49.6 deg is INSIDE the +-60 envelope, so the
+  guard correctly passes it through as `Valid`. V6 governs the WRAP and the RANGE, not how the yaw is
+  MEASURED. This is the F-09 under-resolution root cause (ADR-038), now shown to be the DOMINANT
+  VISIBLE DEFECT -- far more so than the freeze this task was worried about. It also explains the
+  replay oddity of `yaw3D` reading -0.1 deg for a real 58.6 deg turn: the magnitude is decoupled from
+  the truth in BOTH directions.
+- **CONSEQUENCE FOR THE ROADMAP: stop work on the torso-yaw ESTIMATOR.** Five sign sources are closed
+  (F-10..F-15) and this is a MAGNITUDE failure, not a sign one. Everything downstream -- V5
+  composition, the V6 guard, the +-60 envelope -- is correct and can stay as it is. The next work is
+  the MEASUREMENT: closer working distance, higher RGB/depth resolution, sub-pixel disparity, wider
+  stereo baseline, or a second viewpoint.
+- **Diagnostic defect found by the session (labelling only, no behaviour change):** a frame held
+  because `TrunkGate` reported `!Fresh` is reported as state `Valid` with a growing `HoldStreak`, so
+  the live timeline shows 2,356-frame holds under a "Valid 100 %" label. The yaw is held correctly
+  either way; the enum should distinguish it. Fix in a follow-up.
+- Live evidence: `oak_v4_evidence/v6_live_session.txt`, `oak_v4_evidence/v6_live_trace.jsonl`.
+
+## ADR-046 — F-16: the OAK-D can measure torso yaw, but only at 0.80 m (2026-09-11)
+
+**Status:** accepted (investigation closed). **Evidence only — no production file was modified.**
+
+**Question.** V6 established that the downstream guard is correct while the upstream measurement can
+be catastrophically wrong. F-16 asked whether the current OAK-D stereo configuration can physically
+resolve shoulder depth well enough for production torso yaw at the intended distance.
+
+**Method.** 12 stereo configurations (sub-pixel 1/8 and 1/32, mono 1280x800, RGB 1280x800,
+HIGH_ACCURACY, extended disparity, unaligned depth) measured on a static scene and with a subject
+square at 7 distances from 0.80 m to 2.00 m, plus a rotation set and a 180-degree bias test. The
+first distance sweep was DISCARDED and re-run: the subject cannot judge 0.80 m from 1.33 m and
+cannot see the capture console, so positions drifted to 1.06-1.45 m. The rebuilt protocol estimates
+range from SHOULDER PIXEL SPAN (an RGB/pose quantity, independent of the depth under test), shows it
+on a full-screen HUD, and triggers recording automatically inside +-6 cm.
+
+**Confirmed.**
+- The quantisation model is exact. EEPROM gives baseline **75.0 mm** and fx 282.995 px, so
+  **f*B = 21,224.6 mm*px** against the **21,216** empirically fitted through F-09..F-15 — a ratio of
+  **1.0004**. Observed/theory ran **0.94-1.26** across 9 configurations x 8 range bands.
+- Production resolves **3 distinct depth values in a 200 mm window** at 1.2 m.
+- **Sub-pixel 1/8 is close to free and worth having on its own merits:** the 1.33 m step falls
+  **83.5 -> 12.0 mm** and frame-to-frame torso instability **15.90 -> 3.59 deg**, at **+2 ms latency
+  and no FPS cost**. At 0.80 m it takes instability **5.21 -> 1.69 deg**.
+
+**Refuted — and this was the working hypothesis going in.** Quantisation is NOT what puts a square
+user's torso at ~14 deg. A **28x finer ladder (83.5 -> 3.0 mm) moved the error 14.68 -> 13.52 deg**,
+and all eight configurations at 1.33 m land between **10.55 and 15.61 deg**. Higher RGB resolution
+changes it by 0.9 deg; HIGH_ACCURACY does not alter the ladder at all and costs 11 points of
+coverage; extended disparity halves the frame rate for no gain.
+
+**Found instead.** A **+0.75 px systematic disparity MATCHING error** between the two shoulder
+windows (median over 7 distances, spread 0.38 px). Sub-pixel subdivides a match; it cannot repair
+one that is a whole pixel wrong — which is exactly why every sub-pixel configuration reproduces the
+same offset. Because it is a fixed PIXEL error its metric cost scales as Z^2, so the angular cost
+runs **0.51 deg at 0.80 m -> 14.76 at 1.33 m -> 24.87 at 2.00 m**.
+It is **not the subject's posture** (a 180-degree turn did not flip the sign, and the same subject
+reads 0.00-5.10 deg at 0.80 m) and **not a left/right sensor bias** (the farther shoulder kept its
+ANATOMICAL side while swapping IMAGE side). It is consistent with an **occlusion-edge artefact**: the
+farther-reading shoulder carried the wider depth window on **69.5 % / 75.2 %** of frames in two of
+three datasets — support, not proof; the third split 50/50.
+
+**Decision.** **CONDITIONALLY FEASIBLE.** At **0.80 m four of the five configurations tested pass**
+the proposed +-5 deg median / +-10 deg p95 acceptance — **production included, at median 0.00 deg /
+p95 5.21** — and **all five are within +-10 deg on 100 % of frames**; the fifth (RGB 1280x800 +
+mono 1280x800 + sub-pixel) misses the 5 deg median by 0.10 deg. At **1.00 m and beyond none does**. Recommendation **B (change working
+distance)**, with **D (sub-pixel 1/8)** as a required companion rather than an alternative; E and C
+are measured and rejected; F (wider baseline) is ranked third and is PREDICTED, not measured.
+
+**The constraint that makes this a product decision, not an engineering one.** Torso-yaw accuracy
+requires **Z <= 0.80 m**. Full-body framing requires **Z >= 1.24 m** (from this device's measured
+70.2 deg vertical FOV against a 1.75 m subject). **The two windows do not overlap on this camera.**
+
+**Not changed.** V5 composition, V6 `TorsoYawGuard`, `TrunkGate`, `DampYaw`, Arm V2, P1-1/2/3, the
+F-08 sampler, UDP semantics, and the shipping stereo configuration are all untouched. Enabling
+sub-pixel in production is a separate task requiring its own live validation.
+
+**Also measured.** +-90 degrees gets **worse** with a better measurement, not better: shoulder span
+collapses 71 -> 13.8-16.9 px and the yaw baseline |dx| 345 -> 48.7-55.8 mm, so `left90` reads
++28.6 deg with a **50.6 deg standard deviation** and `right90` reads **+7.5 deg, the wrong sign**.
+Sign was correct on **6/6** of the +-30/+-45/+-60 blocks. Magnitude saturates: commanded
+-30/-45/-60 read **+40.2 / +40.2 / +48.1 deg**.
+
+**Open.** V6's 49.6 deg needed a **154.5 mm** yaw baseline; F-16 never observed below **320 mm**, so
+the `|dx|` collapse seen in the V6 session is a separate, uncharacterised defect.
+
+**Evidence:** `docs/F16_OAKD_TORSO_DEPTH_RESOLUTION_2026-09-11.md`; raw data and analyses under
+`oak_v4_evidence/f16/` (`device_probe.txt`, `config_sweep_scene1.txt`, `autosweep_baseline_1.jsonl`,
+`autosweep_sub3.jsonl`, `pose_sub3_133.jsonl`, `cfgsweep_133.jsonl`, `cfgsweep_080.jsonl`,
+`consolidated.txt`, `edge_check.txt`).
+
+## ADR-047 — F-17: a wider stereo baseline will not rescue full-body torso yaw (2026-09-11)
+
+**Status:** accepted (investigation closed). **Evidence only — `git diff -- Runtime/` shows only the
+V6 changes.**
+
+**Question.** F-16 ended with a wider stereo baseline as the last untested hardware lever, predicting
+that doubling the 75 mm baseline would take the 14.76 deg square-stance error at 1.33 m to ~7.5 deg.
+F-17 asked whether that is actually achievable.
+
+**Blocked at the inventory, and this is stated rather than worked around.** Exactly one stereo device
+is attached. The board's other two baselines are **37.36 mm and 37.64 mm — narrower, not wider**. The
+brief's candidate list (OAK-D-LR, OAK-D-W, custom pair, second camera) could not be populated, so the
+per-candidate rotation set, thermal run and CPU profile are marked not-applicable rather than
+invented.
+
+**Substitute experiment attempted, and it failed as an instrument.** 402 synchronised CAM_A/B/C frame
+sets were captured at 1.24-2.00 m with the F-16 closed-loop HUD protocol and processed offline
+through host rectification built from the device's own EEPROM, with ONE shared SGBM matcher so the
+baseline was the only variable. **host B-C tracks the device to within 1-8 %**; **host A-C is wrong
+by 21-41 %**, a constant ~1.93 px disparity deficit that swamps the few-tens-of-mm dz under test.
+Five checks put the fault in the PAIR and not the rig: epipolar |dy| p50 = **0.00 px**; rectified
+**cx1 = cx2 exactly**; the same matcher is accurate on B-C; 2x and 3x upsampled matching does not fix
+it; all three sockets use the same `Perspective` distortion model. CAM_A is an **IR-cut colour**
+sensor against **unfiltered mono** — torso depth coverage **42 % against 88 %**. This hardware cannot
+supply a second usable baseline.
+
+**Decisive evidence, from data already in hand.** F-16's 1.33 m configuration sweep held the subject
+square through all eight configurations in one continuous session, giving three pairs that differ
+**only** by mono resolution — three independent **doublings of f*B**:
+
+| comparison | dz before | dz after | ratio |
+|---|--:|--:|--:|
+| baseline -> mono800 | 89.0 mm | 95.0 mm | **1.067** (wrong way) |
+| sub3 -> mono800_sub3 | 82.2 mm | 65.0 mm | 0.791 |
+| sub3_rgb800 -> best | 97.0 mm | 86.0 mm | 0.887 |
+
+Mean **0.915**. A pure PIXEL-domain bias would give **0.50** per doubling; a pure DEPTH-domain bias
+**1.00**. **This is Case B: the bias does not follow f*B.** Quantisation halved in all three pairs,
+so f*B certainly changed — the bias did not. Projected onto baseline, reaching 5 deg at 1.33 m would
+need ~161 m. Even the IDEAL model needs **140 / 161 / 205 / 295 / 364 mm** at 1.24 / 1.33 / 1.50 /
+1.80 / 2.00 m, and gives a 150 mm head **4.66 deg at 1.24 m with 0.34 deg of margin, failing from
+1.33 m onward**.
+
+**Decision.** **NOT FEASIBLE** for the wider-baseline route; hardware decision **WIDER BASELINE
+INSUFFICIENT**. Do not procure a wider-baseline stereo head.
+
+**What F-17 found instead — the lens, not the baseline.** The requirement has a closed form in which
+field of view enters twice, because a wider lens lets the subject stand closer AND the requirement
+falls as Z^2:
+
+```text
+B_required = H_body^2 * dd / ( 2 * h_px * W_shoulder * tan(eps) * tan(vfov/2) )
+```
+
+    V-FOV 70.2 deg (this camera) -> Z_min 1.24 m -> B_req 141 mm
+    V-FOV 95   deg               -> Z_min 0.80 m -> B_req  58 mm   (BELOW the 75 mm already fitted)
+
+That 0.80 m row is **not** an extrapolation: F-16 measured this camera passing there (median
+0.00-3.83 deg, 100 % of frames within +-10 deg). And the camera is already **96.7 deg horizontal x
+70.2 deg vertical** — **mounted in portrait that becomes 96.7 deg VERTICAL**, framing a 1.75 m body at
+**0.78 m** with the stereo pipeline untouched, since the pair rotates with the body and only the
+image needs rotating before the pose model.
+
+**Cost of the portrait orientation, and it is real:** horizontal coverage falls to **1.10 m** against
+a ~1.75 m adult arm span, so fully spread arms leave frame.
+
+**Not changed.** V5 composition, V6 `TorsoYawGuard`, `TrunkGate`, `DampYaw`, Arm V2, P1-1/2/3, F-08,
+UDP semantics, production thresholds and the shipping stereo configuration are all untouched.
+
+**Honest limitations.** The primary question was **not measured** — no wider-baseline camera existed.
+The verdict rests on the ideal model clearing the bar at one distance with 0.34 deg of margin, on
+three measured f*B doublings showing the bias does not scale, and on the occlusion mechanism (a wider
+baseline makes silhouette occlusion worse) arguing the same way. **A measured counter-example from
+real wider-baseline hardware would overturn it**, and the acceptance test is pre-written: <=5 deg
+median and <=10 deg p95 at >=1.24 m, square stance, closed-loop HUD protocol. The scaling evidence
+comes from RESOLUTION, not BASELINE — the closest available probe, not a substitute. The portrait
+recommendation also carries one unmeasured step: rotating the camera puts the stereo baseline
+vertical in world terms, so the shoulder line becomes perpendicular to it rather than parallel, and
+that changes the shoulder occlusion geometry in a way nothing here has measured.
+
+**Evidence:** `docs/F17_WIDER_STEREO_BASELINE_FEASIBILITY_2026-09-11.md`; data under
+`oak_v4_evidence/f17/` (`inventory.txt`, `rig_validation.txt`, `tuning.txt`, `raw/sweep1/` with 402
+frame sets, `multibaseline.txt`, `model.txt`).
+
+## ADR-048 — F-18: portrait orientation solves the full-body / torso-yaw conflict (2026-09-11)
+
+**Status:** accepted (investigation closed). **Evidence only — `git diff -- Runtime/` shows only the
+V6 changes.**
+
+**Question.** F-16 measured that torso yaw needs <= 0.80 m while full-body framing needs >= 1.24 m,
+with no overlap. F-17 measured that a wider stereo baseline cannot close that gap and found the lens,
+not the baseline, to be the lever. F-18 tested the cheapest form of that: rotate the EXISTING camera
+90 degrees so its 96.7 deg horizontal field of view becomes the vertical one.
+
+**Setup.** The camera was PHYSICALLY rotated; cropping a landscape frame was rejected because it
+keeps the same 70.2 deg vertical FOV and would prove nothing. Direction was auto-detected from the
+imagery rather than assumed: CCW, body confidence 0.81 vs 0.58, head-above-hips only that way.
+
+**The transformation was verified BEFORE the camera was touched.** Rotating the image alone would
+rescale every back-projected X and silently corrupt the yaw triangle; the intrinsics must rotate with
+it. Verified: 3-D geometry preserved to **2.8e-17 m**, pixel mapping identical to `cv2.rotate`, FOV
+correctly swapping to 96.7 V / 70.2 H.
+
+**Result — the blocker is gone.** At **0.90 m**: square-stance yaw **1.15 deg median, 2.33 deg p95,
+frame-to-frame 1.98 deg**, body **full-body-SAFE**, depth quality 0.95. **All four tested distances
+pass** (0.78 / 0.80 / 0.90 / 1.00 m) where landscape passed nothing at or beyond 1.24 m. Best single
+block 0.73 deg median / 1.64 deg p95.
+
+**V6, observation only, no threshold changed.** The Editor was not running, so `TorsoYawGuard.cs` was
+ported line-by-line and the port **verified against V6's own published numbers** before use (896
+held, 4.31 %, 11 runs, longest 12.31 s vs the report's 12.33 s). Portrait square blocks: **100 %
+Valid, zero wrap, zero out-of-range, zero held.** Longest hold anywhere in the 6,508-sample portrait
+stream is **1.11 s** against V6's 12.33 s. Caveat: hipYaw = shoulderYaw and trunkFresh = true, so
+hold figures are a lower bound.
+
+**Cost.** The rotation is **0.2584 ms/frame = 0.78 %** of a 33 ms budget. Against the like-for-like
+landscape capture at the same stereo config, portrait measured **21 ms faster**; the frequently
+quoted "31.2 fps / 24 ms" was a depth-only sweep with no pose model and is not comparable.
+
+**No geometric inversion.** Handedness identical (signed dx **-316.8 mm** portrait vs **-345.4 mm**
+landscape, person-left at the larger u in both), square reads **2.89 deg** not 180, and **10 of 12**
+left/right pairs separate with opposite signs. The observed polarity difference from F-16 is the
+SUBJECT turning the other way for the same prompt (left30 dz **+231 -> -87 mm**), not the camera —
+the F-15 rule that commanded heading is not angular truth, again.
+
+**Decision: CONDITIONALLY FEASIBLE. Adopt portrait at a 0.90 m user distance.** Conditions, all
+measured:
+
+1. **Arm spread is the new binding constraint.** Rotating swaps which axis gets 96.7 deg and which
+   gets 70.2, but the SMALLER FOV always binds the LARGER body dimension. Measured T-pose span
+   **~1.18 m** against 1.12 m of horizontal coverage at 0.80 m: clamped at the border at every
+   distance up to 0.85 m, tight at 0.90 m, safe only at 1.00 m. Arms-45 (~0.84 m) is safe from
+   0.78 m. **The supported interaction envelope is arms-45; T-pose and crouch are outside it.**
+2. **Crouch loses the hands** (80.1 % in frame at 0.90 m) — the one failing interaction action.
+3. **The occlusion asymmetry got WORSE, not better** — the F-17 open question. Far-wider rose
+   23.2 -> 72.7 % at 0.80 m and 85.9 -> 97.5 % at 1.00 m, with far-shoulder window spreads roughly
+   doubling. Portrait wins on FRAMING; the F-16 matching error is still underneath. Portrait is
+   worse than landscape at 0.80 m (2.36 vs 0.51 deg) and better at 1.00 m (4.57 vs 7.87).
+4. **Two sections were NOT performed and are not estimated**: multi-user (no second person) and
+   avatar human-quality (needs a live portrait sidecar and the Unity Editor). **The avatar check is
+   the most important gap** — every F-18 number is at the landmark level, upstream of the rig.
+5. **The mount is not level** — a ~19-32 deg downward pitch is implied by the imagery (height derived
+   at ~0.81 m; no tape measurement was supplied). This does not invalidate the results: framing
+   margins were measured directly in pixels, and a pure pitch leaves a world-horizontal shoulder line
+   at equal camera-Z so the square-stance yaw is unaffected.
+
+**Methodological note worth keeping.** A pose model CLAMPS a keypoint to the image border rather than
+dropping it, so "0 <= u < width" is not evidence a hand is in frame. Every in-frame test in F-18
+requires a keypoint >= 10 px from the border. Without that rule every T-pose row would have read
+"100 % in frame" and the arm-spread limit would have been missed entirely.
+
+**Not changed.** V5 composition, V6 `TorsoYawGuard`, `TrunkGate`, Arm V2, P1-1/2/3, F-08, UDP
+semantics, avatar rig and production thresholds are all untouched. **Porting the rotation into the
+sidecar is a production change and needs its own task, ADR and live validation.**
+
+**Per section 20, this is not a production-readiness claim.** It establishes only that the current
+camera can satisfy the full-body and torso-yaw geometry simultaneously.
+
+**Evidence:** `docs/F18_PORTRAIT_CAMERA_FEASIBILITY_2026-09-11.md`; data under
+`oak_v4_evidence/f18/` (`f18_frame_sweep.jsonl`, `f18_torso_near.jsonl`, `f18_torso_far.jsonl`,
+`f18_move_090.jsonl`, `f18_analysis_2.txt`, `v6_observation.txt`, `v6_replay_input.csv`).

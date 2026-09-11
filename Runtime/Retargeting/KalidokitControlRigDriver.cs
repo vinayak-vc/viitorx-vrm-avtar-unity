@@ -125,6 +125,14 @@ namespace VirtualMirror.Retargeting {
         private TrunkGateState trunkGate;
         private TrunkRejectReason lastTrunkReject;    // diag-only
         private int trunkRejectCount;                 // diag-only
+
+        // TORSO V6 (see TorsoYawGuard): the F-10 wrap guard + the F-15 ±60° operating envelope.
+        // TrunkGate answers "is this measurement well-formed?"; this answers "is its SIGN trustworthy,
+        // and is its magnitude inside the range we actually validated?"
+        private TorsoYawGuardState torsoYawGuard;
+        private TorsoYawState lastTorsoYawState;      // diag-only
+        private int torsoWrapGuardCount;              // diag-only
+        private int torsoOutOfRangeCount;             // diag-only
         private float yawMaxRateDeg = 140f;           // deg/s; below a human turn (~180 deg/s) so flips are rejected but real turns follow
         private float yawSmoothTau = 0.15f;           // s; output low-pass
         private float yawDeadzoneLoDeg = 8f;          // deg; |yaw| below this -> frontal (kills rest noise)
@@ -397,10 +405,26 @@ namespace VirtualMirror.Retargeting {
                 trunkRejectCount = trunkRejectCount + 1;
             }
 
+            // TORSO V6 (ADR-045): the F-10 wrap guard + the F-15 operating envelope, applied BETWEEN
+            // the V5 gate and the V5 composition. TrunkGate rejects a measurement that is degenerate
+            // or discontinuous; this rejects one whose SIGN is not trustworthy (the atan2 flip past
+            // ±150°) and limits one whose magnitude was never validated (past ±60°, where F-15
+            // measured the shoulder line at 7-8 px and the sign at 0 correct / 1 wrong / 1 no-signal).
+            // Nothing below this line changed: same conditioner, same relative composition, same weights.
+            TorsoYawGuardResult torsoYaw = TorsoYawGuard.Evaluate(
+                trunkYaw.HipYaw, trunkYaw.ShoulderYaw, trunkYaw.Fresh, ref torsoYawGuard);
+            lastTorsoYawState = torsoYaw.State;
+            if (torsoYaw.State == TorsoYawState.WrapGuarded) {
+                torsoWrapGuardCount = torsoWrapGuardCount + 1;
+            } else if (torsoYaw.State == TorsoYawState.OutOfRange) {
+                torsoOutOfRangeCount = torsoOutOfRangeCount + 1;
+            }
+
             // ADR-027 conditioning is unchanged and still runs: rate-limit -> low-pass -> soft dead-zone.
-            // It is now fed the GATED signal, so a degenerate frame can no longer enter its filter state.
-            float hipsYawAbs = DampYaw(trunkYaw.HipYaw, ref hipsYawRate, ref hipsYawSmooth, dt);
-            float shoulderYawAbs = DampYaw(trunkYaw.ShoulderYaw, ref spineYawRate, ref spineYawSmooth, dt);
+            // It is now fed the GATED + GUARDED signal, so neither a degenerate frame nor a wrapped
+            // sign can enter its filter state.
+            float hipsYawAbs = DampYaw(torsoYaw.HipYaw, ref hipsYawRate, ref hipsYawSmooth, dt);
+            float shoulderYawAbs = DampYaw(torsoYaw.ShoulderYaw, ref spineYawRate, ref spineYawSmooth, dt);
 
             // TORSO V5, step 2 of 2: RELATIVE composition. Hips take the absolute hip yaw; the upper
             // trunk takes only the TWIST that the hips do not already account for. Because the bones
@@ -882,6 +906,11 @@ namespace VirtualMirror.Retargeting {
             spineYawSmooth = 0f;
             leftArmRoll.Reset();          // ARM RETARGET V1: drop the carried elbow-plane roll history
             rightArmRoll.Reset();
+            trunkGate.Reset();            // TORSO V5: drop the held trunk yaw
+            torsoYawGuard.Reset();        // TORSO V6: drop the held guard yaw + hold statistics
+            lastTorsoYawState = TorsoYawState.NoValue;
+            torsoWrapGuardCount = 0;
+            torsoOutOfRangeCount = 0;
         }
 
         // Median of a small buffer (used to seed the spine-bend baseline robustly against a startup outlier).
