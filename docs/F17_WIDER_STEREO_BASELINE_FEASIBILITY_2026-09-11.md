@@ -414,3 +414,11 @@ field of view into the vertical one and frames a full body at 0.78 m - the range
 measured this hardware passing - and verify arm-spread coverage and the rotated-baseline occlusion
 behaviour before anything is procured.
 ```
+
+---
+
+**Note (2026-09-14):** the `f17_*.py` capture/analysis scripts this report describes running were removed in
+a repository cleanup — the investigation is closed (NOT FEASIBLE, do not revisit without new
+evidence per `roadmap.md`) and nothing outside this now-deleted chain imported them. This report's
+findings, measurements and `HARDWARE DECISION` above are unchanged; the exact reproduction commands
+above are no longer runnable as written but remain committed in git history prior to this date.

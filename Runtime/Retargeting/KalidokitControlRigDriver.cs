@@ -289,6 +289,64 @@ namespace VirtualMirror.Retargeting {
             bound = hips != null || leftUpperArm != null || rightUpperArm != null;
         }
 
+        /// <summary>
+        /// F-20A STALE-STREAM FAILSAFE ONLY. Eases the control rig toward its NEUTRAL pose by the
+        /// per-frame factor <paramref name="k"/> (0 = no movement, 1 = snap to rest).
+        ///
+        /// This is safe to do without any calibration because the VRM control rig is NORMALIZED: its
+        /// rest pose is exactly identity local rotation on every bone, by definition. There is no
+        /// captured rest that could go stale and no per-rig measurement to get wrong.
+        ///
+        /// It exists because F-19 showed the old behaviour on a dead stream was to STOP APPLYING,
+        /// which leaves the last human pose on screen indefinitely - a public mirror showing a
+        /// three-minute-old person. Nothing here runs while tracking is live, and it changes no
+        /// tracking, gate, torso or arm behaviour.
+        /// </summary>
+        public void ReleaseToRest(float k) {
+            if (!bound) {
+                return;
+            }
+            float t = k < 0f ? 0f : (k > 1f ? 1f : k);
+            RestBone(hips, t);
+            RestBone(spine, t);
+            RestBone(chest, t);
+            RestBone(upperChest, t);
+            RestBone(leftUpperArm, t);
+            RestBone(leftLowerArm, t);
+            RestBone(leftHand, t);
+            RestBone(rightUpperArm, t);
+            RestBone(rightLowerArm, t);
+            RestBone(rightHand, t);
+            RestBone(leftUpperLeg, t);
+            RestBone(leftLowerLeg, t);
+            RestBone(leftFoot, t);
+            RestBone(rightUpperLeg, t);
+            RestBone(rightLowerLeg, t);
+            RestBone(rightFoot, t);
+        }
+
+        private static void RestBone(Transform bone, float t) {
+            if (bone == null) {
+                return;
+            }
+            bone.localRotation = Quaternion.Slerp(bone.localRotation, Quaternion.identity, t);
+        }
+
+        /// <summary>
+        /// F-20A: drop every held limb/trunk state without rebinding, so a stream that recovers after a
+        /// failsafe does not resurrect a hold decision taken against the previous session's poses.
+        /// Same resets <see cref="Bind"/> performs; no thresholds are touched.
+        /// </summary>
+        public void ResetHoldState() {
+            leftArmGate.Reset();
+            rightArmGate.Reset();
+            leftLegGate.Reset();
+            rightLegGate.Reset();
+            trunkGate.Reset();
+            lastTrunkReject = TrunkRejectReason.None;
+            trunkRejectCount = 0;
+        }
+
         public void Unbind() {
             if (vrm != null) {
                 vrm.UpdateType = Vrm10Instance.UpdateTypes.Update; // restore auto-update for the FK path

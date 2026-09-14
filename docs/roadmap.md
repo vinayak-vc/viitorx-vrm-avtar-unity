@@ -256,46 +256,81 @@ F-18  does PORTRAIT orientation give full body AND torso yaw together?  <-- CURR
                     tape measurement.
       Decision : adopt portrait at 0.90 m; port the rotation into the sidecar behind a flag and
                  run the live avatar session.                                   [ADR-048]
+
+F-19  does portrait survive the REAL pipeline and produce a credible avatar?  <-- CURRENT, CLOSED
+      Integration: --portrait (default off) in wholebody_udp_sender.py, F-18 transform imported not
+                 re-derived. git diff -- Runtime/ EMPTY. Equivalence re-verified 5/5 (0.000e+00 px
+                 intrinsics, 0.0001 mm geometry, 0/9960 left-right identity).
+      Live     : 134,959 rendered frames, 37 blocks, one rig, ~24 min of real camera + subject.
+      AVATAR OK: square human -> square avatar, rendered yaw median 0.012 deg (range -2.59..0.30).
+                 ZERO snaps > 10 deg in ALL 37 blocks; worst per-block frame-to-frame p95 0.503 deg
+                 against a 5 deg target. Bone length 0.0011 %, lossyScale 1.000000 (attributed).
+                 Zero left/right swaps in 80,835 frames. 29.9 fps, 31.8 ms capture->send, P1-2
+                 freshness intact (stale-dropped p50 = 0).
+      MOUNT    : F-18's derived 19-32 deg pitch was WRONG. Measured on the device's own BNO086:
+                 ~6-7 deg before levelling, 5.89 deg after, roll +0.14 deg. Height still unmeasured.
+      BLOCKER 1: shipped stereo config is NOT the validated one. Sub-pixel OFF gives 6 distinct
+                 shoulder-dz values in 270 frames (235 on ONE 116 mm bin) = a 6.80 deg YAW QUANTUM
+                 at 0.90 m, vs 0.85 deg with sub-pixel 1/8. A 6.80 deg quantum cannot express a
+                 5 deg median. --subpixel-bits added (default -1 = no change); SHIPPING IT IS AN
+                 OPEN DECISION and every F-19 number depends on it.
+      BLOCKER 2: MULTI-USER FAILS. Second person present -> tracker switched to them at ~25 s and
+                 NEVER returned (hip depth bimodal 1.25-1.40 vs 2.30-2.60 m; 0 % of frames in the
+                 primary's band for the last 60 s). The avatar telemetry showed ZERO snaps and
+                 7.8 mm max root steps - the lerp smoothed a total person switch into
+                 perfect-looking output. RENDERED-BONE CONTINUITY CANNOT DETECT PERSON SWITCHING.
+      BLOCKER 3: SIDECAR RESTART FREEZES THE AVATAR PERMANENTLY. seq restarts at 1, P1-3 rejects
+                 everything as out-of-order (RejectedOutOfOrder 4948, LastSeqA stuck 22678,
+                 packetAgeMs 208417) while IsRunning=True, ReceivedCount climbing, ParseErrors=0.
+                 Pre-existing, not portrait. Recorded not fixed (section 1 forbids touching P1-3).
+      F-20 IN  : both elbows fold to 177-180 deg (human max ~150) on 81-91 % of the hands-near-face
+                 block, bend normal wandering 74.8/129.6 deg, robust to a 120 deg threshold, P0 gate
+                 holding NOTHING. Knees clean. Whole-capture hinge spread WITHDRAWN as not robust.
+      Decision : integration accepted; NOT ready for public use until blockers 1-3 are closed.
+                                                                                [ADR-049]
 ```
 
-### NEXT PATH — matches the F-18 CONDITIONALLY FEASIBLE result
+### NEXT PATH — after F-20A (transport fixed; supervisor still missing)
 
 ```text
-TORSO STATUS
-   V5 torso composition      OK
-   V6 wrap protection        OK
-   torso MEASUREMENT         OK AT 0.90 m IN PORTRAIT  (1.15 deg median / 2.33 p95, measured)
-   torso ACCURACY            OK AT 0.90 m IN PORTRAIT
-   full body + torso yaw     SIMULTANEOUSLY SATISFIED for the first time
-   NOT YET PROVEN            on the avatar, with more than one person, or over time
+STATUS
+   V5 torso / V6 wrap guard  OK
+   portrait in production    LANDED behind --portrait (default off)
+   torso MEASUREMENT         OK in portrait at 0.90 m -- ONLY WITH SUB-PIXEL 1/8 (open decision)
+   AVATAR QUALITY            PROVEN GOOD for the supported envelope (F-19)
+   TRANSPORT ROBUSTNESS      FIXED (F-20A): sessions, stale watchdog, neutral failsafe
+   UNATTENDED OPERATION      NO -- nothing restarts the sidecar when it dies
+   multi-user                MEASURED, AND IT FAILS (F-19)
 
-1. PORT THE ROTATION INTO THE SIDECAR, BEHIND A FLAG.   <-- the one production change to make
-   Rotate RGB and depth together AND rotate the intrinsics with them. f18_portrait.py has the
-   verified transformation; do not re-derive it. This is a PRODUCTION change and needs its own
-   task, its own ADR and its own live validation. F-18 changed nothing.
+1. ADD A SIDECAR SUPERVISOR.                            <-- blocks unattended operation
+   A USB unplug KILLS the sidecar (rc=1) and nothing respawns it. The consumer now recovers
+   perfectly, but only once the producer returns. Respawn on exit with backoff, then re-run
+   F-20A's USB-unplug and forced-kill tests unchanged.
 
-2. THEN RUN THE LIVE AVATAR SESSION F-18 COULD NOT.     <-- the biggest remaining unknown
-   Everything in F-18 is measured at the LANDMARK level, upstream of the rig. Nothing yet shows
-   how the VRM actually looks in portrait: torso twisting, arm distortion, knee bending, body
-   stretching, snapping, jitter, mirroring. Use the existing avatar and change no constraints.
+2. DECIDE WHETHER SUB-PIXEL 1/8 SHIPS.                  <-- every F-18/F-19 number depends on it
+   Shipped config has a 6.80 deg torso-yaw quantum at 0.90 m vs 0.85 deg with sub-pixel.
+   --subpixel-bits exists and defaults to no change.
 
-3. AND MULTI-USER, which was not tested at all: observer outside the zone, someone crossing
-   behind, someone standing beside. The question is only whether ONE intended participant can
-   still be identified - not multi-person tracking.
+3. F-20 HUMAN POSE CONSTRAINT LAYER, against F-19 section 14.   <-- elbows first
+   Elbow flexion clamp ~150 deg + a hinge-axis constraint; secondary forearm-roll velocity limit.
+   Do NOT aim F-20 at person-switching or transport failures.
 
-4. THEN RE-MEASURE THE FRAMING TABLE AGAINST THE LARGEST USER THE INSTALLATION MUST ACCEPT.
-   Every threshold in F-18 section 4 is one subject: shoulder separation 333.1 mm, arm span
-   ~1.18 m. A taller or wider user moves all of them.
+4. SUBJECT LOCKING for multi-user (a SIDECAR IDENTITY problem). When re-testing, READ THE SOURCE
+   DEPTH STREAM: F-19 proved avatar-level continuity passes a switched avatar with zero snaps.
 
-5. LEVEL THE MOUNT and tape-measure height and tilt, then re-run f18_capture.py. The current
-   mount is pitched down ~19-32 deg by derivation.
+5. RE-RUN MULTI-USER AND BODY-SIZE GENERALISATION with more people.
 
-DECIDED BY F-18, do not revisit without new evidence:
-   - Operating distance 0.90 m (1.00 m only if a fully-safe T-pose is required, which costs most
-     of the torso margin: median 1.15 -> 4.74 deg).
-   - Supported interaction envelope is arms-45. T-pose and crouch are OUTSIDE it.
+6. TAPE-MEASURE THE CAMERA HEIGHT (tilt 5.89 deg and roll +0.14 deg are now measured via the IMU).
+
+DECIDED BY F-18/F-19/F-20A, do not revisit without new evidence:
+   - Operating distance 0.90 m in portrait.
+   - Supported envelope: full-body relaxed, arms-45, normal movement/reaching, stepping,
+     entry/exit, SINGLE user. T-pose and crouch are outside it.
+   - LIMITED: hands near face (impossible elbows), fast torso reversal (forearm snaps).
+   - UNSUPPORTED: any multi-user environment; reliable +/-90 deg torso.
+   - A dead stream ends in the NEUTRAL pose, never a frozen human one (F-20A).
+   - Health = TrackingState, NOT ReceivedCount/IsRunning/ParseErrors (F-19 proved those lie).
    - Do not procure wider-baseline hardware (F-17).
-   - Enable sub-pixel 1/8 when the rotation lands - F-18 used it throughout (F-16).
 
 ALSO OPEN, UNAFFECTED BY F-18:
    6. +-90 deg still collapses (span 11-25 px, |dx| 22-63 mm). Portrait does not address it.

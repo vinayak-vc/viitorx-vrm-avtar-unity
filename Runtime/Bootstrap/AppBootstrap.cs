@@ -161,6 +161,11 @@ namespace VirtualMirror.App {
         private AvatarSessionController avatarSession;
         private ICameraCapture cameraCapture;
         private IBodyTrackingProvider bodyProvider;
+        // ---- F-20A stale-stream failsafe --------------------------------------------------------
+        // How long the release to the neutral pose takes. Chosen so the move reads as deliberate
+        // rather than as a glitch; it is a per-frame slerp factor of deltaTime / this.
+        private const float StreamRestReleaseSeconds = 0.5f;
+        private bool streamFailsafeActive;
         private PoseSpaceConverter converter;
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
@@ -264,6 +269,34 @@ namespace VirtualMirror.App {
                 sentisProvider.SetTuning(sentisMetreScale, sentisDepthScale);
             }
             bodyProvider.Tick(deltaSeconds);
+            // ---- F-20A: is the stream actually LIVE, not merely receiving? ------------------------
+            // F-19 measured ReceivedCount climbing and ParseErrors at 0 while the avatar rendered a
+            // 208-second-old pose. The old response to staleness was to stop calling Apply, which IS
+            // the freeze. When the stream is dead beyond the failsafe threshold the avatar is eased to
+            // its neutral pose instead, and no tracking pose is consumed this frame.
+            bool streamFailsafe = false;
+            if (bodyProvider is OakDUdpPoseProvider) {
+                streamFailsafe = ((OakDUdpPoseProvider)bodyProvider).State == TrackingState.StaleFailsafe;
+            }
+            if (streamFailsafe) {
+                if (!streamFailsafeActive) {
+                    streamFailsafeActive = true;
+                    if (kalidokitControlRig != null) {
+                        kalidokitControlRig.ResetHoldState();
+                    }
+                    logService.Log(LogLevel.Warning,
+                        "F-20A: tracking stream stale beyond the failsafe threshold - releasing the avatar "
+                        + "to its neutral pose (the last tracked pose is NOT held indefinitely).");
+                }
+                if (kalidokitControlRig != null && kalidokitControlRig.IsBound) {
+                    kalidokitControlRig.ReleaseToRest(deltaSeconds / StreamRestReleaseSeconds);
+                    kalidokitControlRig.ProcessRuntime();
+                }
+            } else if (streamFailsafeActive) {
+                streamFailsafeActive = false;
+                logService.Log(LogLevel.Info,
+                    "F-20A: tracking stream recovered - resuming pose application from the neutral pose.");
+            }
             if (Input.GetKeyDown(KeyCode.C)) {
                 retargeter.Recalibrate();
                 hasPositionNeutral = false;
@@ -316,7 +349,7 @@ namespace VirtualMirror.App {
             // set before Play).
             bool kalidokitBodyActive = useKalidokitBody && kalidokitControlRig != null && kalidokitControlRig.IsBound;
             PoseFrame frame;
-            if (bodyProvider.TryGetLatestFrame(out frame)) {
+            if (!streamFailsafe && bodyProvider.TryGetLatestFrame(out frame)) {
                 // M3/M18: the OAK sidecar already smooths (One-Euro + outlier gate) at the source, so
                 // running Unity's One-Euro again would double-filter and add lag. Smoothing is single-owned
                 // by the sidecar for the OAK path; pass the frame through unfiltered here.

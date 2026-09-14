@@ -1298,3 +1298,118 @@ camera can satisfy the full-body and torso-yaw geometry simultaneously.
 **Evidence:** `docs/F18_PORTRAIT_CAMERA_FEASIBILITY_2026-09-11.md`; data under
 `oak_v4_evidence/f18/` (`f18_frame_sweep.jsonl`, `f18_torso_near.jsonl`, `f18_torso_far.jsonl`,
 `f18_move_090.jsonl`, `f18_analysis_2.txt`, `v6_observation.txt`, `v6_replay_input.csv`).
+
+---
+
+## ADR-049 — F-19: portrait runs live end-to-end, and the live session found three blockers (2026-09-14)
+
+**Status:** accepted (integration landed behind flags; three defects recorded, none fixed here).
+
+**Question.** F-18 proved the camera can measure torso yaw in portrait. F-19 asked whether those
+measurements survive the real production pipeline and produce a credible VRM avatar.
+
+**Integration.** Portrait is in `wholebody_udp_sender.py` behind `--portrait` (default off), using the
+F-18 transform imported rather than re-derived. `git diff -- Runtime/` is **empty**; the only Unity
+addition is a diagnostic bone recorder referenced by nothing in the product. Equivalence to the F-18
+transform re-verified on this machine: **5/5 PASS**, 0.000e+00 px on intrinsics, 0.0001 mm on
+geometry, 0/9,960 on left/right identity.
+
+**The avatar answer is good.** 134,959 rendered frames, 37 protocol blocks, one rig throughout.
+A physically square human gives a visually square avatar: rendered yaw median **0.012 deg**, range
+-2.59..0.30, **zero snaps > 10 deg in all 37 blocks**, worst per-block frame-to-frame p95 **0.503 deg**
+against a 5 deg target. Bone lengths constant to **0.0011 %** with lossyScale 1.000000 (attributed, not
+assumed). **Zero left/right swaps in 80,835 frames.** Performance: 29.9 fps, capture->send 31.8 ms p50,
+and P1-2 freshness intact (stale-dropped p50 = 0).
+
+**Decision 1 — the shipped stereo configuration is not the validated one.** Every F-18 portrait number
+used sub-pixel 1/8; production ships `setSubpixel(False)`. Measured back to back on one unchanged
+mount: shipped config gives **6 distinct shoulder-dz values in 270 frames, 235 on a single 116 mm bin**
+— a **6.80 deg torso-yaw quantum** at 0.90 m, against 0.85 deg with sub-pixel. **A 6.80 deg quantum
+cannot express a 5 deg median.** `--subpixel-bits` was added (default -1 = no change) so the live test
+could run on the validated configuration; **whether it ships is an open decision, and every F-19
+number depends on it.** A hand-written startup banner claiming `subpixel=on(1/8)` while the pipeline
+built `False` was found and fixed by making both read one constant.
+
+**Decision 2 — §19 multi-user FAILS.** With a second person present the tracker moved to them at ~25 s
+and **never returned**, through the walk-through, the occlusion, and after they left (hip depth
+bimodal 1.25-1.40 m vs 2.30-2.60 m; 0 % of frames in the primary's band for the last 60 s). Critically,
+**the avatar-level telemetry showed zero snaps and 7.8 mm maximum root steps** — the retarget's lerp
+smoothed a total person switch into perfect-looking output. **Rendered-bone continuity cannot detect
+person switching; only the source depth stream can.** Any future acceptance test must read the source.
+
+**Decision 3 — a sidecar restart freezes the avatar permanently.** The sidecar restarts `seq` at 1;
+P1-3 rejects every frame as out-of-order (`RejectedOutOfOrder = 4948`, `LastSeqA` stuck at 22678,
+`packetAgeMs = 208417`) while `IsRunning=True`, `ReceivedCount` climbing and `ParseErrors=0`. The
+avatar renders a 3.5-minute-old pose forever, with no fault reported. Pre-existing, not caused by
+portrait; §1 forbade touching P1-3, so it is recorded, not fixed.
+
+**Decision 4 — elbows are the F-20 target.** Both elbows fold to **177-180 deg** (human max ~150) on
+**81-91 %** of the hands-near-face block, median flex 167.8/169.4, bend normal wandering 74.8/129.6 deg
+— robust at every threshold up to 120 deg, and the P0 gate held nothing. Knees are clean. The
+whole-capture hinge-spread figures were **withdrawn** as not robust (L elbow 67.9 -> 0.1 -> 12.6 deg as
+the threshold rises), so they are not offered as F-20 input.
+
+**Corrections to earlier work.** F-18's derived 19-32 deg downward mount pitch is **wrong**: measured
+from the device's own BNO086, it was ~6-7 deg and is **5.89 deg** after levelling, roll +0.14 deg. The
+replay-based F-19 draft's "gates never held" does not hold live — the P0 LimbGate held a limb on up to
+**76.4 %** of a block, longest **7.6 s**. `getImuToCameraExtrinsics` reports an identity rotation that
+is a **placeholder**, disproved directly against a raw frame; only the IMU's Z axis was shown to be the
+optical axis, so only tilt is claimed from it.
+
+**Not done.** §17 body-size/clothing generalisation (only two people available), camera height
+(still no tape measure), and §12B above ~151 deg of elbow flex (telemetry only, no image).
+
+---
+
+## ADR-050 — F-20A: producer sessions and a stale-pose failsafe for the tracking transport (2026-09-14)
+
+**Status:** accepted (implemented; live-validated). **VERDICT: PASS.**
+
+**Question.** F-19 found that restarting the Python sidecar froze the avatar permanently while every
+health counter looked fine. Make sidecar restart, camera reconnect and stale input self-recovering.
+
+**Root cause was TWO defects, not one.** (1) `seq` restarts at 1 and `PoseBuffer` correctly rejects
+`seq < newestSeq`, so after a restart every packet is rejected forever. (2) `AppBootstrap.IsPoseStale`
+ALREADY detected staleness at 0.5 s, and its response was to stop calling `Apply` - which IS the
+freeze. Fixing only (1) would still have left a frozen human pose on any real outage. Useful
+precision: the buffer pushes on Unity's own `recvEpoch`, so the timestamp axis was already monotonic
+across a restart and only the sequence rule blocked recovery; no timestamp handling was changed.
+
+**Decision 1 - identify producer sessions explicitly.** The sidecar stamps
+`sid = uuid4().hex[:12]`, generated once per process, on every datagram. A `seq` reset is deliberately
+NOT the identifier: it is the same signature a duplicated sender or wrapped counter produces, and
+trusting it would amount to disabling ordering. Backward compatible (unknown field, ~22 bytes); a
+bounded legacy rule (>=8 sustained regressions AND >=0.25 s quiet) covers senders without `sid`.
+
+**Decision 2 - flush at the boundary, never interpolate across it.** On a new session the provider
+calls the EXISTING `PoseBuffer.Clear()` before the push. P1-3 itself is unchanged; its duplicate,
+out-of-order and backward-timestamp rules stand exactly as they were.
+
+**Decision 3 - a dead stream ends in a NEUTRAL pose, not a frozen human one.** New states
+NoStream/Connecting/Live/StaleHold/StaleFailsafe/Reconnecting/Recovering, thresholds derived from
+measured timing (150 ms warn / 500 ms hold - equal to the existing `poseStaleSeconds` so there is one
+definition of stale / 2 s failsafe, against F-19's observed 208 s). At failsafe the driver eases the
+control rig to identity local rotation - exact, because the VRM control rig is NORMALIZED, so rest is
+identity by definition and no rest capture can go stale.
+
+**Evidence.** Two live sidecar restarts (forced kill and clean exit) plus a REAL USB unplug:
+`rejectedOutOfOrder = 0` against F-19's 4948; both restarts accepted the new stream's `seq 1` within
+44 ms and 63 ms; measured bone angle from rest went to **0.00 deg** in every outage phase and held
+**19.43/52.95 deg unchanged** during the short-stale phase, demonstrating the full
+hold-then-neutral policy. Unity restarted under a live sidecar rejoined mid-session at `seq 692` with
+`transitions = 0`. Regression suite **124/124**, including PoseBuffer 14, TorsoYawGuard 18,
+TrunkGate 15, ArmAimSolver 19. No performance regression (fps +0.2, capture->send -1.8 ms).
+
+**A bug F-20A's own injection test found.** The first run reported `rejectedOldSession = 0`: packets
+from a PREVIOUS session were adopted as a new one, flushing a healthy buffer. Fixed with a bounded
+set of retired session ids; a retired sid now returns `OldSession` and the packet is dropped. Re-run
+live: `rejectedOldSession = 10`, exactly the ten sent.
+
+**Known limitations, recorded not hidden.** (a) NOTHING RESTARTS THE SIDECAR - a USB unplug kills the
+process (`rc=1`) and an unattended installation needs a supervisor; this is the next action. (b)
+Recovery from neutral necessarily exceeds 10 deg on the first rendered step when the user is far from
+rest (measured 13.378 deg, then a damped convergence settling in ~36 ms); permitted by the acceptance
+criteria and a deliberate trade against showing a stale pose. (c) The receive clock has 1 ms
+resolution, capping the accepted rate near 1 kHz - 60 back-to-back packets produced 28 out-of-order
+rejections. Pre-existing P1-3 behaviour, irrelevant at 30 fps (`ooo = 0` on real runs), reported
+rather than changed because section 1 forbids modifying P1-3.
