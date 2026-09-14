@@ -1,7 +1,13 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-08  
+Last updated: 2026-09-08
 Purpose: next agent can continue without re-deriving context.
+
+**This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
+(OAK-D wall-probe sweeps, portrait, F-19 production validation, F-20A session/stale recovery, F-20B
+sidecar supervisor) is tracked in [`roadmap.md`](roadmap.md) ("NEXT PATH" section, kept current),
+[`decisions.md`](decisions.md) (ADR-044 onward) and dated `F##_*.md` report docs — read those first
+for anything after 2026-08-11; the sections below are historical context for M0–M2.
 
 ---
 

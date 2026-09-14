@@ -4,6 +4,78 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## ⏳ F-21 — Single-Person Lock / Target Ownership (2026-09-14) — CONDITIONAL
+
+See [`F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md`](F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md)
+and ADR-052. `python-sidecar~/target_ownership.py` gates M15's person-box loop by identity (position +
+scale continuity — no track id exists in this pipeline, verified from source) so a second person
+entering frame cannot silently steal tracking (the F-19 failure).
+- [x] State machine + M15 identity-gating integration, `target_events.jsonl` evidence, on-screen HUD
+      (state/owner/timers/switch count) on the `--show` preview — `target_ownership.py` +
+      `wholebody_udp_sender.py`.
+- [x] Unit tests **36/36 PASS** (`test_target_ownership.py`) — covers 12/15 of the brief's adversarial
+      cases directly (crossing, rapid A/B/A, flicker-never-locks, scale mismatch, boundary timing).
+- [x] Real-hardware: clean acquire/lock/emit; **5/5 PASS** sidecar-restart-with-person-present (fresh
+      epoch, new SID, zero stale-identity carry-over — `f21_restart_interaction_test.py`);
+      `--no-ownership` bit-identical regression check.
+- [x] Single-person video regression (`f21_video_replay.py`, 775 frames / ~13s energetic real dance
+      motion): **PASS**, zero `TARGET_SWITCH`, zero `TARGET_RELEASED`.
+- [ ] **Live two-person matrix (blocks PASS)** — two attempts both failed for reasons unrelated to
+      correctness: attempt 1 hit a test-script UX defect (instructions unreadable while coordinating
+      two people — fixed with an on-screen cue banner); attempt 2 hit a real OAK-D device crash.
+      Rerun `python-sidecar~/f21_live_protocol.py` with two people; specifically test the named
+      "well-timed handoff" limitation (B stands exactly where A was the instant A leaves).
+- [ ] **Follow-up (not blocking):** `f21_live_protocol.py` doesn't detect a dead sidecar subprocess
+      and will narrate a full protocol against a crashed process — add a `proc.poll()` check.
+- [ ] **Follow-up (not blocking):** `sidecar_supervisor.py` doesn't forward `--show`/`--cue-file` —
+      needed to run the next live F-21 session through the supervisor for crash resilience.
+
+---
+
+## ⏳ F-22 — Human Pose Validation / Biomechanical Validation Layer (2026-09-14) — CONDITIONAL
+
+See [`F22_HUMAN_POSE_VALIDATION_2026-09-14.md`](F22_HUMAN_POSE_VALIDATION_2026-09-14.md) and ADR-053.
+`python-sidecar~/pose_validation.py` gates elbow/knee bend angle + angular rate (reuses P1-1's
+existing `conf_emit=0` "invalid joint" contract, zero `Runtime/`/UDP changes) against F-19's live
+evidence (left elbow ~177.5°, right elbow ~179.6° rendered, hands-near-face block).
+- [x] Validator (`pose_validation.py`) + sender integration, per-chain localized gating, evidence
+      logging (`oak_v4_evidence/f22/`), `--pose-validation`/`--no-pose-validation` (default ON).
+- [x] Unit tests **22/22 PASS** (`test_pose_validation.py`) — includes F-19's own measured numbers
+      fed directly as fixtures (168° → rejected; knee 176° legitimate-walking max → NOT rejected).
+- [x] Offline replay (`f22_video_replay.py`, composes F-21 + F-22 in production order) against
+      `video.webm`, 431 owned frames: **0 false absolute-angle rejections**; elbow max
+      (155.3°/158.8°) sat within 1–5° of REJECT (160°) without crossing it; 3 momentary rate-based
+      holds (0.7%), each recovered within one frame.
+- [ ] **Live L2 session — hands near face (blocks PASS)** — no human was available this session
+      (explicit instruction). This is the one test that reproduces F-19's own original defect
+      against this validator's raw-geometry threshold. L1/L3–L7 also open, L2 is the named priority.
+- [ ] **Follow-up (not blocking):** no CLI threshold-override flags added this pass (unlike
+      F-20A/F-20B/F-21's `--*` pattern) — thresholds live only in `pose_validation.py`'s constants.
+- [ ] **Follow-up (not blocking):** performance impact (fps/latency) not independently re-measured
+      with F-22 enabled — expected negligible (closed-form trig only) but not timed this session.
+
+---
+
+## ✅ F-20B — Sidecar Supervisor / Watchdog (2026-09-14) — PASS
+
+See [`F20B_SIDECAR_SUPERVISOR_WATCHDOG_2026-09-14.md`](F20B_SIDECAR_SUPERVISOR_WATCHDOG_2026-09-14.md)
+and ADR-051. Producer-side complement to F-20A: `python-sidecar~/sidecar_supervisor.py` restarts the
+sidecar with backoff/crash-loop protection when it dies (crash, forced kill, camera unplug).
+- [x] Supervisor state machine, readiness detection, backoff, crash-loop guard, single-instance lock,
+      `supervisor_state.json` diagnostics — `sidecar_supervisor.py` + `run_supervisor.bat`.
+- [x] Automated test harness, 6/6 PASS: normal start, forced-kill ×2 (real camera, new SID both
+      times), duplicate-supervisor guard, crash-loop → `FAILED_PERMANENT` (throttled, never dies),
+      static dependency-failure → clean terminal exit. `f20b_failure_tests.py`.
+- [x] **Live session, 2026-09-14** — real USB unplug (sidecar HUNG, not crashed — caught by the
+      stdout-heartbeat check, not process-exit detection), camera-absent-at-startup (recovered 36s,
+      never hit crash-loop), and a Unity restart while the supervisor/sidecar stayed alive
+      (`RestartCount` stayed 0). Avatar recovered live in every case, no Unity restart, no scene
+      reload. `python-sidecar~/f20b_usb_test.py --mode live` / `--mode absent`.
+- [ ] **Follow-up (not blocking):** consider lowering `--failed-permanent-retry` (60s default) — it is
+      now the dominant term in worst-case recovery time once a crash loop trips (report §13).
+
+---
+
 ## ✅ Full-body stability program — P0 → P1-3 (2026-09-07 → 2026-09-08) — ALL COMPLETE
 
 Driven by [`AUDIT_FBT_2026-09-07.md`](AUDIT_FBT_2026-09-07.md). ADRs **028–031**. Every stage was

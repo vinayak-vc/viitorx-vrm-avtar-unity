@@ -290,7 +290,7 @@ F-19  does portrait survive the REAL pipeline and produce a credible avatar?  <-
                                                                                 [ADR-049]
 ```
 
-### NEXT PATH — after F-20A (transport fixed; supervisor still missing)
+### NEXT PATH — after F-22 (validator built + offline-proven; two live gaps open: F-21 2-person, F-22 L2)
 
 ```text
 STATUS
@@ -299,30 +299,50 @@ STATUS
    torso MEASUREMENT         OK in portrait at 0.90 m -- ONLY WITH SUB-PIXEL 1/8 (open decision)
    AVATAR QUALITY            PROVEN GOOD for the supported envelope (F-19)
    TRANSPORT ROBUSTNESS      FIXED (F-20A): sessions, stale watchdog, neutral failsafe
-   UNATTENDED OPERATION      NO -- nothing restarts the sidecar when it dies
-   multi-user                MEASURED, AND IT FAILS (F-19)
+   UNATTENDED OPERATION      DONE (F-20B): sidecar_supervisor.py respawns the sidecar with
+                             backoff/crash-loop protection. Full SS17 matrix A-H PASS live.
+   TARGET OWNERSHIP          CONDITIONAL (F-21): target_ownership.py gates M15 by identity
+                             (position+scale continuity, no track id exists to use). 36/36 unit,
+                             5/5 real-hardware restart-with-person, 775-frame real video stress test
+                             -- ZERO wrong-person switches in every test that produced data. Live
+                             two-person matrix (crossing/hand-off/simultaneous-entry) UNVERIFIED --
+                             two live attempts both failed for reasons unrelated to correctness (a
+                             test-script UX defect, now fixed; a real OAK-D device crash).
+   POSE VALIDATION           CONDITIONAL (F-22): pose_validation.py gates elbow/knee bend angle +
+                             angular rate, reusing P1-1's conf_emit=0 contract (no Runtime/ change).
+                             22/22 unit (incl. F-19's own measured numbers as fixtures), offline
+                             replay on 431 real video frames: 0 false absolute-angle rejections,
+                             3 momentary rate-based holds (0.7%), each recovered in 1 frame. NO LIVE
+                             HUMAN available this session -- L2 (hands-near-face, F-19's own
+                             reproduction) is the one test that closes the loop, not yet run.
+   multi-user                MEASURED, AND IT FAILS pre-F-21 (F-19); F-21 fixes the mechanism but
+                             the fix itself is not yet live-verified with two people.
 
-1. ADD A SIDECAR SUPERVISOR.                            <-- blocks unattended operation
-   A USB unplug KILLS the sidecar (rc=1) and nothing respawns it. The consumer now recovers
-   perfectly, but only once the producer returns. Respawn on exit with backoff, then re-run
-   F-20A's USB-unplug and forced-kill tests unchanged.
+1. RUN A CLEAN LIVE F-21 TWO-PERSON SESSION.            <-- blocks "target ownership: PASS"
+   f21_live_protocol.py now draws instructions ON the camera preview (fixed after attempt 1's UX
+   failure). Launch through sidecar_supervisor.py if possible so a device crash (attempt 2's failure)
+   recovers instead of ending the session -- needs --show/--cue-file passthrough added to the
+   supervisor first. Specifically target the named "well-timed handoff" limitation: have B stand
+   exactly where A was the instant A leaves. See docs/F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md.
 
-2. DECIDE WHETHER SUB-PIXEL 1/8 SHIPS.                  <-- every F-18/F-19 number depends on it
+2. RUN A LIVE F-22 L2 SESSION (hands near face).        <-- blocks "pose validation: PASS"
+   The one test that reproduces F-19's own original defect against pose_validation.py's raw-geometry
+   threshold. See docs/F22_HUMAN_POSE_VALIDATION_2026-09-14.md SS17/SS20. L1/L3-L7 also open but L2
+   is the specific, named priority since it is F-19's exact finding.
+
+3. DECIDE WHETHER SUB-PIXEL 1/8 SHIPS.                  <-- every F-18/F-19 number depends on it
    Shipped config has a 6.80 deg torso-yaw quantum at 0.90 m vs 0.85 deg with sub-pixel.
    --subpixel-bits exists and defaults to no change.
 
-3. F-20 HUMAN POSE CONSTRAINT LAYER, against F-19 section 14.   <-- elbows first
-   Elbow flexion clamp ~150 deg + a hinge-axis constraint; secondary forearm-roll velocity limit.
-   Do NOT aim F-20 at person-switching or transport failures.
+4. RE-RUN MULTI-USER AND BODY-SIZE GENERALISATION with more people, once F-21 reads PASS.
 
-4. SUBJECT LOCKING for multi-user (a SIDECAR IDENTITY problem). When re-testing, READ THE SOURCE
-   DEPTH STREAM: F-19 proved avatar-level continuity passes a switched avatar with zero snaps.
+5. TAPE-MEASURE THE CAMERA HEIGHT (tilt 5.89 deg and roll +0.14 deg are now measured via the IMU).
 
-5. RE-RUN MULTI-USER AND BODY-SIZE GENERALISATION with more people.
+6. TUNING FOLLOW-UP (not blocking): consider lowering --failed-permanent-retry (60s default) if
+   camera outages on the real installation are expected to be brief -- it is now the dominant term
+   in worst-case recovery time once a crash loop trips (F20B report SS13).
 
-6. TAPE-MEASURE THE CAMERA HEIGHT (tilt 5.89 deg and roll +0.14 deg are now measured via the IMU).
-
-DECIDED BY F-18/F-19/F-20A, do not revisit without new evidence:
+DECIDED BY F-18/F-19/F-20A/F-20B/F-21, do not revisit without new evidence:
    - Operating distance 0.90 m in portrait.
    - Supported envelope: full-body relaxed, arms-45, normal movement/reaching, stepping,
      entry/exit, SINGLE user. T-pose and crouch are outside it.
@@ -331,6 +351,18 @@ DECIDED BY F-18/F-19/F-20A, do not revisit without new evidence:
    - A dead stream ends in the NEUTRAL pose, never a frozen human one (F-20A).
    - Health = TrackingState, NOT ReceivedCount/IsRunning/ParseErrors (F-19 proved those lie).
    - Do not procure wider-baseline hardware (F-17).
+   - The sidecar is supervised by a dedicated Python watchdog (sidecar_supervisor.py), NOT a
+     Windows Service, NOT a bare .bat loop, NOT Task Scheduler alone (ADR-051). Do not re-litigate
+     the mechanism choice without new evidence that the watchdog itself is insufficient.
+   - `taskkill /T` is required on every sidecar kill - this venv's python.exe is a launcher whose
+     Popen pid does NOT match the real interpreter's own os.getpid() (F-20B SS10).
+   - Target ownership uses geometry only (position + scale continuity) - NO track id exists in this
+     pipeline to use instead (RTMW3D-x is single-person top-down, verified from source, ADR-052).
+     Do not invent an identity/ReID signal without a source change that actually provides one.
+   - Pose validation (elbow/knee) is ANGLE-based, not bone-length-based (ADR-053) - P1-4's own
+     rejected closeout found the length signal's natural variation overlaps real corruption on this
+     hardware. Do not resurrect a bone-length-ratio rejection approach without new evidence the
+     upstream measurement-quality problem P1-4's closeout named has actually been solved.
 
 ALSO OPEN, UNAFFECTED BY F-18:
    6. +-90 deg still collapses (span 11-25 px, |dx| 22-63 mm). Portrait does not address it.

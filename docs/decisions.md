@@ -1413,3 +1413,180 @@ criteria and a deliberate trade against showing a stale pose. (c) The receive cl
 resolution, capping the accepted rate near 1 kHz - 60 back-to-back packets produced 28 out-of-order
 rejections. Pre-existing P1-3 behaviour, irrelevant at 30 fps (`ooo = 0` on real runs), reported
 rather than changed because section 1 forbids modifying P1-3.
+
+---
+
+## ADR-051 — F-20B: a dedicated Python process supervises the sidecar, not a Windows Service or a
+bare restart loop (2026-09-14)
+
+**Status:** accepted (implemented; full §17 test matrix A-H passes, including a live session with a
+real USB unplug). **VERDICT: PASS.**
+
+**Question.** F-20A made Unity recover once its producer comes back, but explicitly could not make
+the producer come back: a USB unplug kills the sidecar process (`rc=1`) and nothing restarts it. An
+unattended installation needs that closed.
+
+**Decision - mechanism.** A dedicated Python watchdog (`sidecar_supervisor.py`), not a Windows
+Service (needs an interactive session for the depthai/OpenCV preview; install/debug overhead far
+exceeds "start, monitor, restart, backoff"), not a bare `.bat` restart loop (cannot cleanly hold a
+backoff table, a crash-loop time window, or a machine-readable diagnostics file), and not Task
+Scheduler alone (no readiness detection, no custom backoff curve). It extends the exact
+`subprocess.Popen` + `taskkill /F /T /PID` process-lifecycle pattern this repo already trusts in
+`f20a_failure_injection.py`/`f20a_usb_test.py` into a persistent state machine
+(`STOPPED -> STARTING -> RUNNING -> EXITED -> BACKOFF -> STARTING`, with a `FAILED_PERMANENT` crash-loop
+floor that keeps retrying rather than ever truly giving up).
+
+**Decision - static vs. self-healing failures.** A missing python.exe/script/model or a failed
+`import depthai, cv2, numpy` is terminal (`FAILED_PERMANENT`, the supervisor process exits, rc=2) -
+these cannot self-heal by retrying. A camera-not-found / DepthAI init failure is NOT terminal - it
+goes through the ordinary backoff/restart path, because plugging the camera back in *does* self-heal
+it. Conflating these would either loop forever on a broken venv or refuse to recover from a routine
+unplug; keeping them apart is the whole point of the distinction the brief's own §7 and §17-test-F
+draw.
+
+**Decision - readiness, not process-alive.** Never called healthy from "the process started" -
+F-19 measured every health counter looking perfect while the avatar was 208 s stale. Readiness is the
+same two-marker check `f20a_failure_injection.py` already proved live (SID banner, then the first
+`frames=` line), plus an ongoing stdout-growth heartbeat once ready, so a hung-but-alive process still
+gets restarted.
+
+**Evidence.** 6/6 automated scenarios pass against the REAL supervisor process (not a mock): two
+independent forced kills against the real sidecar + camera recovered with a new session id in 7.0 s
+and 8.0 s; a synthetic 5-crash loop degraded to `FAILED_PERMANENT` at 20.5 s (matching the 1/2/5/10 s
+backoff arithmetic) and kept retrying rather than dying; the single-instance lock correctly refused a
+second supervisor while leaving the first completely undisturbed; a missing python.exe produced a
+clean terminal failure with zero restart attempts. Full detail and the three bugs this task's own
+testing found in its own design (a diagnostics-write race that could crash the watchdog itself; the
+degraded state being invisible to an external reader; a test-harness evidence-directory hygiene bug):
+`docs/F20B_SIDECAR_SUPERVISOR_WATCHDOG_2026-09-14.md`.
+
+**Live session (2026-09-14, real OAK-D, real USB unplug).** A first attempt found the operator missing
+a too-short (12 s) unplug cue rather than any supervisor defect - widened to 25 s and re-run. The
+re-run found a real production behaviour F-20A did not observe: on this unplug the sidecar HUNG rather
+than crashing, and it was the supervisor's stdout-heartbeat check - not process-exit detection - that
+caught it and forced the restart. Five subsequent device-open failures (5.9-12.2 s each, no camera
+present) correctly tripped `FAILED_PERMANENT`; recovery landed on the next 60 s-spaced retry (~119 s
+total). A cold start with the camera already absent (SS17 test F) recovered in 36 s on the identical
+code path when the replug happened to land inside an ordinary backoff gap instead - confirming
+`--failed-permanent-retry` (60 s default) is now the dominant term in worst-case recovery time.
+Separately, Unity was stopped and restarted while the supervisor/sidecar stayed up (SS17 test H):
+`RestartCount` stayed 0 for the whole window and the avatar reconnected mid-session via F-20A's
+existing logic, confirming the two systems stay decoupled as SS16 requires. The avatar recovered live
+in every case, with no Unity restart and no scene reload.
+
+**Known limitation, recorded not hidden.** This project's venv `python.exe` is a launcher - the pid
+`subprocess.Popen` reports is not the real interpreter's own `os.getpid()` (confirmed directly:
+31108 vs. 19000 for the same invocation). `taskkill /T` (tree-kill) makes this transparent for every
+kill this supervisor performs; anyone extending it must keep `/T` and never assume `SidecarPid` in the
+diagnostics file is the pid actually holding the OAK-D handle.
+
+**Tuning note carried forward.** `--failed-permanent-retry` (60 s default) is now the dominant
+recovery-time variable once an outage is long enough to trip the crash loop - see the report §13.
+
+---
+
+## ADR-052 — F-21: geometry-only target ownership (position + scale continuity), no track ID
+invented (2026-09-14)
+
+**Status:** accepted (implemented; unit + real-hardware single-person evidence PASS; live two-person
+matrix unverified). **VERDICT: CONDITIONAL.**
+
+**Question.** F-19 found the tracker silently switches to a second person who enters frame, with
+Unity rendering the hand-off as smooth continuous motion. Fix WHO is tracked, without touching pose
+estimation, retargeting, or F-20A/F-20B.
+
+**Decision - verify before designing.** Read `rtmw3d_pose.py` and the M15 loop in
+`wholebody_udp_sender.py` before writing any ownership code. Confirmed: RTMW3D-x is single-person
+top-down (one inference, one keypoint set per frame, no detector, no track id, no multi-person output
+anywhere in this codebase). "Candidate count" is therefore honestly 0 or 1, never N - the design does
+not pretend otherwise.
+
+**Decision - identity proxy, not identity.** No track ID exists, so ownership is built from the only
+real signals available: raw (pre-smoothing) camera-space hip-position continuity as the primary
+signal, confidence as a validity gate, torso-scale as a corroborator. Position is read BEFORE P0's
+smoother rate-limits it (`--max-jump` 1.5 m/frame) - reading after would blur a real person-swap into
+what looks like fast continuous motion over a couple of frames.
+
+**Decision - M15 becomes identity-gated.** The crop-follow loop only refines toward an observation
+F-21 currently accepts; it holds steady (never drifts toward a rejected candidate) while
+`TEMPORARILY_LOST`, and only fully re-opens (`center_bbox()`) once genuinely `RELEASED`. Confirmed
+necessary before implementing: without this, F-21 could detect a switch but could never recover the
+true owner, since the model's own crop would already have moved on.
+
+**Decision - no UDP contract change.** Ownership gates whether the UDP packet is built and sent at
+all, reusing the sender's own existing no-op path (the same one already used when `mid_hip` can't be
+computed). F-20A's stale watchdog turns a withheld frame into hold-then-neutral with zero new Unity
+code; a later acquisition rides the same sidecar session id, so "same session ≠ same person" falls
+out for free rather than needing new wire semantics.
+
+**Evidence.** 36/36 unit assertions (state machine, offline, deterministic - crossing, rapid A/B/A,
+flicker-never-locks, gross scale mismatch, temporal boundary cases). Real hardware: clean acquire/
+lock/emit; 5/5 sidecar-restart-with-person-present (fresh epoch, new SID, zero stale-identity
+carry-over); `--no-ownership` bit-identical to the pre-F-21 path. A 775-frame / ~13 s real video
+stress test (energetic dance motion, 2x production frame rate) showed zero `TARGET_SWITCH` and zero
+`TARGET_RELEASED`. **Zero wrong-person switches in every test that produced usable data** - the
+brief's own critical acceptance metric.
+
+**Not yet done, and this is why the verdict is CONDITIONAL, not PASS.** The live two-person scenario
+matrix (crossing, release-then-hand-off, simultaneous entry) did not produce usable evidence: attempt
+1 was blocked by a test-script UX defect (instructions printed to a terminal the operator couldn't
+read while coordinating two people and watching the camera - fixed with an on-screen cue banner
+drawn on the same preview window as the F-21 HUD); attempt 2 was blocked by a real OAK-D device
+crash unrelated to F-21's own code. Full detail: `docs/F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md`.
+
+**Named limitation, stated up front, not hidden.** If a second person occupies the first person's
+just-vacated position within one observation cycle, position alone cannot distinguish them - a
+property of a geometry-only signal set with no appearance/ReID available, not a defect introduced
+here. This is exactly why release is timeout-gated (4 s, longer than F-20A's own 2 s transport
+failsafe) rather than instantaneous, and it remains a named-but-unmeasured risk until a live test
+specifically targets it.
+
+---
+
+## ADR-053 — F-22: angle-based (not bone-length-based) biomechanical validation, reusing P1-1's
+existing invalid-joint contract (2026-09-14)
+
+**Status:** accepted (implemented; unit-proven; offline replay evidence PASS; live evidence pending).
+**VERDICT: CONDITIONAL.**
+
+**Question.** F-19 found a live, unmitigated defect: with hands near the face, the rendered elbow
+reached 167.8-179.6° (anatomically impossible; a real elbow's ceiling is ~145-150°), while P0 LimbGate
+held 0.00% of that block because confidence was high even though the angle was not. Nothing in the
+pipeline checks whether a measurement is a physically plausible human pose.
+
+**Decision - audit before designing.** Read LimbGate, PoseBuffer, ArmAimSolver, TrunkGate/
+TorsoYawGuard, JointTracker, and P1-4's closeout before writing any validation code. Confirmed: no
+angle/flexion check exists anywhere in the live path; `ArmAimSolver` already computes the exact
+needed angle (`BendDeg`, L289) every frame but discards it; P1-1 already does Cartesian
+position/segment-length checks (not duplicated here); P1-4's bone-length-ratio rejection is formally
+REJECTED for this hardware (its length signal's natural variation overlaps real corruption - the safe
+threshold band is empty) - its own closeout flagged the ANGLE-only portion as comparatively
+trustworthy, a precedent FOR this approach.
+
+**Decision - angle, not length.** `pose_validation.py` validates elbow/knee bend angle (absolute +
+angular rate) from RAW camera-space geometry, computed in the identical convention `ArmAimSolver`
+already uses, so F-19's own rendered-evidence thresholds (~150° adopted directly, not re-derived)
+apply to this pre-retargeting signal unchanged. No bone-length-ratio check was added, consistent with
+P1-4's own rejected precedent.
+
+**Decision - reuse P1-1's contract, not a new one.** A rejected/held joint zeros only that joint's own
+`conf_emit` slot - the exact mechanism P1-1 already uses for a LOST joint ("LOST -> drop -> P0
+LimbGate holds"), which Unity's P0 LimbGate already correctly consumes. Zero `Runtime/` changes, zero
+UDP changes - the same minimal-footprint pattern ADR-052 (F-21) used successfully.
+
+**Decision - localized, not global, failure.** Each chain (left/right elbow, left/right knee) is
+validated independently; a bad elbow never suppresses the wrist, the other arm, torso, or legs. A
+"global" failure is not a special code path - it falls out naturally of every chain failing on its
+own merits (unit-tested directly, ADR's report §16).
+
+**Evidence.** 22/22 unit assertions, including F-19's own measured numbers fed directly as test
+fixtures (168° -> rejected, 176° knee -> NOT rejected, matching F-19's own legitimate-walking
+finding). Offline replay against a real 431-frame energetic dance video: 0 absolute-angle false
+rejections, elbow bend max (155.3°/158.8°) sat within 1-5° of REJECT (160°) without crossing it, and
+exactly 3 momentary rate-based holds (0.7% of frames), each recovering within one frame. Full detail:
+`docs/F22_HUMAN_POSE_VALIDATION_2026-09-14.md`.
+
+**Not yet done, and this is why the verdict is CONDITIONAL.** No live human was available this
+session (explicit instruction). The specific test that closes the loop back to F-19 - a live L2
+(hands-near-face) reproduction confirming this raw-geometry threshold suppresses the same defect F-19
+measured in rendered geometry - has not run.
