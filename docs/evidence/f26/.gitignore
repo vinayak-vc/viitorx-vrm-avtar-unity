@@ -1,0 +1,13 @@
+# The raw per-frame captures are 28 MB and REGENERABLE - the exact commands are in
+# docs/F26_AVATAR_VS_DEBUG_SKELETON_2026-09-16.md section 11.9 and in ai_handoff.md section 8.
+# RESULTS.txt (checked in) carries the analysed numbers the report and ADR-062 actually cite, so the
+# citation chain survives without a blob in the repository.
+#
+# If a future run needs to be kept verbatim - a regression baseline, or a result somebody disputes -
+# add an explicit negation for that one file rather than deleting these rules.
+*.jsonl
+*.jsonl.meta
+mark_*.txt
+mark_*.txt.meta
+first_packet.txt
+first_packet.txt.meta

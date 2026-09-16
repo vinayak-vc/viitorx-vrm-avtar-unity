@@ -1,0 +1,7 @@
+# The raw per-pose captures are large and REGENERABLE - the commands are in
+# docs/F27_HUMANIZED_SKELETON_2026-09-16.md section 7. RESULTS.txt (checked in) carries the numbers
+# the report and ADR-063 actually cite, so the citation chain survives without a blob in the repo.
+*.jsonl
+*.jsonl.meta
+mark*.txt
+mark*.txt.meta
