@@ -760,3 +760,44 @@ duplicate scan after     0 pairs, 0 duplicated functions
       P1_2_FRESHNESS cite them by name — but carry a DOES NOT RUN banner and exit 1.
 - [x] `oak_v4_evidence/` deliberately left at the root: script defaults hardcode that path.
 - [x] Removed `pose_stage_marks.json` (orphan; one unfinished mark, `tEnd 0.0`).
+
+---
+
+## SDK DISTRIBUTION STANDARDS (2026-09-16)
+
+- [x] **MIT `LICENSE`** in both repos. The sidecar README had promised "see repository license"
+      while no LICENSE existed. MIT matches the dependency stack (UniVRM, MediaPipe Unity plugin,
+      Kalidokit, depthai, vendored depthai_blazepose are all MIT).
+- [x] **`package.json`** — UPM manifest, `cloud.viitor.virtual-mirror` `0.1.0`, Unity `6000.3`.
+      `0.x` on purpose: the §7 items are still open and the API may move in a minor release.
+- [x] **`CHANGELOG.md`** in both repos (Keep a Changelog / semver).
+- [x] **`CONTRIBUTING.md`** — repo layout, the DirectML trap, test commands, the evidence rules.
+- [x] **`.gitattributes`** in both repos — LF normalisation, CRLF for `.bat`/`.cmd`/`.ps1`,
+      binary markers for `.onnx`/`.blob`/media, linguist hints for vendored and generated trees.
+      Also ends the constant CRLF warning noise on every commit.
+- [x] **`.editorconfig`** — matches the existing C# and Python style (110 cols, same-line braces).
+- [x] **`pyproject.toml`** for the sidecar — PEP 621 metadata, console entry points,
+      `requires-python = "==3.10.*"` (depthai is cp310-only), ruff/black config. `py-modules` is
+      explicit so a harness under `tools/` can never accidentally ship as an importable module.
+- [x] **CI** (`.github/workflows/ci.yml`) — validates package metadata and that CHANGELOG documents
+      the shipped version; runs the sidecar self-tests on `windows-latest` + Python 3.10; asserts
+      `DmlExecutionProvider` is present; guards against absolute machine paths returning.
+- [x] **Issue templates** — the bug template requires the ONNX provider list, because "everything is
+      slow" is nearly always the silent CPU fallback.
+- [x] **`ThirdPartyNotices.txt` extended** with the whole Python stack, which was entirely absent:
+      vendored depthai_blazepose (MIT, licence file verified present), RTMW3D/MMPose weights
+      (Apache-2.0 code, weights carry their own terms — flagged), depthai, onnxruntime, OpenCV, NumPy.
+- [x] **README** — UPM install section. Documents that `com.vrmc.vrm` needs the OpenUPM scoped
+      registry and `com.github.homuler.mediapipe` is not on any registry, so neither resolves for a
+      consumer automatically; and that UPM does not fetch the `python-sidecar~` submodule.
+
+### Open before a public release
+- [ ] Confirm the MIT copyright holder string. `LICENSE` currently reads "ViitorCloud" — inferred
+      from the domain, not verified against the legal entity name.
+- [ ] Verify the licence attached to the specific `rtmw3d-x.onnx` weights in use. MMPose's CODE is
+      Apache-2.0, but released weights can carry dataset-derived restrictions, and the model is a
+      hard runtime requirement.
+- [ ] Decide whether `evidence/` (~27 MB of tracked measurement data) belongs in a distributed SDK.
+      It is the citation chain for the ADRs, but it is development material, not product.
+- [ ] Unity EditMode tests are not in CI — that needs a licensed editor (GameCI + secrets).
+- [ ] Tag `v0.1.0` once the Play-mode and build acceptance items above are actually run.

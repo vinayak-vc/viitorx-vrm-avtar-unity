@@ -1,0 +1,82 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if the avatar is tracking but everything feels laggy, check the DirectML
+        provider first. `onnxruntime` falls back to CPU **silently**, which turns ~31 ms/frame into
+        ~183 ms with no error anywhere. See Troubleshooting in the README.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Scenes/Bootstrap.unity
+        2. Tick Use Oak Udp Tracking
+        3. Press Play
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: providers
+    attributes:
+      label: ONNX Runtime providers
+      description: >
+        Output of
+        `.venv\Scripts\python.exe -c "import onnxruntime as ort; print(ort.get_available_providers())"`.
+        If `DmlExecutionProvider` is absent, that is almost certainly your bug.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sidecar-start
+    attributes:
+      label: How was the sidecar started?
+      options:
+        - Automatically by Unity (autoStartSidecar on)
+        - By hand, before pressing Play
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: launcher-log
+    attributes:
+      label: "[SidecarLauncher] console output"
+      description: The lines prefixed `[SidecarLauncher]` from the Unity console.
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "0.1.0, or a commit SHA"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS:
+        - GPU:
+        - Unity:
+        - Python (`python --version` in the venv):
+        - OAK-D model and mounting (portrait ccw / cw):
+      render: markdown
+    validations:
+      required: true

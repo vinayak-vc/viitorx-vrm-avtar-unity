@@ -8,9 +8,14 @@ over UDP to Unity, which retargets them onto the avatar's humanoid rig. Keeping 
 Unity's process is deliberate: a native inference crash cannot take the editor or the app down with
 it (ADR-016).
 
-> **Status: v1. Not production-ready.** Several acceptance tests have never been run against a live
-> camera, and there is a known visual defect. Read [Known limitations](#known-limitations) before
-> demoing this to anyone.
+> **Status: `0.1.0` — pre-release, not production-ready.** Several acceptance tests have never been
+> run against a live camera, and there is a known visual defect. The version is `0.x` deliberately:
+> the API may change in a minor release. Read [Known limitations](#known-limitations) before shipping
+> this to anyone.
+
+[![CI](https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/actions/workflows/ci.yml/badge.svg)](https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Unity 6000.3](https://img.shields.io/badge/Unity-6000.3-black.svg)](https://unity.com/releases/editor/archive)
 
 ---
 
@@ -28,6 +33,51 @@ it (ADR-016).
 ---
 
 ## Install
+
+### 0. Add the Unity package
+
+This is a UPM package (`cloud.viitor.virtual-mirror`). Two of its dependencies do **not** resolve
+from Unity's default registry, so add them first or the import will fail.
+
+**a. Register the OpenUPM scope** for UniVRM, in your project's `Packages/manifest.json`:
+
+```json
+{
+  "scopedRegistries": [
+    {
+      "name": "package.openupm.com",
+      "url": "https://package.openupm.com",
+      "scopes": ["com.vrmc"]
+    }
+  ]
+}
+```
+
+**b. Install the MediaPipe Unity plugin.** `com.github.homuler.mediapipe` is not on any registry;
+follow [homuler/MediaPipeUnityPlugin](https://github.com/homuler/MediaPipeUnityPlugin) and place it
+under your project's `Packages/`.
+
+**c. Add this package**, via *Window → Package Manager → + → Add package from git URL*:
+
+```
+https://github.com/vinayak-vc/viitorx-vrm-avtar-unity.git
+```
+
+or by adding it to `manifest.json` directly:
+
+```json
+"cloud.viitor.virtual-mirror": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity.git"
+```
+
+Pin a release rather than tracking the default branch — append `#v0.1.0`.
+
+> The Python sidecar is a **git submodule** at `python-sidecar~`. Unity's Package Manager does not
+> fetch submodules, so if you installed by git URL you must clone the repository yourself and use a
+> local path (`file:` URL) to get a working tracking pipeline. Steps 1 and 2 below are required
+> either way.
+
+Remaining dependencies (`com.unity.render-pipelines.universal`, `com.unity.animation.rigging`,
+`com.unity.nuget.newtonsoft-json`, `com.unity.ai.inference`) resolve automatically.
 
 ### 1. Set up the Python sidecar
 
@@ -113,10 +163,12 @@ the destination port to detect a stale producer, which means it reads Unity's he
 
 The sidecar **source** ships inside the build; its **runtime** does not.
 
-A post-build step copies the 83 top-level `.py` files (~1.2 MB), `requirements.lock.txt` and
-`setup_sidecar.ps1` into `StreamingAssets/Sidecar/`. `python-sidecar~` stays the single source of
-truth — the trailing `~` keeps Unity from importing those files and generating `.meta` churn for
-them.
+A post-build step copies the sidecar's root `.py` files, `requirements.lock.txt` and
+`setup_sidecar.ps1` into `StreamingAssets/Sidecar/`. Since ADR-065 that root holds exactly the
+production path — the two entry points plus the nine modules `wholebody_udp_sender.py` imports — so
+the build ships what a player needs and none of the 70-odd development harnesses under `tools/` and
+`tests/`. `python-sidecar~` stays the single source of truth; the trailing `~` keeps Unity from
+importing those files and generating `.meta` churn for them.
 
 Three things are deliberately excluded:
 
@@ -194,6 +246,8 @@ These are open. Do not describe them as done.
 
 ## Documentation
 
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers the development workflow and the coding rules.
+[`CHANGELOG.md`](CHANGELOG.md) records what changed per release.
 Start at [`docs/README.md`](docs/README.md) for the full index. For agents picking up this project,
 `AGENTS.md` at the parent project root is the rulebook, and
 [`docs/ai_handoff.md`](docs/ai_handoff.md) holds the current state.
