@@ -1,6 +1,6 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-08
+Last updated: 2026-09-16
 Purpose: next agent can continue without re-deriving context.
 
 **This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
@@ -8,6 +8,62 @@ Purpose: next agent can continue without re-deriving context.
 sidecar supervisor) is tracked in [`roadmap.md`](roadmap.md) ("NEXT PATH" section, kept current),
 [`decisions.md`](decisions.md) (ADR-044 onward) and dated `F##_*.md` report docs — read those first
 for anything after 2026-08-11; the sections below are historical context for M0–M2.
+
+---
+
+## 🔷 CURRENT — v1 packaging and sidecar auto-launch (2026-09-16)
+
+**This section is the live handoff. Read it before the historical material below.**
+
+### What changed
+
+The user no longer starts the sidecar by hand, and a build now carries one. See **ADR-064** in
+[`decisions.md`](decisions.md) for the full reasoning, including why pm2 and a copied `.venv` were
+both rejected.
+
+| File | Role |
+|---|---|
+| `Runtime/Tracking/OakD/SidecarProcessLauncher.cs` | Spawns `sidecar_supervisor.py`, pipes its output into `ILogService`, tears it down via a Win32 kill-on-close job object. |
+| `Runtime/Tracking/OakD/SidecarPaths.cs` | Editor/player path resolution + validation. UnityEngine-free so it is testable. |
+| `Runtime/Tracking/OakD/SidecarLocator.cs` | Thin UnityEngine shim over the above. |
+| `Editor/SidecarBuildPostprocessor.cs` | Copies sidecar `.py` source into `StreamingAssets/Sidecar/` at build time. |
+| `Tests/EditMode/SidecarPathsTests.cs` | 11 tests guarding the packaging paths. |
+| `python-sidecar~/setup_sidecar.ps1` | One-time target setup; verifies `DmlExecutionProvider`. |
+| `python-sidecar~/requirements.lock.txt` | Exact `pip freeze`. **`requirements.txt` had `onnxruntime-directml` commented out** — setting up from it produced a sidecar with no inference. |
+| `AppBootstrap.cs` | `autoStartSidecar` + options; `StartSidecar()` in `StartTracking()`; disposal first in `TeardownServices()`. |
+| `README.md` (repo root) | Product README. The previous root copy was a byte-identical duplicate of `docs/README.md` with links that only resolve from `docs/`. |
+
+### Verified
+
+```text
+supervisor accepts the launcher's exact CLI      SIDECAR READY in 14.5 s
+second supervisor while the first holds the lock SUPERVISOR ABORT (lock_port=8897)
+TcpListener probe on 8897 while held             SocketException -> AttachedExternal, no spawn
+taskkill /F /T on the supervisor                 3 processes killed, 8897 + 8899 released, no orphan
+3x start/stop cycle                              3/3 passed
+SidecarPathsTests                                11/11 passed
+new C# compiles against Unity 6000.3.9f1         clean
+```
+
+### NOT verified — do not claim these
+
+* **The in-editor Play → exit → Play cycle has not been run.** The launch and teardown mechanism was
+  exercised directly (exact CLI, exact `taskkill /F /T`), not through Unity's Play mode.
+* **No build has been produced or run.** `SidecarBuildPostprocessor` has never executed.
+* **The full EditMode suite (170 tests) has not been re-run.** The editor was open and running it in
+  batch mode requires closing it. Only the 11 new packaging tests were executed, via a standalone
+  Mono runner.
+* Everything in README.md's "Known limitations" remains open, unchanged by this work.
+
+### Next recommended task
+
+1. Press Play with `useOakUdpTracking` on and confirm the HUD reports the sidecar; exit and confirm
+   no orphan holds 8899. Repeat three times.
+2. Produce a Windows build, run `setup_sidecar.ps1` inside `StreamingAssets/Sidecar/`, and confirm
+   tracking works outside the editor.
+3. Re-run the full EditMode suite in batch mode with the editor closed.
+4. Surface `SidecarProcessLauncher.StatusLine` in `DiagnosticsHudPanel` — the launcher exposes it,
+   but nothing displays it yet.
 
 ---
 

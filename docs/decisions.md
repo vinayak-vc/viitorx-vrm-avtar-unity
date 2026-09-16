@@ -2321,3 +2321,234 @@ RUNTIME `kalidokitBodyTorsoRoll = 0`; the scene ships 1. Same clip, same subject
 opened scene: trunk median **16.7 -> 7.3 deg**, follow **0.27 -> 1.29**. The trunk is not dead in the
 shipped configuration. This incidentally validates the standing `tasks.md` item "torsoRoll 0 -> 1
 applied, NOT validated".
+
+---
+
+## ADR-064 — Unity launches the sidecar itself; the venv and the model are INSTALLED on the target, not copied into the build
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Supersedes:** nothing. **Related:** ADR-016 (sidecar out-of-process), F-20B (supervisor).
+
+### Context
+
+Two problems, one decision.
+
+1. The user had to start `sidecar_supervisor.py` in a terminal before pressing Play. That is a manual
+   step in front of every demo and it is easy to forget.
+2. `python-sidecar~` is invisible to Unity — the trailing `~` is exactly what keeps it from being
+   imported — so a built player contained **no sidecar at all** and could not track.
+
+The proposal on the table was to manage the sidecar with **pm2** and copy the whole sidecar tree,
+venv included, into `StreamingAssets`. Both halves were rejected, and the reasons are worth keeping
+because they are not obvious.
+
+### Decision 1 — spawn `sidecar_supervisor.py` directly from C#; do not add a process manager
+
+`SidecarProcessLauncher` (`Runtime/Tracking/OakD/`) runs the existing supervisor, and
+`AppBootstrap.StartSidecar()` calls it from `StartTracking()`.
+
+It uses the project's own **`NativeProcess`** (`Assets/Modules/Utility/StartExternalProcess.cs`), NOT
+`System.Diagnostics.Process`, which is stripped under IL2CPP — the configuration this product ships
+in. `NativeProcess` wraps `CreateProcessW`/`ShellExecuteEx` directly and already provides argument
+passing, stdout/stderr redirection with events, `Id`, `HasExited`, `ExitCode` and `WaitForExit`, so
+the launcher needed no capability it does not have. `VirtualMirror.Tracking.asmdef` gains a
+reference to the `Utility` assembly.
+
+**Why not pm2:**
+
+* It duplicates the supervisor, which is already a tested watchdog (F-20B, 35/35): restart-on-death,
+  crash-loop detection with backoff, environment validation, heartbeat and ready timeouts, and a
+  process-tree kill that is deliberately scoped to its own child.
+* The "start it only if it is not already running" behaviour already exists, and is implemented
+  better than pm2 does it. `acquire_single_instance_lock()` holds a TCP bind on 127.0.0.1:8897 for
+  the process lifetime, with the reasoning recorded in the code: *a bound socket cannot be stolen by
+  a stale PID file after a crash, which a lock FILE can.* pm2 is PID-file based.
+* **The lifecycle is inverted.** pm2 is a daemon; its purpose is surviving parent death and reboots.
+  The hard requirement here is the opposite — the sidecar MUST die when Play mode exits, because a
+  stranded python holding UDP 8899 blocks the next run. Adding a survival daemon to solve a
+  must-die problem means fighting the tool, and `pm2 delete` becomes one more thing that has to fire
+  reliably.
+* It would add Node.js and a global pm2 install as a third runtime to a Unity + Python product, and
+  route sidecar logs into pm2's own store instead of `ILogService`.
+
+**Teardown is a Win32 job object, not just `OnApplicationQuit`.** The child is assigned to a job with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the kernel kills the whole tree whenever Unity dies — a
+crash or Task Manager included, where no managed teardown path runs at all. `TeardownServices()`
+(already idempotent, already called from both `OnApplicationQuit` and `OnDestroy`, so it covers
+domain reload) disposes the launcher as its first act.
+
+Measured during teardown: killing the supervisor alone is not enough. The live tree was
+supervisor → sender → **a third process**, so `taskkill /F /T` is load-bearing — and doubly so on
+`NativeProcess`, whose `Kill()` calls `TerminateProcess` on the single PID and would strand the
+actual UDP producer while it still held the camera. The taskkill is scoped to our own PID; a broad
+`taskkill /IM python.exe` would kill the user's unrelated interpreters.
+
+Because `NativeProcess` keeps its process handle private, the job object re-opens a handle from the
+PID via `OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE)`. Raw kernel32 P/Invoke is unaffected by
+IL2CPP stripping — it is the managed `System.Diagnostics` surface that is unavailable, not interop.
+
+**Attach, never double-spawn.** The launcher probes lock port 8897 with a `TcpListener` bind before
+spawning. Held means a supervisor is already running — started by hand, or left over — so the
+launcher reports `AttachedExternal` and leaves it alone. Two producers on one UDP port interleave
+poses from different sessions, which reads as violent jitter rather than as a misconfiguration.
+
+`--allow-port-listener` is passed unconditionally. Unity in Play mode holds UDP 8899, and the
+supervisor's port probe binds the destination port to detect a stale producer, so without the flag it
+reads our healthy listener as "port in use" and refuses to start.
+
+### Decision 2 — ship the sidecar SOURCE in StreamingAssets; install the venv and model on the target
+
+A post-build step (`Editor/SidecarBuildPostprocessor.cs`) copies the 83 top-level `.py` files
+(~1.2 MB), `requirements.lock.txt` and `setup_sidecar.ps1` into `StreamingAssets/Sidecar/`.
+
+**Why not keep those files in `Assets/StreamingAssets` directly:** 83 imported files means 83 `.meta`
+files churning on every edit and two copies of every module free to drift. Copying at build time
+keeps `python-sidecar~` the single source of truth and guarantees the player carries the same
+revision the editor just ran.
+
+**Why the venv is NOT copied — the decisive fact.** A Windows virtualenv is not relocatable. Verified
+on this machine:
+
+```text
+pyvenv.cfg    home = C:\Program Files\Python310     (absolute, external)
+Lib/          site-packages ONLY - no stdlib
+Scripts/      python.exe, pythonw.exe - no python310.dll
+```
+
+A copied venv therefore works only on a machine that already has Python 3.10.0 at that exact path,
+and fails confusingly everywhere else. Shipping it would have produced a build that appeared
+self-contained and was not — the same class of silent-wrong-environment failure as the PATH
+interpreter trap below. `setup_sidecar.ps1` builds the venv on the target instead.
+
+Also excluded: `rtmw3d-x.onnx` (369 MB, changes roughly never, would cost minutes per build) and
+`depthai_blazepose/` (86 MB — the superseded Phase-1 path, named only in a docstring in
+`wholebody_udp_sender.py` and never imported).
+
+**The trade-off, stated plainly:** builds stay small and always self-consistent, but the target needs
+a one-time setup pass and Python 3.10. This is not a double-click install. PyInstaller would remove
+the Python dependency entirely and is the natural v2 step; it was not attempted for v1 because
+`onnxruntime-directml`, `depthai` and `opencv` are all awkward to freeze.
+
+### Decision 3 — a missing venv is a HARD failure, never a fallback to `python` on PATH
+
+`SidecarPaths.Validate()` refuses to launch and names the missing file. It must never fall back to
+the interpreter on PATH: that resolves a different environment whose onnxruntime cannot load its GPU
+provider and drops to CPU **without raising** — 183 ms/frame instead of ~31. Correctness is
+unaffected, so the only symptom is that everything is mysteriously slow and every timing number is
+wrong. A loud failure is strictly better than a silent 6x slowdown, and
+`SidecarPathsTests.Validate_MissingInterpreterExplainsWhyThereIsNoPathFallback` pins the explanation
+into the error message so it cannot be quietly dropped.
+
+`setup_sidecar.ps1` checks `ort.get_available_providers()` and fails setup if `DmlExecutionProvider`
+is absent — moving that discovery from production to install time.
+
+### Consequence found while doing this
+
+`requirements.txt` had `onnxruntime-directml` **commented out** while the working venv had it
+installed. Anyone setting up from that file would have got a sidecar with no inference at all.
+`requirements.lock.txt` (exact `pip freeze`, 12 packages) is now the file the setup script installs;
+`requirements.txt` remains the human-readable statement of intent.
+
+### Evidence
+
+```text
+supervisor accepts the launcher's exact CLI      SIDECAR READY in 14.5 s
+second supervisor while first holds the lock     SUPERVISOR ABORT another supervisor already owns lock_port=8897
+TcpListener probe on 8897 while held             SocketException -> AttachedExternal, no spawn
+taskkill /F /T on the supervisor                 3 processes terminated, 8897 + 8899 released, no orphan
+3x start/stop cycle                              3/3 passed, ports free before and after every cycle
+SidecarPathsTests                                11/11 passed
+```
+
+**Not yet demonstrated:** the in-editor Play → exit → Play cycle, and a real build run outside the
+editor. The launch/teardown mechanism above was exercised directly rather than through Unity.
+
+---
+
+## ADR-065 — The sidecar root is the PRODUCTION PATH only; harnesses move to tools/ and tests/
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-064 (packaging), AGENTS.md §9.
+
+### Context
+
+The sidecar root held 83 flat `.py` files: two entry points, nine production modules, and 72
+investigation harnesses accumulated across F-16 to F-27. Nothing distinguished the frame loop that
+ships from a one-off replay script written for a single afternoon's measurement, and ADR-064's build
+step copies the root directory, so every one of those 72 files would have shipped to players.
+
+### Decision
+
+The root keeps the production path and nothing else:
+
+```text
+sidecar_supervisor.py  wholebody_udp_sender.py          (entry points)
+rtmw3d_pose  oak_depth  f18_portrait  smoothing  joint_tracker
+kinematic_recovery  target_ownership  pose_validation  f21_cue_display
+```
+
+Those nine are exactly what `wholebody_udp_sender.py` imports. **They were deliberately NOT moved.**
+Relocating them would mean editing the import block of the shipping frame loop, which is the one
+file this reorganisation had no business destabilising for a cosmetic gain.
+
+Everything else moved into `tests/` (8) and `tools/` (64), grouped by **dependency cluster** rather
+than by F-number: `capture/` holds f16+f18+f19 together because they import each other heavily,
+alongside `deployment/`, `ownership/`, `validation/`, `video/` and `diagnostics/`.
+
+### The import problem, and why the shim exists
+
+Python puts the *script's own* directory on `sys.path`, not the project root. A harness moved to
+`tools/ownership/` therefore cannot `import rtmw3d_pose`, and 39 of the 72 files import at least one
+project module. Three cross-group edges also survive the grouping
+(`f21_supervisor_integration` → `f20b_deployment_verify`, `f24_jitter_session` → `f21_live_protocol`,
+and the capture cluster's internal web).
+
+Each affected file carries a two-line prelude that walks **up** to `_sidecar_path.py` and imports it;
+the shim then puts the root and every `tools/` group on `sys.path`. Walking up rather than counting
+`dirname()` calls is deliberate — the first version hardcoded three levels, which was right for
+`tools/<group>/x.py` and one level too high for `tests/x.py`, and it failed immediately. Searching
+for the marker file is correct at any depth and stays correct if a file moves again.
+
+Harnesses are still run directly (`python tools\ownership\f21_walkin_protocol.py`), so the commands
+recorded in the F-reports change by **path only, not by form**. That matters: those commands are how
+the deleted raw captures get regenerated, and switching to `python -m` would have invalidated every
+one of them.
+
+### On merging "similar" scripts
+
+The request that prompted this also asked to merge scripts with similar logic. Measured before
+acting, across all 83 files:
+
+```text
+whole-file similarity >= 55%     0 pairs
+duplicated functions (>= 6 lines) 1  -  load(), 13 lines, in f16_consolidate and f16_edge_check
+```
+
+**The similar-looking names are not duplicates.** `f21_video_replay` and `f22_video_replay`,
+`f21_perf_ab` and `f22_perf_ab`, `f21_adversarial` and `f22_adversarial` are per-investigation
+harnesses over different subsystems — ownership versus pose validation — and merging them would
+conflate two independent evidence chains to save nothing.
+
+The one real duplicate was hoisted to `f16_configs.load_rows()`, which both files already had reason
+to import. Both keep a three-line `load()` alias so all ten call sites read unchanged.
+
+### Consequence for the build
+
+`SidecarBuildPostprocessor` copies `TopDirectoryOnly`, which now means it ships 12 files instead of
+83 — the production path plus the import shim — and no harness or self-test reaches a player. That
+was previously accidental; it is now the documented contract, and AGENTS.md §9 records that a file
+left at the root ships whether or not a player needs it.
+
+### Evidence
+
+```text
+self-tests, before the move   75/75, 37/37, 39/39, 22/22, f26 28, f27 18
+self-tests, after the move    75/75, 37/37, 39/39, 22/22, f26 28, f27 18   + test_surface_depth 32/32
+production chain imports      all 9 modules + wholebody_udp_sender import clean
+compileall (excl. .venv)      exit 0
+cross-group harness imports   9 sampled, all resolve
+supervisor end-to-end         3/3 start/stop cycles, READY ~13 s, no orphan, ports released
+duplicate scan after merge    0 pairs, 0 duplicated functions
+```

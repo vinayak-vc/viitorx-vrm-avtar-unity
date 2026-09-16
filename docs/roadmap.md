@@ -661,3 +661,31 @@ cost). Lower the noise floor and the deadzone can come down honestly. It is a de
 Unchanged and not to be re-litigated: operating distance 0.90 m portrait; single user only;
 multi-user UNSUPPORTED; reliable +/-90 deg torso not achievable with this sensor; do not procure
 wider-baseline hardware (F-17 - the LENS is the lever).
+
+---
+
+## v1 PACKAGING (2026-09-16, ADR-064)
+
+The last manual step is gone: Unity spawns `sidecar_supervisor.py` itself and kills it on exit, so
+the user never opens a terminal. A build now carries the sidecar source in
+`StreamingAssets/Sidecar/`.
+
+**Shipping model:** sidecar `.py` source is bundled with the build; the virtualenv and the 369 MB
+model are installed once on the target by `setup_sidecar.ps1`. The venv is deliberately NOT copied —
+a Windows venv pins an absolute `home` to the base interpreter and carries no stdlib, so a copied one
+works only on a machine with the identical Python at the identical path. Cost of this choice: the
+target needs Python 3.10 and a one-time setup pass; it is not a double-click install. PyInstaller
+removes that dependency and is the natural v2 step.
+
+**The blocking item added by this work:**
+
+```text
+6. PLAY-MODE + BUILD ACCEPTANCE          <- the launcher's mechanism is verified directly (exact CLI,
+                                            exact taskkill /F /T, 3/3 cycles, no orphan, 11/11 new
+                                            tests) but NOT through Unity Play mode, and no build has
+                                            ever been produced. Until both are run, "the sidecar
+                                            starts automatically" is demonstrated for the mechanism
+                                            and asserted for the integration.
+```
+
+Items 1-5 above are untouched by this work and remain open.

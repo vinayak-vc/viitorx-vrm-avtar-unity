@@ -655,3 +655,93 @@ _None_
       from joint positions. That is a product choice, not an engineering one.
 - [ ] Show F-28 to somebody. Whether it reads as intentional rather than as a debug view is a
       judgement about an audience, and no audience has seen it.
+
+---
+
+## v1 PACKAGING — sidecar auto-launch and build packaging (2026-09-16, ADR-064)
+
+### DONE
+- [x] **`SidecarProcessLauncher`** spawns `sidecar_supervisor.py` from `AppBootstrap.StartTracking()`.
+      Output goes to `ILogService`; teardown is first in `TeardownServices()` (already idempotent and
+      already wired to both `OnApplicationQuit` and `OnDestroy`, so domain reload is covered).
+- [x] **Orphan prevention via Win32 job object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), so the
+      kernel kills the tree even when Unity crashes and no managed teardown runs. Measured: the live
+      tree is supervisor -> sender -> a third process, so `taskkill /F /T` is load-bearing.
+- [x] **Attach, never double-spawn.** Launcher probes lock port 8897 before spawning; held means an
+      existing supervisor, so it reports `AttachedExternal` and leaves it alone.
+- [x] **`--allow-port-listener` passed unconditionally** — Unity in Play mode holds 8899 and the
+      supervisor's probe would otherwise read that healthy listener as a stale producer.
+- [x] **Serialized `autoStartSidecar`** on `AppBootstrap` (default on), plus lock port, model
+      override, portrait direction and subpixel bits.
+- [x] **Build packaging decided and implemented** — `.py` source into `StreamingAssets/Sidecar/` via
+      a post-build step; `.venv` (342 MB, NOT relocatable), the 369 MB model and the superseded
+      86 MB `depthai_blazepose/` all excluded. Trade-off recorded in ADR-064 and README.md.
+- [x] **`setup_sidecar.ps1`** — one-time target setup that verifies `DmlExecutionProvider` and fails
+      at install time rather than letting the 5 fps CPU fallback reach production.
+- [x] **`requirements.lock.txt`** — exact `pip freeze`. `requirements.txt` had
+      `onnxruntime-directml` COMMENTED OUT while the working venv had it installed, so anyone
+      setting up from it got a sidecar with no inference at all.
+- [x] **Product `README.md`** at the repo root. The previous root copy was a byte-identical
+      duplicate of `docs/README.md` whose links only resolve from `docs/`.
+- [x] **11 EditMode tests** (`SidecarPathsTests`) covering editor/player path resolution and the
+      hard-fail-on-missing-venv contract. 11/11 pass.
+
+### OPEN — required before v1 can be called done
+- [ ] **Press Play and demonstrate the cycle three times.** The mechanism is verified directly
+      (exact CLI, exact `taskkill /F /T`, 3/3 cycles, no orphan) but NOT through Unity Play mode.
+- [ ] **Produce and run a Windows build.** `SidecarBuildPostprocessor` has never executed.
+- [ ] **Re-run the full EditMode suite (170 tests) in batch mode** with the editor closed. Still
+      outstanding from the `kalidokitBodyTorsoRoll: 0 -> 1` change.
+- [ ] **Surface `SidecarProcessLauncher.StatusLine` in `DiagnosticsHudPanel`.** The launcher exposes
+      it; nothing displays it yet, so a sidecar failure is currently console-only.
+- [ ] Confirm Build Settings scene list and order, and decide whether `SkeletonShow.unity` ships.
+- [ ] Cleanup pass (docs/evidence blobs, one-off harnesses) — NOT started; needs the user's call on
+      what to delete, since several "test scripts" are the only instrument protection this project
+      has.
+
+---
+
+## v1 CLEANUP + SIDECAR REORGANISATION (2026-09-16, ADR-065)
+
+### DONE — cleanup (~2.72 GB freed, nothing tracked was deleted)
+- [x] **Citation chain committed FIRST, before any deletion.** `docs/evidence/` was entirely
+      untracked, so the evidence behind ADR-062/063 and F-26/27/28 existed on one disk only.
+      33 files / 3.5 MB now committed: 9 cited PNGs, RESULTS.txt, FIDELITY_AB.txt, the .gitignore
+      rules. Verified 0 .jsonl staged.
+- [x] `oak_v4_evidence/` 1,818 MB -> 26.9 MB. Deleted 1,976 untracked files (1,701 PNG, 20 MKV,
+      8 MP4, 101 jsonl); kept all 118 tracked summary files. Overlap between the delete list and
+      the tracked list was checked to be 0 before executing.
+- [x] `pipeline_logs*/` (5 dirs, 759 MB), `__pycache__/`, `docs/evidence/**/*.jsonl` (39 MB),
+      `LatestScreenReording.mp4` (130 MB) — all removed.
+- [x] **Images KEPT, deliberately.** All 9 PNGs in `docs/evidence/` are cited by
+      F26_AVATAR_VS_DEBUG_SKELETON or F28_SKELETON_SHOW_MODES; `t065_arms_overhead_avatar_horizontal.png`
+      is the visual record of the failure ADR-063 reasons about. Deleting 3.4 MB would have broken
+      the citation chain for no meaningful saving. The real image bulk was the 1,701 untracked
+      frame captures inside `oak_v4_evidence`, which are gone.
+- [x] **The repo was never bloated by any of this** — it was all untracked, and the f26/f27
+      .gitignore rules already excluded the jsonl. This freed disk, not repository size.
+
+### DONE — sidecar reorganisation (ADR-065)
+- [x] Root reduced 83 -> 12 .py files: the two entry points, the nine modules
+      `wholebody_udp_sender` imports, and the `_sidecar_path` shim. The nine were NOT moved, on
+      purpose — relocating them means editing the shipping frame loop's imports.
+- [x] 72 files moved into `tests/` (8) and `tools/` (capture 23, ownership 13, diagnostics 11,
+      deployment 7, validation 6, video 4), grouped by dependency cluster.
+- [x] 39 files given the `_sidecar_path` prelude. It walks UP to find the shim rather than counting
+      dirname() calls — a fixed depth was right for tools/<group>/ and wrong for tests/.
+- [x] **Dedup measured, not assumed:** 0 whole-file pairs >= 55% similar; exactly 1 duplicated
+      function (13-line `load()`), hoisted to `f16_configs.load_rows()`. The similar-looking
+      f21_/f22_ names are different subsystems and were correctly left alone.
+- [x] `SidecarBuildPostprocessor` now ships 12 files instead of 83; AGENTS.md §9 records that the
+      root is the production path and a file left there reaches every player.
+- [x] Sidecar README `## Layout` rewritten — it still documented ~12 scripts deleted back in
+      `29ec57e`, and the Tests/Device-free sections gave commands that no longer ran.
+
+### Verified
+```text
+self-tests before move   75/75, 39/39, 37/37, 22/22, f26 28, f27 18
+self-tests after  move   identical, + test_surface_depth 32/32
+production chain         all 10 modules import clean; compileall exit 0
+supervisor end-to-end    3/3 start/stop cycles, READY ~13 s, no orphan, ports released
+duplicate scan after     0 pairs, 0 duplicated functions
+```

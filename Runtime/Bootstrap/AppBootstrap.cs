@@ -41,6 +41,15 @@ namespace VirtualMirror.App {
         [Tooltip("OAK-D depth camera via the Python sidecar over UDP — the production path. Takes priority over the other providers when it starts.")]
         [SerializeField] private bool useOakUdpTracking = false; // B2 (Python sidecar over UDP) — ADR-016
         [SerializeField] private int oakUdpPort = 8899;
+        [Tooltip("Start the Python tracking sidecar automatically (ADR-064). Turn OFF to run sidecar_supervisor.py by hand. Either way, an already-running supervisor is detected via its lock port and never double-started.")]
+        [SerializeField] private bool autoStartSidecar = true;
+        [Tooltip("Must match sidecar_supervisor.py --lock-port. Used to detect an existing supervisor rather than spawning a second producer onto the same UDP port.")]
+        [SerializeField] private int sidecarLockPort = 8897;
+        [Tooltip("Leave empty to use the packaged model path. In the editor that resolves to Assets/SentisModel/rtmw3d-x.onnx.")]
+        [SerializeField] private string sidecarModelPathOverride = "";
+        [Tooltip("Portrait rotation passed to the sidecar; must match how the OAK-D is physically mounted.")]
+        [SerializeField] private string sidecarPortraitDirection = "ccw";
+        [SerializeField] private int sidecarSubpixelBits = 3;
         [Tooltip("Use the sample video file instead of a live webcam (ignored on the OAK-D path).")]
         [SerializeField] private bool useVideoSource = false;
         [Tooltip("MediaPipe pose on the webcam/video (CPU). Fallback when OAK/Sentis are off.")]
@@ -183,6 +192,7 @@ namespace VirtualMirror.App {
         private AvatarSessionController avatarSession;
         private ICameraCapture cameraCapture;
         private IBodyTrackingProvider bodyProvider;
+        private SidecarProcessLauncher sidecarLauncher; // ADR-064: owns the Python sidecar process
         // ---- F-20A stale-stream failsafe --------------------------------------------------------
         // How long the release to the neutral pose takes. Chosen so the move reads as deliberate
         // rather than as a glitch; it is a per-frame slerp factor of deltaTime / this.
@@ -746,6 +756,13 @@ namespace VirtualMirror.App {
                 return;
             }
             servicesTornDown = true;
+            // ADR-064: stop the producer first, so it is not still streaming into a socket we are
+            // about to close. Disposing is safe when the sidecar was never started, and it never
+            // touches a supervisor that this launcher did not spawn.
+            if (sidecarLauncher != null) {
+                sidecarLauncher.Dispose();
+                sidecarLauncher = null;
+            }
             if (modelLog != null) {
                 try {
                     modelLog.Flush();
@@ -821,6 +838,26 @@ namespace VirtualMirror.App {
             }
         }
 
+        /// <summary>
+        /// ADR-064: brings up the Python tracking sidecar so the user does not have to run it in a
+        /// terminal. Failure here is deliberately non-fatal — the OAK-D provider still starts and
+        /// the HUD reports why nothing is streaming, which is more useful than refusing to boot.
+        /// </summary>
+        private void StartSidecar() {
+            SidecarLaunchOptions launchOptions = new SidecarLaunchOptions {
+                AutoStart = autoStartSidecar,
+                Host = "127.0.0.1",
+                UdpPort = oakUdpPort,
+                LockPort = sidecarLockPort,
+                Portrait = true,
+                PortraitDirection = sidecarPortraitDirection,
+                SubpixelBits = sidecarSubpixelBits,
+                ModelPathOverride = sidecarModelPathOverride
+            };
+            sidecarLauncher = new SidecarProcessLauncher(logService, launchOptions);
+            sidecarLauncher.Start(SidecarLocator.Resolve(sidecarModelPathOverride));
+        }
+
         private void StartTracking() {
             jointFilter = new JointFilterPipeline(filterMinCutoff, filterBeta, filterDerivativeCutoff);
             retargeter = new HumanoidPoseRetargeter();
@@ -837,6 +874,11 @@ namespace VirtualMirror.App {
             // → cannot crash Unity. Binds a UDP socket; if the port is free it "starts" and waits for the
             // sidecar's datagrams (avatar rests until the sidecar streams). Run udp_pose_sender.py separately.
             if (useOakUdpTracking) {
+                // ADR-064: start the sidecar before the provider binds, so its ~45 s model load
+                // overlaps the rest of bootstrap. The provider does not depend on it being up — it
+                // simply waits for datagrams, and TrackingStreamHealth + the F-20A stale/failsafe
+                // machinery already handle a producer that never arrives or dies mid-session.
+                StartSidecar();
                 OakDUdpPoseProvider oakUdp = new OakDUdpPoseProvider(logService, converter, oakUdpPort);
                 if (pipelineLogging) {
                     oakUdp.SetPipelineLog(pipelineLogDir); // recv_log.jsonl — must be set before StartTracking
