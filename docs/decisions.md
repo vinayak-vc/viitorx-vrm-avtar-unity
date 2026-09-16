@@ -2552,3 +2552,62 @@ cross-group harness imports   9 sampled, all resolve
 supervisor end-to-end         3/3 start/stop cycles, READY ~13 s, no orphan, ports released
 duplicate scan after merge    0 pairs, 0 duplicated functions
 ```
+
+---
+
+## ADR-056 / ADR-061 addendum (2026-09-16) — the cited F-21 images were lost, and why they could not all come back
+
+**What happened.** The v1 cleanup deleted the untracked bulk under `oak_v4_evidence/`. That removal
+was checked against the *tracked* file list — no tracked file was touched — but it was never checked
+against the **documentation's** citations, and the F-21 images were untracked. Eight cited paths went
+with it:
+
+```text
+f21/handoff/123_handoff_f00621_owner_before_loss.png            ADR-056
+f21/handoff/123_handoff_f00628_other_body_at_loss.png           ADR-056
+f21/handoff/123_handoff_f00690_reacquired_as_same_target.png    ADR-056
+f21/wrongperson/frames/123_residual_f00014.png                  F-21 report
+f21/walkin/s34_evidence/                                        ADR-061  (incl. run3_rep3_peakdrift_t122.png)
+f21/live/attempt1_inconclusive/                                 F-21 report SS_live
+f21/live/attempt2_device_crash/                                 F-21 report SS_live
+f21/supervisor_integration/cue_render.png                       F-21 report
+```
+
+**Root cause, and it is not the cleanup.** Those files could never have been committed. `.gitignore`
+carried a blanket `oak_v4_evidence/` (directory form) as its final rule, *after* the careful
+`!oak_v4_evidence/f21/**/*.png` negations. Git cannot re-include a file whose parent directory is
+excluded, so every one of those negations was dead and `git add` silently refused the images. The
+rule has been removed and replaced with a comment explaining why it must not come back; `git add
+--dry-run` now accepts the PNGs and still refuses the bulk `*_rows.jsonl` streams, as intended.
+
+**What was regenerated (2026-09-16), now tracked:**
+
+`f21_wrongperson_replay.py --video ../../video/123.webm --dump` reproduces the residual-frame
+evidence, and produces *more* than the original single frame: the same three frames under all four
+arms, so the comparison is visible rather than asserted. Stored at 50 % scale per this tree's stated
+policy (1.1 MB total; regenerate full resolution from the harness).
+
+```text
+ARM                 emitted     held    WRONG   episodes  releases   switch
+OWNERSHIP_OFF           775        0      102          2         0        0
+PATH_OFF                500      275       40          2         0        0
+PATH_ON                 404      371        2          1         1        1
+PATH_ON_NO_F22          404      371        2          1         1        1
+```
+
+**What could NOT be regenerated, and the reason is informative:**
+
+* **ADR-056's three hand-off frames.** Re-running `f21_handoff_forensics.py` on the same clip today
+  reports `VERDICT: NO HAND-OFF CANDIDATES` — because ADR-057 *fixed* the defect those images
+  documented. The evidence is unreproducible precisely because the bug is gone. That run's
+  `123_forensics.json` is committed as the post-fix record; reproducing the original images would
+  mean checking out pre-ADR-057 `target_ownership.py`.
+* **ADR-061's live imagery and both earlier live attempts.** Live two-person captures. There is no
+  way to regenerate these without running the session again with two people, which is the session
+  §34.5 already calls for.
+
+**Standing consequence.** ADR-061's reasoning and its measured numbers survive in prose; its
+*imaged* corroboration does not. The drift finding therefore rests on a 2 Hz preview sample and the
+`sent` counter, exactly as the ADR's own "honest limit of this measurement" paragraph already warned
+— that limit is now the only record. The next live session should capture and **commit** the frames,
+not merely write them to disk.

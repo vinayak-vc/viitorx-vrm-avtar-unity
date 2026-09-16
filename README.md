@@ -234,8 +234,20 @@ These are open. Do not describe them as done.
   pipeline does body-volume avoidance. **Not fixed.**
 * **The avatar is not proven faithful.** F-26 established that F-19's "avatar quality proven good"
   rested on four internal-consistency metrics, all of which a stably-wrong pose also satisfies.
-* **F-21 live two-person acceptance has never been run.** ADR-061's drift budget is unmeasured, and
-  single-person ownership is not a safety property on current evidence.
+* **Multi-person is UNSUPPORTED, and single-person ownership fails live.** The live two-person
+  session *has* now been run (2026-09-16) and it found a second silent wrong-person route: while
+  `LOCKED`, the ownership reference updates every accepted frame, so an observation migrating slower
+  than the switch margin slides from one human to another without failing a single test. Measured at
+  **0.015 m/frame against a 0.35 m margin — 23x under it**; 97 datagrams emitted, `target_id`
+  unchanged, zero ownership events logged (ADR-061). A mechanism exists but
+  **`drift_budget_m` defaults to `None` = disabled**, so production behaviour is unchanged; the
+  budget is deliberately unset because it is unmeasured.
+
+  Note what this layer is and is not. RTMW3D-x is a single-person top-down model — one inference,
+  one skeleton, no detector, no track id — so the pipeline cannot track several people at once and
+  F-21 does not attempt to. It exists only to hold **one** person and refuse to hand off silently.
+  Offline it is strong (75/75 unit, 63/63 across 17 scenarios, 8-person footage with 0 switches);
+  live it is not yet a safety property. Do not deploy this where a second person can enter frame.
 * **F-22 L2 hands-near-face** has not been run live.
 * **F-27 (humanized skeleton) has never run on stereo.** Both measurements used the video path,
   which synthesises every joint's depth, so every protective stage was idle.
