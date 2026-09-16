@@ -4,6 +4,178 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## ⚠ F-26 AVATAR vs DEBUG SKELETON (2026-09-16) — observation report, no decision taken
+
+Screen recording reviewed (`LatestScreenReording.mp4`, 129 s). **The tracking is not the problem; the
+retarget is.** The debug skeleton follows the subject through every pose in the video — including
+seated and arms-overhead — while the VRM avatar diverges, monotonically, the further the subject gets
+from neutral standing.
+
+- [ ] **Full report: [F26_AVATAR_VS_DEBUG_SKELETON_2026-09-16.md](F26_AVATAR_VS_DEBUG_SKELETON_2026-09-16.md)**
+      — frame-by-frame table, complete avatar/skeleton comparison, failure mechanisms, four resolution
+      options. Evidence in `docs/evidence/F26_avatar_vs_skeleton/`.
+- [ ] **⚠ "AVATAR QUALITY — PROVEN GOOD" does not mean pose fidelity.** Every F-19 avatar metric
+      (0.012° median yaw, zero snaps, bone lengths to 0.0011 %, zero swaps) measures **internal
+      consistency**, not correspondence to the subject. All four are compatible with an avatar that is
+      smoothly and stably in the WRONG pose — which is what the video shows. F-19 is not falsified; the
+      inference carried into roadmap.md is. See F-26 §5.1.
+- [ ] **⚠ No fidelity metric has ever existed.** Nothing compares avatar pose to subject pose. That
+      absence is why this went unnoticed, and it is the first thing to fix whatever else is decided.
+      Per-joint angular error between the skeleton's bone directions and the avatar's is computable
+      today, offline, with no new hardware. F-26 §9.1.
+- [ ] **⚠ F-19's requested elbow flexion clamp (~150°) was never built.** The only 150° in the
+      retarget is `TorsoYawGuard.WrapGuardDeg`, unrelated. The elbow case was closed instead by F-22
+      zeroing confidence in the sidecar — a hold, not a clamp, at a different layer. Possibly the
+      better design; never recorded as a substitution. F-26 §5.4.
+- [ ] **Top avatar defects, by size:** (1) the avatar cannot leave vertical — nothing drives root
+      rotation and the spine-bend high-pass treats a sustained lean as drift, so it cannot sit;
+      (2) arm elevation is lost — the hand is used as a direction, never as a target;
+      (3) legs splay, no hip-width normalisation; (4) a held limb reads worse than a missing one.
+- [ ] **`showDebugSkeleton` defaults to false** — the most informative diagnostic in the project is
+      off by default.
+
+## ✅ OFFLINE HAND-OFF-FIX PASS (2026-09-15) — the §27 silent hand-off is closed
+
+```text
+F-21   CONDITIONAL - OFFLINE FIX VERIFIED, LIVE ACCEPTANCE PENDING
+F-22   OFFLINE ENGINEERING COMPLETE      LIVE HANDS-NEAR-FACE ACCEPTANCE PENDING (L2)
+F-20A  PASS
+F-20B  PASS, unchanged - the §31 supervisor passthrough is additive (35/35 still)
+```
+
+- [x] **F-21 path-consistency gate (ADR-057)** — a reacquire must now be *path*-consistent, not only
+      position-consistent: a candidate tracked walking in from outside the margin is refused
+      (`reason="path_walked_in"`). Sidecar-only, ~20 lines, no new identity signal, no Runtime/
+      change. Reuses `SWITCH_MARGIN_M` as the continuity distance rather than adding a tunable —
+      measured separation: largest real single-frame body displacement **126.1 px** vs a 141 px
+      margin vs the three real body-to-body jumps of **303.5, 323.0 and 687.5 px** (2.15× clear of
+      the smallest of them).
+- [x] **The number that matters, on the clip that showed the bug** — `123.webm`, whole production
+      chain, production config, against offline ground-truth labels:
+      **ownership off 102 → F-21 as shipped 40 → F-21 + gate 2** wrong-person frames, and those
+      last 2 are a *verified labeller artefact* during the subject's entry, present identically in
+      all three arms. **The hand-off segment itself is 0.** The hand-over that does occur is now
+      **declared** — `TARGET_RELEASED` + `TARGET_SWITCH` + a new epoch.
+- [x] **The cost, measured rather than assumed** — 96 frames (1.60 s) of the *legitimate returning
+      owner* withheld, one contiguous block. A returning owner and an intruder walking in are the
+      **same observation stream** from a hip position; the gate does not resolve that ambiguity, it
+      resolves it towards *announcing* the change. Brief §7 and ADR-057 both say that is the right
+      way round. ~2.5 frames of the right person withheld per frame of the wrong person suppressed —
+      a property of this clip, **not** an installation rate.
+- [x] **No regression where the gate should never fire** — `video.webm` (single person) and
+      `456.webm` (eight dancers, real crossing/occlusion) are **bit-identical** with the gate on and
+      off: 435/431/4 and 356/347/9, zero releases, zero switches, zero path rejections in both.
+- [x] **Tests** — unit **46/46 → 61/61**; deterministic adversarial **63/63 → 101/101** with the
+      brief's P1–P11 added and the original 17 scenarios untouched. **P11 is the control**: the same
+      input with the gate off reproduces the silent hand-off exactly (43 wrong-person frames,
+      `switches=0`, `epochs=1`), which is what makes the claim falsifiable. It is excluded by name
+      from the suite aggregate so a deliberately-disabled run can never read as production behaviour.
+- [x] **The measuring instrument was wrong three times, and that is in the report** — median hue →
+      largest share → "absence of green means the other person". The last one anchored an epoch to
+      the wrong person and reported **429** wrong-person frames. Two further filters were built and
+      **removed** because they deleted the man from every two-person frame. Now validated against 41
+      eye-checked frames: **36/41, 4 conservative (excluded from scoring, cannot invent a
+      wrong-person frame), 1 dangerous and proven unreachable.** See F-21 §30.6.
+- [x] **Performance** — isolated A/B over 775 real observations × 200 reps: **+0.204 µs/frame**,
+      +14.5 % of the ownership layer, **+0.0006 % of a 30 fps frame budget**. Three scalars of state,
+      no buffer, no allocation.
+- [x] **⚠ PRODUCTION DEFECT FOUND: `--cue-file` had never worked (§31.4)** —
+      `wholebody_udp_sender._read_cue()` calls `io.open` in a module that **never imported `io`**, and
+      its own `except Exception: return None` swallowed the `NameError` on every frame. `_read_cue` is
+      the only user of `io` in that file, so nothing else surfaced it. **The on-screen cue banner has
+      been silently dead since it was written** — the banner REV 2 added specifically because the
+      first live attempt was inconclusive when the operator couldn't read console instructions at the
+      camera. Tomorrow's session would have repeated that failure with a report saying it was fixed.
+      One-line fix, verified by actually rendering the banner (imaged). Found by *testing* the
+      feature, not by reading the code — an absent banner looks like operator error, not a bug.
+- [x] **Supervisor + protocol integration, real OAK-D, empty room (§15/§31.3)** —
+      `f21_supervisor_integration.py` **11/11**: supervisor starts the sidecar, both flags reach the
+      running process (read from its argv, not inferred), the preview window is enumerated from
+      user32, the cue round-trips through the real reader and renders, the ownership log lands where
+      the protocol reads it, `SidecarExit` is detected and restarted, and never more than one sidecar
+      tree is alive. Two initial "failures" were *this test* being wrong, not the product — recorded
+      in §31.3, because a test wrong in the optimistic direction is the dangerous kind.
+- [x] **Dead-producer abort path TESTED, not just written** —
+      `f21_live_protocol_abort_test.py` **9/9**: a stub producer is killed mid-phase and the protocol
+      returns non-zero, records rc / phase / wall-clock / last ownership state / completed phases, and
+      **does not run the phases after the death**.
+- [x] **Offline replay soak, twice, and a harness bug found doing it (§30.13)** — 17 min / 21 cycles
+      / **31,851 frames / 0 exceptions**, memory ends *below* warm-up, 80 TEMP_LOST all reacquired,
+      2,770 holds / 2,770 recoveries / 0 unrecovered. But it logged **0 path-gate rejections** across
+      21 replays of the hand-off clip, which did not add up: `f2x_replay_soak.py` fed ownership
+      **metres** while setting `switch_margin_m` from a **pixel** diagonal — a ~141 *metre* gate, so
+      nothing could ever be rejected. Pre-existing harness defect, not production. **Every soak to
+      date therefore exercised F-21's plumbing and never its discrimination**, and its clean "0
+      releases" line read as correctness when it was an artefact. Fixed to production constants and
+      re-run against `123.webm` with per-cycle reset: **600 `path_walked_in` rejections, 20 declared
+      TARGET_SWITCHes, 15,662 frames, 0 exceptions, no memory growth, 749/749 recoveries.**
+- [x] **Live tooling fixed before the session (§31)** — `f21_live_protocol.py` now polls `proc.poll()`
+      during every wait and aborts with return code / phase / timestamp / last F-21 state instead of
+      scoring phases against a dead producer; `sidecar_supervisor.py` forwards `--show` and
+      `--cue-file` **explicitly** (not a generic `--extra-args`, which could also forward
+      `--no-ownership` and change what is under test). New phases `WALK_IN_IMPOSTOR` /
+      `WALK_IN_OWNER` target this pass's finding directly.
+
+## ✅ OFFLINE COMPLETION PASS (2026-09-14) — no physical person available
+
+Everything provable without someone standing at the camera is done. Two live acceptance gates remain
+and **only** those; the next hardware session is validation, not development.
+
+```text
+F-21   OFFLINE ENGINEERING COMPLETE      LIVE ACCEPTANCE PENDING (two-person matrix)
+F-22   OFFLINE ENGINEERING COMPLETE      LIVE HANDS-NEAR-FACE ACCEPTANCE PENDING (L2)
+F-20A  PASS, reconnect re-verified end to end against the real C# consumer
+F-20B  PASS, restored - a production-blocking empty-room defect was found and fixed (ADR-055)
+```
+
+- [x] **F-21 deterministic multi-target suite** — `f21_adversarial.py`, all 17 brief scenarios,
+      **63/63**. Ground-truth labels make it measure *silent wrong-person emission*, which the
+      `TARGET_SWITCH` counter structurally cannot see. 0 false releases, 0 false reacquisitions,
+      0 wrong-person frames outside the deliberately-provoked identical-build crossing.
+- [x] **F-21 defect found + fixed (ADR-054)** — a returning owner past `REACQUIRE_WINDOW` was
+      rejected 51× as `not_owner`, released, and re-acquired with a spurious `TARGET_SWITCH`.
+      Unit suite **36/36 → 46/46** with two regression guards.
+- [x] **F-21 real multi-person replay** — `f21_multiperson_replay.py` on 8-dancer footage, margin
+      sweep incl. the production-equivalent 141 px: **0 switches, 0 releases at every margin**;
+      false rejections begin at ~126 px, i.e. ~11 % headroom.
+- [x] **⚠ F-21 silent wrong-person hand-off REPRODUCED AND IMAGED (ADR-056)** — on real two-person
+      footage F-21 refused the intruder for 54 frames, then re-locked onto them as the *same*
+      `target_id` when they walked into the owner's vacated spot. `TARGET_SWITCH = 0`,
+      `TARGET_RELEASED = 0` — invisible to the consumer. **Now FIXED — see the 2026-09-15 block
+      below (ADR-057).** ADR-056's premise that only live data could price the fix turned out to be
+      wrong: offline ground-truth labelling measured that cost directly.
+- [x] **F-22 adversarial suite** — `f22_adversarial.py`, **120/120** across 18 cases derived from
+      real frames, each proving raw observation → F-22 → `conf_emit` → the **real**
+      `build_body_landmarks` output the consumer receives. No threshold was changed to pass anything.
+- [x] **F-22 threshold analysis recomputed in real degrees** — the old §15 table was a mixed-unit
+      pixel space. Real vs synthetic evidence reported strictly separately; no combined accuracy
+      figure. **0 absolute-angle false rejections on legitimate single-person footage** (435
+      frames; 1 single-frame rate-based hold, recovered next frame).
+- [x] **F-22 real rejections classified, not counted** — all 12 absolute-angle rejections checked
+      against the raw image; cause is multi-person interference (cross-person keypoint fusion /
+      occlusion collapse), not single-person noise. Finding: **nothing before F-22 constrains the
+      limbs to belong to the same body as the hips.**
+- [x] **F-22 performance A/B** — closes §18's own gap: **20.1 µs/frame** (p95 20.2, max 59.8),
+      0.060 % of a 33.3 ms frame. End-to-end replay 37.10 → 36.91 fps, reported with its limitation.
+- [x] **F-20B empty-room defect found + fixed (ADR-055)** — `frames=` heartbeat was gated behind a
+      successful pose emission, so an empty room read as a stuck startup and the supervisor killed a
+      healthy sidecar every 45 s → `FAILED_PERMANENT` in ~4 min. Suite **4/6 → 6/6 with no person
+      present**.
+- [x] **F-20B deployment hardening 35/35** — `f20b_deployment_verify.py`: `run_supervisor.bat`,
+      logon-registration procedure (verified statically, deliberately not executed), duplicate guard,
+      post-reboot diagnostics freshness, no duplicate sidecars, real session ids.
+- [x] **Regression** — Python 176/176 across 5 suites; Unity EditMode **170/170** via a reflection
+      runner in the live Editor (the "124-test" figure was an undercount: 124 `[Test]` + 46
+      `[TestCase]` = 170).
+- [x] **Offline replay soak** — `f2x_replay_soak.py`, labelled `OFFLINE REPLAY SOAK`, explicitly not
+      equivalent to a hardware soak. 16 min / 19 clip cycles / **29,595 frames / 0 exceptions**;
+      30.83 fps sustained; **memory flat** (+3.5 MB half-mean over the run); 76 `TEMP_LOST` episodes
+      all reacquired; **2,581 validator holds, 2,581 recoveries, 0 unrecovered**. Note: the first run
+      reported a fake-clean "0.0 MB / +0.0000 MB growth" — an undeclared `ctypes` Win32 call failing
+      silently; fixed and re-run before quoting. Detail in F-22 §28b.
+
+---
+
 ## ⏳ F-21 — Single-Person Lock / Target Ownership (2026-09-14) — CONDITIONAL
 
 See [`F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md`](F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md)
@@ -13,13 +185,17 @@ entering frame cannot silently steal tracking (the F-19 failure).
 - [x] State machine + M15 identity-gating integration, `target_events.jsonl` evidence, on-screen HUD
       (state/owner/timers/switch count) on the `--show` preview — `target_ownership.py` +
       `wholebody_udp_sender.py`.
-- [x] Unit tests **36/36 PASS** (`test_target_ownership.py`) — covers 12/15 of the brief's adversarial
-      cases directly (crossing, rapid A/B/A, flicker-never-locks, scale mismatch, boundary timing).
+- [x] Unit tests **46/46 PASS** (`test_target_ownership.py`, was 36/36 — two ADR-054 regression
+      guards added 2026-09-14) — covers 12/15 of the brief's adversarial cases directly (crossing,
+      rapid A/B/A, flicker-never-locks, scale mismatch, boundary timing).
 - [x] Real-hardware: clean acquire/lock/emit; **5/5 PASS** sidecar-restart-with-person-present (fresh
       epoch, new SID, zero stale-identity carry-over — `f21_restart_interaction_test.py`);
       `--no-ownership` bit-identical regression check.
-- [x] Single-person video regression (`f21_video_replay.py`, 775 frames / ~13s energetic real dance
-      motion): **PASS**, zero `TARGET_SWITCH`, zero `TARGET_RELEASED`.
+- [~] ~~Single-person video regression (`f21_video_replay.py`, 775 frames / ~13s energetic real dance
+      motion): **PASS**, zero `TARGET_SWITCH`, zero `TARGET_RELEASED`.~~ **WITHDRAWN 2026-09-14** —
+      that clip (`123.webm`) is not single-person; the flat `target_id` across its real person change
+      is a silent hand-off, not stability (ADR-056). The single-person claim is now carried by
+      `video.webm` (435 frames) and `456.webm`.
 - [ ] **Live two-person matrix (blocks PASS)** — two attempts both failed for reasons unrelated to
       correctness: attempt 1 hit a test-script UX defect (instructions unreadable while coordinating
       two people — fixed with an on-screen cue banner); attempt 2 hit a real OAK-D device crash.
@@ -42,17 +218,21 @@ evidence (left elbow ~177.5°, right elbow ~179.6° rendered, hands-near-face bl
       logging (`oak_v4_evidence/f22/`), `--pose-validation`/`--no-pose-validation` (default ON).
 - [x] Unit tests **22/22 PASS** (`test_pose_validation.py`) — includes F-19's own measured numbers
       fed directly as fixtures (168° → rejected; knee 176° legitimate-walking max → NOT rejected).
-- [x] Offline replay (`f22_video_replay.py`, composes F-21 + F-22 in production order) against
-      `video.webm`, 431 owned frames: **0 false absolute-angle rejections**; elbow max
-      (155.3°/158.8°) sat within 1–5° of REJECT (160°) without crossing it; 3 momentary rate-based
-      holds (0.7%), each recovered within one frame.
+- [~] Offline replay (`f22_video_replay.py`, composes F-21 + F-22 in production order) against
+      `video.webm`, 431 owned frames: **0 false absolute-angle rejections**; ~~elbow max
+      (155.3°/158.8°) sat within 1–5° of REJECT (160°)~~; 3 momentary rate-based holds (0.7%), each
+      recovered within one frame. **The angle figures are SUPERSEDED (2026-09-14)** — that harness
+      computes angles in a mixed-unit pixel space. Recomputed in real degrees the same clip's elbow
+      maxima are 150.1°/143.5°, i.e. **9.9°/16.5° of headroom**. See `f22_threshold_analysis.py`.
 - [ ] **Live L2 session — hands near face (blocks PASS)** — no human was available this session
       (explicit instruction). This is the one test that reproduces F-19's own original defect
       against this validator's raw-geometry threshold. L1/L3–L7 also open, L2 is the named priority.
 - [ ] **Follow-up (not blocking):** no CLI threshold-override flags added this pass (unlike
       F-20A/F-20B/F-21's `--*` pattern) — thresholds live only in `pose_validation.py`'s constants.
-- [ ] **Follow-up (not blocking):** performance impact (fps/latency) not independently re-measured
-      with F-22 enabled — expected negligible (closed-form trig only) but not timed this session.
+- [x] ~~**Follow-up (not blocking):** performance impact (fps/latency) not independently re-measured~~
+      **DONE 2026-09-14** (`f22_perf_ab.py`): **20.1 µs/frame** added cost (p95 20.2, max 59.8) =
+      0.060 % of a 33.3 ms frame; end-to-end replay 37.10 → 36.91 fps, reported with the caveat that
+      RTMW3D dominates that second measurement and it does not carry the claim.
 
 ---
 
@@ -353,3 +533,125 @@ _None_
 ## Completed
 
 - [x] Author agent-oriented SDS docs `00`–`25` + handoff set (recreated 2026-08-05)
+
+---
+
+## 2026-09-15 (evening) — F-21 instrument rebuild + F-23 video-driven validation
+
+### DONE
+- [x] F-21 live instrument rebuilt; **10 defects fixed** before spending human time (F-21 report §32)
+- [x] Cue legibility measured and fixed: 13 px / 4.1–6.2 arcmin → 60 px / 20.5–25.7 arcmin (ADR-058)
+- [x] `f21_walkin_protocol.py` + `f21_walkin_score.py` + test (**22/22**); adds the two cases that
+      are the REAL false-hold rate (`OWNER_OCCLUDED`, `OWNER_TURN`)
+- [x] `cue.json` write race fixed in BOTH protocols — it was killing runs mid-session
+- [x] F-23: avatar driven from real video through the production chain, **r = +0.714**
+- [x] Pelvic roll re-enabled (ADR-059) — 25.1° p2p was being discarded by a config value
+- [x] Slerp A/B measured — **negative result**, damping is not the lever (ADR-060)
+- [x] Wire probe + trunk-jitter harness built and self-tested
+
+### BLOCKING — needs people
+- [ ] **F-21 LIVE TWO-PERSON SESSION.** Instrument ready, never run. Needs TWO people, ~30 min.
+      Clear chair-like objects from the capture volume first (§32.4). Tape a cross at 0.90 m.
+- [ ] **Trunk-yaw noise floor.** ~30 s of ONE person standing still at 0.90 m. Last thing gating
+      the deadzone decision. The 2026-09-15 attempt is INVALID — no subject was in frame.
+- [ ] F-22 L2 hands-near-face live.
+
+### BLOCKING — needs the editor closed
+- [ ] Re-run Unity EditMode **170/170** after `kalidokitBodyTorsoRoll: 0 → 1`. The VALUE is now
+      validated on live data (F-27 section 8.5: trunk error more than halves), but the EditMode suite
+      has still not been re-run against it.
+
+### DECISION, not research
+- [ ] Sub-pixel 1/8: torso-yaw quantum **6.80° → 0.85°** at 0.90 m, +2 ms, no FPS cost. This is the
+      lever that would let the 8° deadzone come down honestly.
+
+---
+
+## 2026-09-16 — F-26 avatar-vs-skeleton report + the POSE FIDELITY metric
+
+### DONE
+- [x] F-26 observation report from `LatestScreenReording.mp4` — full avatar/skeleton comparison,
+      failure mechanisms, what prior data does and does not support
+      (`docs/F26_AVATAR_VS_DEBUG_SKELETON_2026-09-16.md`)
+- [x] **POSE FIDELITY metric built** — the measurement that had never existed. `BoneFidelity`,
+      `KalidokitControlRigDriver.SampleFidelity()` (9 bones, read-only, allocation-free),
+      `AvatarFidelityRecorder` (samples on `Application.onBeforeRender`, self-terminating),
+      `f26_fidelity_analyze.py` (**22/22 self-test**, refuses to emit a combined score)
+- [x] **Validated against live data**, two clips through the production wire (ADR-062, F-26 §11).
+      Arms follow to 0.4–1.1° median; legs OVER-DRIVEN 1.4–2.3×; trunk median **16.7°**, follow 0.27
+- [x] Cross-checked in world space against `PoseDebugSkeleton` — the aimed arms cannot validate the
+      metric's coordinate mapping, so an independent path did. Two paths agree on the trunk to 0.4°
+- [x] Trunk failure LOCATED, not just measured: lateral lean is `* torsoRoll` with
+      `kalidokitBodyTorsoRoll = 0`; sagittal lean is high-passed by an 8 s adaptive baseline. The
+      second is the mechanism behind "the avatar cannot sit" (F-26 §4.2)
+- [x] Instrument caught a false finding on itself: forearm maxima of 121.6°/155.4° were entirely the
+      release-to-rest tail. Stale-frame drop rule added, with tests
+
+### NEXT — decision, not research
+- [ ] **Choose a retarget direction** from F-26 §8 / §11.8. The metric is the before-number; option C
+      ("fix the specific failures") now has two named, located causes rather than symptoms.
+      **Nothing should change in the retarget until the direction is chosen** — that is what spending
+      the measurement on an unvalidated fix would waste.
+- [ ] Decide whether SEATED use is in product scope (F-26 §9.4). If it is, the trunk high-pass is the
+      top defect. If not, it is not a defect at all. Nobody has stated which.
+
+### NEXT — cheap, and unblocks a real claim
+- [ ] Run the fidelity metric on an **OAK-D stereo session**. Both runs so far used the video path,
+      which has no stereo and synthesises every joint's depth — it exercises the RETARGET, not the
+      sensor (F-26 §11.7.3).
+- [ ] **ENDPOINT error metric.** The direction metric is blind to it by construction: two poses can
+      agree on every bone direction and still put the hands elsewhere, because the avatar's bone
+      lengths are its own. Option D (bone-length normalisation) cannot be judged without it.
+
+### STILL BLOCKING — unchanged, needs people
+- [ ] F-21 live two-person session; trunk-yaw noise floor; F-22 L2 hands-near-face live.
+- [ ] Re-run Unity EditMode **170/170** with the editor closed.
+
+---
+
+## 2026-09-16 (later) — F-27 humanized skeleton + F-28 skeleton-as-the-product
+
+### DONE — F-27 HUMANIZED SKELETON (ADR-063)
+- [x] New layer between the existing filtering and the existing retarget. Tracking output is treated
+      as a SUGGESTION: fixed bone lengths, anatomical joint limits, teleport and origin-collapse
+      rejection, per-joint hold in the PARENT's frame, 0.15 s re-acquire blend
+- [x] **Nothing existing was rewritten** — tracking, filtering, P0-1, P1-1/2/3, Arm V2 and Torso
+      V5/V6 are untouched, and confidence passes through so P0-1 still gates exactly as before
+- [x] Test mode: `HumanizedSkeletonSelfTest` with synthetic bodies + injected faults (dropped joint,
+      confident collapse to origin, NaN, teleport, flicker, impossible elbow fold, knee bending
+      forwards, 150 deg torso twist). **32/32**, headless, no Editor or avatar needed
+- [x] Before/after recorded from the SAME frames in ONE pass; analyser **18/18** self-test
+- [x] **Two defects found by the numbers after the suite was green**: the body-forward axis was
+      ambiguous (knee fix fired on 84 % of poses -> 1.8 %), and the velocity clamp was measuring its
+      own output (80 % -> 0.4 %). Median jump went from +269 % WORSE to -3 %
+- [x] Measured: bone-length deviation **-68 % median / -79 % worst**; **99.6 % of poses touched by no
+      stateful stage**, so no added latency
+
+### DONE — F-28 SKELETON SHOW
+- [x] `Scenes/SkeletonShow.unity` — three live-switchable modes (1/2/3, TAB, on-screen buttons),
+      driven by the SAME production tracking and the F-27 layer, retarget skipped entirely
+- [x] Mode 1 glow skeleton, mode 2 energy body (no mesh, no skinning), mode 3 motion effects
+- [x] `H` toggles the humanized layer live — the fastest A/B of F-27 there is
+- [x] 114-118 fps in the editor; mode switching verified to leave exactly one mode root
+
+### NEXT — cheap and it closes a real question
+- [x] **DONE — F-26's fidelity metric run with the layer ON, OFF, and ON-with-bone-lengths-OFF**
+      (F-27 section 8, ADR-063 addendum). 4000+ live frames per arm, reference = the RAW pose in every
+      arm. Result: the protections cost the avatar NOTHING (9/9 unchanged with bone lengths off); the
+      whole ~1 deg arm cost is bone-length normalisation; F-27 does NOT fix the leg over-drive.
+      On CLEAN tracking the layer is neutral-to-slightly-negative for avatar fidelity.
+- [x] **DONE — `kalidokitBodyTorsoRoll: 0 -> 1` validated**, incidentally: F-26 section 11.5's
+      "the trunk lean channel is dead" was measured against a RUNTIME 0 while the scene ships 1.
+      Re-measured: trunk median 16.7 -> 7.3 deg, follow 0.27 -> 1.29. F-26 section 11.5 is corrected
+      in place.
+- [ ] **Run F-27 on an OAK-D stereo session.** Both recordings used the video path, which has no
+      stereo — so the rejection, hold and recovery stages had NOTHING to do (0 holds, 0 NaN, 0
+      collapses in either stream). They are proven by fault injection, not by live data.
+- [ ] Attribute the **p99 jump regression (+19 %)** to a specific bone before deciding if it matters.
+
+### NEXT — product direction, not research
+- [ ] **Decide between the avatar and the skeleton.** F-28 exists because F-26 located every avatar
+      failure in the retarget; mode 2 sidesteps that entire class of error by building the visual
+      from joint positions. That is a product choice, not an engineering one.
+- [ ] Show F-28 to somebody. Whether it reads as intentional rather than as a debug view is a
+      judgement about an audience, and no audience has seen it.

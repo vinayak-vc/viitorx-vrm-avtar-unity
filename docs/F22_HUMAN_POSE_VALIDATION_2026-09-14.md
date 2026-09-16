@@ -2,16 +2,25 @@
 
 ```text
 VERDICT: CONDITIONAL
+STATUS:  OFFLINE ENGINEERING COMPLETE - LIVE HANDS-NEAR-FACE ACCEPTANCE PENDING
 ```
 
-The validator is implemented, unit-proven (22/22), and produces real, honest evidence from an offline
-replay against `video.webm`: on ~14.4 s of energetic real dance motion, elbow bend angles reached
-within 1-5° of the REJECT threshold without ever exceeding it (max 155.3°/158.8° vs. a 160° reject
-line), and exactly 3 of 431 owned frames were momentarily suppressed — each recovering on the very
-next frame. **No live human was available this session** (stated explicitly by the user) — this is
-why the verdict is CONDITIONAL, not PASS: the brief's own §29 rules require replay *and* live evidence
-to agree, and specifically a live L2 (hands-near-face) reproduction of F-19's own defect, which has
-not yet happened against this validator.
+> **2026-09-14 offline completion pass — §23–§29 supersede parts of what follows.**
+> The headline change: **§15's distribution table was computed in a mixed-unit pixel space and its
+> "degrees" were not real degrees.** It has been recomputed with a proper metric lift (§25) and the
+> old table is marked superseded rather than deleted. The second change is better news — the
+> absolute-angle REJECT path, which §20.3 correctly listed as never having been exercised against a
+> positive case outside unit tests, **has now fired on real footage**, and every instance has been
+> classified rather than counted (§26).
+
+The validator is implemented, unit-proven (22/22 plus 120/120 adversarial, §24), and produces real,
+honest evidence from offline replay against three real clips: on legitimate single-person motion it
+produced **zero absolute-angle rejections** with 9.9°/16.5° of headroom to the 160° REJECT line, and
+exactly one single-frame rate-based hold that recovered on the very next frame (§25 — these figures
+supersede the mixed-unit ones originally quoted here). **No live human was available this session**
+(stated explicitly by the user) — this is why the verdict is CONDITIONAL, not PASS: the brief's own
+§29 rules require replay *and* live evidence to agree, and specifically a live L2 (hands-near-face)
+reproduction of F-19's own defect, which has not yet happened against this validator.
 
 ---
 
@@ -180,7 +189,15 @@ hands-near-face defect — that remains a live-test-only gap (§20).
 produced an absolute-angle violation, so the baseline/F-22-enabled comparison the brief's §23 asks for
 is, on this clip, "0 vs. 3," and the 3 are rate-based, not absolute-angle-based (§16).
 
-## 15. F-22 results
+## 15. F-22 results — ⚠️ SUPERSEDED BY §25, kept for traceability
+
+> **These numbers are not in real degrees.** `f22_video_replay.py` places each keypoint at
+> `(image_u, image_v, zrel * 200)` — two pixel axes and a third in arbitrarily-scaled metres. An
+> angle computed in a mixed-unit space is not an angle. The table below is internally consistent but
+> not comparable to the shipped thresholds, which are stated in real degrees. §25 recomputes it with
+> a proper pinhole metric lift; **use §25 for any threshold reasoning.** This table stays because it
+> was cited in the original verdict block, and deleting it would hide a correction rather than make
+> one.
 
 | chain | n | bend p50 | bend p95 | bend max | rate p50 (°/s) | rate p95 (°/s) | rate max (°/s) | suppressed |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -189,10 +206,11 @@ is, on this clip, "0 vs. 3," and the 3 are rate-based, not absolute-angle-based 
 | left_knee | 431 | 17.0° | 38.7° | 46.8° | 66 | 296 | 476 | 0 |
 | right_knee | 431 | 18.7° | 35.6° | 47.9° | 74 | 286 | 426 | 0 |
 
-Elbow max bend (155.3°/158.8°) sits within 1-5° of REJECT (160°) on legitimate footage — the
-threshold is exercised, not slack, without ever being crossed on the absolute check. Knee bends stay
-well inside NORMAL (max 47.9° vs. REJECT 178°) — consistent with F-19's own "knees are clean" finding
-and this task's brief's own instruction to start conservative on knees.
+The original reading — "elbow max 155.3°/158.8° sits within 1-5° of the 160° REJECT line, so the
+threshold is exercised but never crossed" — does **not** survive §25. Recomputed in real degrees the
+same clip's elbow maxima are 150.1°/143.5°, i.e. **9.9°/16.5° of headroom**, and it contains no
+absolute violation anywhere. The qualitative half does survive, and more strongly: knees are clean
+and nowhere near their threshold (real max 49.0° against a 178° REJECT).
 
 ## 16. False-positive results
 
@@ -267,10 +285,340 @@ which the brief's own §29 rules require before PASS.
 
 ---
 
+## 23. Offline completion pass (2026-09-14) — scope
+
+No physical person was available (explicit user instruction). Everything here is deterministic,
+replay, or measurement work, aimed at removing every remaining *offline* unknown so the next live
+session is acceptance testing rather than development.
+
+```text
+new (python-sidecar~/):
+  f22_adversarial.py           18 adversarial cases derived from REAL frames, driven through the
+                               PRODUCTION insertion point and the REAL downstream builder
+  f22_threshold_analysis.py    real-video distributions in real degrees, across all three clips,
+                               reported strictly separately from synthetic evidence
+  f22_inspect_rejections.py    classifies every absolute-angle rejection found on real footage, and
+                               writes annotated frames so the classification is checkable
+  f22_perf_ab.py               validation OFF vs ON on identical input - closes SS18's own gap
+```
+
+## 24. Adversarial perturbation suite — 120/120 PASS across 18 cases
+
+The gap this closes: `test_pose_validation.py` exercises the validator in **isolation** on synthetic
+limbs, and `f22_video_replay.py` exercises real footage that never violates a threshold. Neither
+drives the thing that matters — the **production insertion point** and **what the consumer actually
+receives** when a chain is suppressed.
+
+Every case proves four stages as one unit, failing if any disagrees:
+
+```text
+1 RAW OBSERVATION  the bend angle actually present in the perturbed skeleton, measured back out of
+                   the geometry - never assumed from the value that was requested
+2 F-22             pose_validation.PoseValidator, the SAME class the sender constructs, unmodified
+3 conf_emit        wholebody_udp_sender.py L880-884 reproduced exactly:
+                     if _state != PV.VALID: conf_emit[_j] = 0.0
+4 DOWNSTREAM       wholebody_udp_sender.build_body_landmarks - the REAL function, imported from the
+                   real module - asserting the consumer receives lm[joint] == [0,0,0,0], src == 0,
+                   which is what makes Unity's P0 LimbGate hold
+```
+
+Base geometry is real: frames from the actual clip through the actual RTMW3D model, lifted to metric
+camera space by pinhole backprojection with per-joint depth from the model's own root-relative z
+about a nominal 2.0 m hip plane. Perturbation rotates the distal joint about the hinge **in the
+limb's own existing bend plane, preserving that frame's real segment length** — only the angle
+changes. The one synthetic element is the nominal hip depth standing in for a stereo measurement a
+plain video cannot provide, and it is stated rather than buried.
+
+| case | raw bend | F-22 verdict | conf_emit | consumer vis / src |
+|---|--:|---|--:|---|
+| elbow @150° | 150.0 | VALID | 0.843 | 0.843 / 1 |
+| elbow @155° | 155.0 | VALID | 0.843 | 0.843 / 1 |
+| elbow @160° | 160.0 | VALID (boundary is inclusive) | 0.843 | 0.843 / 1 |
+| elbow @165° | 165.0 | HELD / `ANGLE_LIMIT` | 0.000 | 0.000 / 0 |
+| elbow @170° | 170.0 | HELD / `ANGLE_LIMIT` | 0.000 | 0.000 / 0 |
+| elbow @175° | 175.0 | HELD / `ANGLE_LIMIT` | 0.000 | 0.000 / 0 |
+| elbow @179° | 179.0 | HELD / `ANGLE_LIMIT` | 0.000 | 0.000 / 0 |
+| knee @176° | 176.0 | VALID **by design** | 0.833 | 0.833 / 1 |
+| knee @178° | 178.0 | VALID **by design** | 0.833 | 0.833 / 1 |
+| knee @179° | 179.0 | HELD / `ANGLE_LIMIT` | 0.000 | 0.000 / 0 |
+| single-frame spike | 175.0 | HELD (never escalated) | 0.000 | 0.000 / 0 |
+| multi-frame violation | 175.0 | HELD ×8 → REJECTED | 0.000 | 0.000 / 0 |
+| angular-rate spike | 155.0 | HELD / `ANGLE_RATE_IMPOSSIBLE` | 0.000 | 0.000 / 0 |
+| missing elbow | n/a | HELD / `TRACK_LOST` | 0.000 | 0.000 / 0 |
+| missing wrist | n/a | HELD / `TRACK_LOST` | 0.000 | 0.000 / 0 |
+| invalid confidence | n/a | HELD / `INVALID_CONFIDENCE` | 0.000 | 0.000 / 0 |
+| degenerate segment | n/a | HELD / `NONFINITE` | 0.000 | 0.000 / 0 |
+| non-finite coordinate | n/a | HELD / `NONFINITE` | 0.000 | 0.000 / 0 |
+
+**No threshold was changed to make anything pass.** The five VALID rows are asserted as VALID because
+that is what the shipped thresholds say: 150/155/160 are at or under the elbow REJECT line, and knee
+176°/178° are deliberately accepted because F-19 measured 176° as a *legitimate* walking maximum —
+rejecting them would be a false positive, not a catch.
+
+Two behaviours worth recording because neither is obvious from the code:
+
+- **`ANGLE_LIMIT` takes precedence over the rate check** (the absolute test short-circuits first), so
+  any frame past REJECT reports `ANGLE_LIMIT` regardless of how fast it got there. The rate case is
+  therefore only meaningful *below* REJECT, which is how it is constructed here: 20° → 155° in one
+  33 ms frame = 4050 °/s, still under the 160° line, caught purely on rate.
+- **Recovery from a rate rejection is bounded but not single-frame.** `last_valid_t` advances only on
+  an accepted frame, so while a joint is held the measured rate decays as Δ/dt with dt growing one
+  frame at a time; it self-heals in `ceil(Δ / rate_limit / DT)` frames with no special-case logic.
+  Measured: **2 frames (67 ms)** for a 135° displacement, against an arithmetic bound of 3. Recovery
+  from every other rejection type is immediate on the first good frame, as §10 claims.
+
+## 25. Threshold analysis — REAL VIDEO and SYNTHETIC ADVERSARIAL, kept apart
+
+The two populations answer different questions and are never averaged. A combined "accuracy" figure
+is **not** computed, on purpose:
+
+- **REAL VIDEO** is entirely legitimate motion, so every rejection is a candidate *false* rejection.
+  It can measure false-positive rate and band occupancy. It cannot measure true-positive rate.
+- **SYNTHETIC ADVERSARIAL** has a known correct answer by construction. It measures true-positive
+  behaviour. It cannot measure false-positive rate.
+
+### REAL VIDEO EVIDENCE — 3 clips, 1,347 owned frames, 4,997 chain evaluations, real degrees
+
+| clip | chain | p50 | p95 | max | headroom to REJECT | warn-band % | reject-band % | rate max °/s |
+|---|---|--:|--:|--:|--:|--:|--:|--:|
+| video.webm (1 person) | left_elbow | 55.8 | 140.0 | 150.1 | **+9.9** | 0.232 | **0** | 1484 |
+| video.webm | right_elbow | 54.6 | 134.3 | 143.5 | **+16.5** | 0 | **0** | 2241 |
+| video.webm | left_knee | 21.0 | 40.6 | 49.0 | +129.0 | 0 | 0 | 490 |
+| video.webm | right_knee | 23.4 | 40.5 | 50.7 | +127.3 | 0 | 0 | 598 |
+| 123.webm (2 people) | left_elbow | 102.2 | 127.5 | 147.8 | +12.2 | 0 | 0 | 3052 |
+| 123.webm | right_elbow | 101.9 | 131.3 | **174.4** | **−14.4** | 0 | 0.385 | 3384 |
+| 123.webm | left_knee | 39.1 | 94.5 | 117.9 | +60.1 | 0 | 0 | 3620 |
+| 123.webm | right_knee | 36.3 | 91.2 | 136.7 | +41.3 | 0 | 0 | 5981 |
+| 456.webm (8 people) | left_elbow | 80.9 | 146.2 | **163.5** | **−3.5** | 2.373 | 1.017 | 2977 |
+| 456.webm | right_elbow | 80.5 | 147.1 | **171.3** | **−11.3** | 1.190 | 2.778 | 2726 |
+| 456.webm | left_knee | 31.2 | 60.7 | 102.8 | +75.2 | 0 | 0 | 1811 |
+| 456.webm | right_knee | 28.8 | 63.5 | 92.5 | +85.5 | 0 | 0 | 2559 |
+
+**The single most important row is the first clip.** `video.webm` is the only genuinely single-person
+footage available, and across 435 frames it produced **zero absolute-angle rejections** — with 9.9°
+and 16.5° of headroom on the elbows. Every absolute violation in the whole dataset came from
+multi-person footage.
+
+Total suppression is 459 of 4,997 chain evaluations (9.19 %), and that number needs decomposing
+because it flatters F-22's activity enormously:
+
+```text
+TRACK_LOST               391  (85.2%)  joints not measured at all - a pre-existing confidence-gate
+                                        condition F-22 merely reports. These joints were already
+                                        being dropped by build_body_landmarks' own conf threshold.
+ANGLE_RATE_IMPOSSIBLE     56  (12.2%)  F-22's own contribution
+ANGLE_LIMIT               12   (2.6%)  F-22's own contribution
+```
+
+F-22's *own* suppression on real footage is therefore **68 / 4,997 = 1.36 %**, not 9.19 %. Hold
+episodes: `video.webm` 1 episode of 1 frame (33 ms); `123.webm` 56 episodes, p50 2 frames, max 103
+frames (1.72 s); `456.webm` 76 episodes, p50 1 frame, max 13 frames (433 ms). The long holds are all
+`TRACK_LOST` runs in crowded frames, not angle judgements.
+
+### SYNTHETIC ADVERSARIAL EVIDENCE — 18 constructed cases, 120/120 assertions
+
+```text
+correctly SUPPRESSED : 13   ANGLE_LIMIT 7, NONFINITE 2, TRACK_LOST 2, INVALID_CONFIDENCE 1,
+                            ANGLE_RATE_IMPOSSIBLE 1
+correctly PASSED     :  5   elbow 150/155/160, knee 176/178 - accepted because the shipped
+                            thresholds say so, not because a threshold was moved
+```
+
+## 26. Every real-video rejection, classified — not counted
+
+§20.3 of this report correctly said the absolute-angle REJECT path "has not yet been exercised against
+a *positive* case outside of unit tests". It now has been, 12 times, and a bare count would have been
+worthless — so each one was classified with a measurement and checked against a picture.
+
+**The discriminator.** The offline lift takes depth from the model's `zrel`; production measures depth
+with real stereo. So an "impossible" 3D angle can arise two ways, and they separate cleanly: if the
+**2D image-plane** bend is also extreme, the forearm really is folded back against the upper arm in
+the raw picture, independent of any depth channel — production would see it too. If only the 3D angle
+is extreme, the fold exists purely along z and is evidence about this harness, not about the
+production signal.
+
+```text
+total absolute-angle rejections on real footage : 12
+  impossible in the 2D IMAGE too                :  9   genuine bad pose; would be caught with real
+                                                       stereo depth as well
+  extreme only after the offline z lift         :  3   attributable to the zrel proxy, not to
+                                                       production's measured depth
+```
+
+**All 12 were checked visually** (`oak_v4_evidence/f22/rejections/*.png`), and the cause is the same
+in every case and is not what was expected: **multi-person interference, not single-person tracking
+noise.**
+
+- `123.webm` f626-627, right elbow 174.5°/174.3° — the skeleton is a **chimera stitched across two
+  humans**: right shoulder on the man, right wrist on the woman, a "forearm" spanning the whole
+  frame. Not an elbow at all.
+- `456.webm` f293-352, right/left elbow 160-171° — the arm chain **collapses to a near-degenerate
+  segment** inside a tight cluster of eight dancers under heavy mutual occlusion.
+
+Two conclusions follow, and they pull in opposite directions, which is why both are stated:
+
+1. **F-22 has zero measured absolute-angle false rejections on legitimate single-person motion** —
+   the envelope it actually ships into. Precisely: `video.webm`, 435 frames, 0 absolute-angle
+   rejections and exactly **1 single-frame rate-based hold** (33 ms, recovered on the next frame).
+   Every absolute rejection in the whole dataset came from footage containing people this system
+   explicitly does not support tracking (roadmap: "UNSUPPORTED: any multi-user environment").
+2. **F-22 incidentally catches a class of F-21 failure that F-21 itself cannot see.** F-21's identity
+   signal is mid-hip position plus torso span; a partial cross-person keypoint fusion leaves the hip
+   exactly where it was and passes ownership untouched, while the *limbs* belong to someone else.
+   F-22 caught that as an impossible elbow. This is a genuine architectural finding: **nothing before
+   F-22 constrains the limbs to belong to the same body as the hips.** It is not a reason to widen
+   F-22's scope; it is a reason F-21's own §27 hand-off finding deserves the priority it now has.
+
+## 27. Performance A/B — closing §18's own gap
+
+§18 said performance "was not independently re-measured this session". It now has been, in two
+measurements rather than one, because a single end-to-end number would actively mislead here.
+
+**Measurement 1 — isolated insertion-point cost.** Real per-frame geometry extracted once and cached,
+so both arms replay byte-identical input with no model inference in the loop; only the sender's F-22
+block and its `build_body_landmarks` call are timed. 435 frames × 40 repeats = 17,400 iterations per
+arm.
+
+| | OFF | ON | delta |
+|---|--:|--:|--:|
+| mean | 26.5 µs | 46.6 µs | **+20.1 µs** |
+| p50 | 26.4 | 46.1 | +19.7 |
+| p95 | 27.1 | 49.0 | +21.9 |
+| p99 | 32.6 | 61.7 | +29.1 |
+| max | 64.7 | 124.0 | +59.3 |
+
+F-22 block alone: mean **18.3 µs**, p95 20.2 µs, max 59.8 µs — **0.060 % of a 33.3 ms production
+frame**.
+
+**Measurement 2 — end-to-end replay throughput**, with inference in the loop: 37.10 fps OFF vs
+36.91 fps ON (−0.51 %, 26.95 → 27.09 ms/frame). RTMW3D dominates this by three orders of magnitude,
+so "indistinguishable" here is **not** evidence F-22 is free — only that it is far below this
+measurement's noise floor. Measurement 1 carries the claim.
+
+**Frame age and capture-to-send latency are deliberately not reported.** Both are properties of the
+live OAK-D capture path — a real sensor timestamp and a real socket send — and neither exists in a
+video replay. What measurement 1 *does* honestly bound is how much F-22 can add to capture-to-send
+latency once that path is live: 20.1 µs.
+
+## 28. Regression status after this pass
+
+```text
+test_pose_validation.py             22/22 PASS
+f22_adversarial.py                 120/120 PASS   18 cases, full 4-stage chain each
+f22_video_replay.py                 PASS          unchanged, superseded for threshold reasoning
+f22_threshold_analysis.py           PASS          3 clips, 4,997 chain evaluations
+Unity EditMode (reflection runner)  170/170 PASS   no Runtime/ change, re-run anyway
+```
+
+## 28b. OFFLINE REPLAY SOAK — F-21 + F-22 together, 16 min, 29,595 frames
+
+```text
+LABEL: OFFLINE REPLAY SOAK
+```
+
+**Not equivalent to a hardware soak, and not to be quoted as one.** It exercises every pure-software
+stage — the M15 crop loop, F-21 ownership, F-22 validation, and the real `build_body_landmarks` —
+over tens of thousands of consecutive frames, which is enough to expose unbounded growth,
+accumulating state, leaked events and exception paths. It touches no OAK-D, no USB, no stereo depth
+and no real socket send, so every failure mode living in those is untouched and remains a live
+question. It loops all three clips rather than repeating one, so each cycle is a total change of
+person and scene and the ownership machine is driven through its lifecycle repeatedly instead of
+sitting in `LOCKED` for 16 minutes.
+
+| measure | result |
+|---|---|
+| duration / frames | 16.0 min, 19 clip cycles, **29,595 frames** |
+| throughput | **30.83 fps** sustained (34.2 fps first sample → 30.9 fps last; no decay after warm-up) |
+| **exceptions** | **0** |
+| owned frames (F-21 emitted) | 25,582 (86.4 %) |
+| resident memory | **flat** — first-half mean 875.2 MB vs second-half mean 878.6 MB, **+3.5 MB** over 29,595 frames |
+| state-machine oscillation | 76 `TEMP_LOST` episodes, **76 reacquired**, 0 releases |
+| ownership changes | 1 epoch for the whole run |
+| validator suppression | 8.60 % of chain evaluations — `TRACK_LOST` 7,474 / `ANGLE_RATE_IMPOSSIBLE` 1,101 / `ANGLE_LIMIT` 221 |
+| recovery behaviour | **2,581 hold episodes, 2,581 recoveries, 0 unrecovered holds at exit** |
+
+Three honest caveats on these numbers rather than a clean bill of health:
+
+1. **The memory figure needed a fix before it meant anything.** The first 16-minute run reported
+   "0.0 MB, +0.0000 MB growth" — a completely fabricated-looking clean result. The cause was
+   `ctypes.windll.psapi.GetProcessMemoryInfo` called without declared `argtypes`, which silently
+   narrows the 64-bit process HANDLE, returns 0 and leaves the struct zeroed **without raising**. The
+   soak was re-run with the call properly declared (and now raising rather than returning a plausible
+   zero). Working-set readings oscillate between ~818 and ~902 MB from Windows trimming, which is why
+   the half-means are quoted rather than an endpoint difference.
+2. **The soak did NOT exercise `TARGET_RELEASED`.** Clip transitions are a single-frame gap in the
+   simulated clock, so every person change resolved as `TEMP_LOST → REACQUIRED` well inside the 4 s
+   release timeout — hence one epoch across 19 cycles. Release/re-acquire is covered deterministically
+   in F-21 §24 instead; this run covers sustained operation, not the release path.
+3. **The 8.60 % suppression rate is dominated by `TRACK_LOST`** (86.9 % of it), which is the
+   confidence gate reporting unmeasured joints, not an F-22 angle judgement — the same decomposition
+   as §25. F-22's own contribution is 1,322 / 102,328 chain evaluations ≈ 1.3 %.
+
+## 29. Updated remaining risks
+
+Replacing §20 where it has moved:
+
+1. **No live L2 (hands-near-face) reproduction** — unchanged, and still the reason for CONDITIONAL.
+   §26 strengthens the case for running it: the absolute path is now known to fire correctly on real
+   bad geometry, but never yet on the *specific* geometry F-19 found.
+2. **The replay's z-proxy remains noisier than production** — now quantified rather than asserted:
+   3 of 12 absolute rejections (25 %) were attributable to it alone (§26). Expect a somewhat lower
+   absolute-rejection rate against real stereo depth.
+3. **Rate thresholds are still reasoned, not population-separated.** Real footage reaches
+   3,000-6,000 °/s in crowded/occluded frames against a 1,800 °/s reject line, but those frames are
+   corrupt anyway, so they do not constitute a clean "legitimate fast motion" population either.
+   Unchanged from §20.4.
+4. **CLI threshold overrides still not added** — unchanged from §20.5.
+5. **New:** F-22's elbow REJECT of 160° has only **9.9°** of headroom on legitimate single-person
+   footage (`video.webm` left elbow, §25). Not a defect — the threshold is meant to be close — but it
+   is a much tighter margin than the superseded §15 table implied, and it is the number live L2
+   testing should be watched against.
+
+## 30. F-21's path-consistency gate — measured apart from F-22 (2026-09-15)
+
+F-21 §30 fixed the silent wrong-person hand-off. That matters here for one reason only, and it is a
+reason to be careful rather than pleased: **cross-person keypoint contamination is often
+biomechanically impossible**, so an F-22 suppression can easily be mistaken for F-21 working, or
+vice versa. §26 of this report already found that nothing before F-22 constrains the limbs to belong
+to the same body as the hips.
+
+The combined replay therefore ran a fourth arm with the validator switched **off entirely**, so
+neither layer can be credited with the other's work:
+
+```text
+123.webm, whole chain     wrong-person frames   F-21 path rejections   F-22 joint suppressions
+F-21 gate ON,  F-22 ON                      2                     30                      110
+F-21 gate ON,  F-22 OFF                     2                     30                        0
+```
+
+**Every wrong-person frame eliminated was eliminated by F-21.** None of it is owed to F-22, and this
+report does not claim any of it.
+
+What F-22 *does* show is the mirror image, and it corroborates §26 rather than adding a new claim —
+the suppression RATE per emitted frame roughly halves as ownership gets stricter:
+
+```text
+ownership off     366 / 775 emitted = 47.2 %
+F-21 as shipped   144 / 500 emitted = 28.8 %
+F-21 + §30 gate   110 / 404 emitted = 27.2 %
+```
+
+F-22 is not getting better. It is being handed less contaminated input, because F-21 stopped emitting
+frames whose limbs and hips came from different humans. **F-22's own thresholds and behaviour are
+unchanged by that pass** — `test_pose_validation.py` 22/22 and `f22_adversarial.py` 120/120 were
+re-run against it, untouched.
+
+Full detail, including the ground-truth labelling method and its measured error rate, is in the F-21
+report §30.8b — kept there rather than duplicated here, so there is one copy of the numbers.
+
+---
+
 ```text
 F-22 VERDICT:
-CONDITIONAL - validator built, evidence-derived, unit-proven, zero-regression by construction; no
-live human/no L2 hands-near-face reproduction available this session.
+CONDITIONAL - OFFLINE ENGINEERING COMPLETE, LIVE HANDS-NEAR-FACE ACCEPTANCE PENDING. Validator built,
+evidence-derived, and now proven end to end through the production insertion point to what the
+consumer receives (120/120 across 18 adversarial cases); zero absolute-angle false rejections on
+legitimate single-person footage; cost measured at 20.1 us/frame. No live human / no L2 reproduction available.
 
 VALIDATION LAYER:
 python-sidecar~/pose_validation.py, inserted between P1-1 and the UDP build - pure, per-chain,

@@ -290,45 +290,153 @@ F-19  does portrait survive the REAL pipeline and produce a credible avatar?  <-
                                                                                 [ADR-049]
 ```
 
-### NEXT PATH — after F-22 (validator built + offline-proven; two live gaps open: F-21 2-person, F-22 L2)
+### NEXT PATH — after the 2026-09-15 OFFLINE HAND-OFF-FIX PASS. F-21's silent wrong-person
+### hand-off is FIXED (ADR-057) and verified offline; the live two-person session is now the only
+### thing standing between F-21 and a verdict.
+
+```text
+F-21 SS30 (2026-09-15)  the SS27 silent hand-off is closed.
+   WHAT CHANGED   reacquisition is PATH-consistent, not only position-consistent. A candidate
+                  tracked walking in from outside the margin is refused. ~20 lines in
+                  target_ownership.py, no new identity signal, no Runtime/ change.
+   RESULT         123.webm wrong-person frames 102 (ownership off) -> 40 (F-21 shipped) -> 0 for
+                  the hand-off segment. The hand-over becomes DECLARED (release + TARGET_SWITCH +
+                  new epoch) instead of invisible.
+   COST           96 frames (1.6 s) of the LEGITIMATE RETURNING OWNER withheld on that clip. A
+                  returning owner and an intruder walking in are the SAME observation stream from
+                  a hip position. The gate does not resolve the ambiguity - it resolves it towards
+                  ANNOUNCING the change. RELEASE_TIMEOUT_S is the knob that prices it, left at 4.0 s
+                  for the live session to arbitrate rather than tuned against one clip.
+   NO REGRESSION  video.webm and 456.webm are bit-identical with the gate on and off.
+   STILL OPEN     the rate at which a real room produces a refused returning owner. Only live data
+                  can say. That is what WALK_IN_OWNER / WALK_IN_IMPOSTOR are for.
+```
+
 
 ```text
 STATUS
    V5 torso / V6 wrap guard  OK
    portrait in production    LANDED behind --portrait (default off)
    torso MEASUREMENT         OK in portrait at 0.90 m -- ONLY WITH SUB-PIXEL 1/8 (open decision)
-   AVATAR QUALITY            PROVEN GOOD for the supported envelope (F-19)
-   TRANSPORT ROBUSTNESS      FIXED (F-20A): sessions, stale watchdog, neutral failsafe
-   UNATTENDED OPERATION      DONE (F-20B): sidecar_supervisor.py respawns the sidecar with
-                             backoff/crash-loop protection. Full SS17 matrix A-H PASS live.
-   TARGET OWNERSHIP          CONDITIONAL (F-21): target_ownership.py gates M15 by identity
-                             (position+scale continuity, no track id exists to use). 36/36 unit,
-                             5/5 real-hardware restart-with-person, 775-frame real video stress test
-                             -- ZERO wrong-person switches in every test that produced data. Live
-                             two-person matrix (crossing/hand-off/simultaneous-entry) UNVERIFIED --
-                             two live attempts both failed for reasons unrelated to correctness (a
-                             test-script UX defect, now fixed; a real OAK-D device crash).
-   POSE VALIDATION           CONDITIONAL (F-22): pose_validation.py gates elbow/knee bend angle +
-                             angular rate, reusing P1-1's conf_emit=0 contract (no Runtime/ change).
-                             22/22 unit (incl. F-19's own measured numbers as fixtures), offline
-                             replay on 431 real video frames: 0 false absolute-angle rejections,
-                             3 momentary rate-based holds (0.7%), each recovered in 1 frame. NO LIVE
-                             HUMAN available this session -- L2 (hands-near-face, F-19's own
-                             reproduction) is the one test that closes the loop, not yet run.
-   multi-user                MEASURED, AND IT FAILS pre-F-21 (F-19); F-21 fixes the mechanism but
-                             the fix itself is not yet live-verified with two people.
+   AVATAR QUALITY            STABLE, not VERIFIED-FAITHFUL. F-19 proved internal consistency
+                             (0.012 deg median yaw, zero snaps, bone lengths to 0.0011 %, zero
+                             swaps) which is NOT pose fidelity - all four are compatible with a
+                             smoothly, stably WRONG pose. F-26 (2026-09-16) shows exactly that
+                             on real footage: the debug skeleton follows a seated / arms-overhead
+                             subject and the VRM does not.
+                             THE RETARGET, NOT THE TRACKING, IS NOW THE DOMINANT ERROR SOURCE.
+   POSE FIDELITY             MEASURED at last (ADR-062, F-26 section 11). The metric that had never
+                             existed now exists, self-tests 22/22, and has been run against live
+                             data on two clips through the production wire. FIRST BASELINE, video
+                             path, subject at ~1.4 m:
+                               arms   0.4-1.1 deg median, follow 1.00  -- they track
+                               legs   9.2-15.1 deg median, follow 1.4-2.3x  -- OVER-DRIVEN
+                               trunk  16.7 deg median, follow 0.27, 100 % of frames over 10 deg
+                             CORRECTED 2026-09-16 (F-27 section 8.5): the trunk figures above were
+                             measured against a RUNTIME kalidokitBodyTorsoRoll = 0. The scene ships
+                             1. Re-measured on the identical clip from a freshly opened scene, the
+                             trunk reads median 7.3 deg with follow 1.29 -- less than half the error
+                             and a channel that FOLLOWS, not a dead one. The 8 s adaptive-baseline
+                             high-pass on SAGITTAL lean is unaffected and still removes a sustained
+                             lean, so "the avatar cannot sit" (F-26 4.2) stands. This also validates
+                             the tasks.md item "torsoRoll 0 -> 1 applied, NOT validated".
+                             Cross-checked in world space against PoseDebugSkeleton, which shares
+                             none of the driver's conditioning: the two paths agree to 0.4 deg.
+                             NOT a yaw result -- axial twist leaves the hip->shoulder line
+                             unchanged, so this metric is structurally blind to it. NOT a sensor
+                             result -- the video path has no stereo. NOTHING in the retarget was
+                             changed on the strength of it; it is the BEFORE number.
+   HUMANIZED SKELETON       IMPLEMENTED + MEASURED (F-27, ADR-063). A new layer between the
+                             existing filtering and the existing retarget treats tracking output as
+                             a SUGGESTION: fixed bone lengths, anatomical joint limits, teleport and
+                             origin-collapse rejection, per-joint hold in the PARENT's frame, and a
+                             0.15 s re-acquire blend. Nothing in the tracking, the filtering, P0-1,
+                             P1-1/2/3, Arm V2 or Torso V5/V6 changed, and confidence passes through
+                             untouched so P0-1 still sees an unobserved limb as unobserved.
+                             MEASURED, both streams from the SAME frames in ONE pass:
+                               bone-length deviation  median 0.0568 -> 0.0181 m  (-68 %)
+                                                      worst  0.2526 -> 0.0520 m  (-79 %)
+                               landmark jump          median 0.0123 -> 0.0119 m  (-3 %)
+                                                      p99    0.0708 -> 0.0844 m  (+19 % WORSE)
+                               poses no stateful stage touched          99.6 %
+                             Tests 32/32 synthetic + fault injection, 18/18 analyser self-test.
+                             TWO DEFECTS WERE FOUND BY THE NUMBERS after the suite was green: the
+                             body-forward axis was ambiguous and the knee fix fired on 84 % of poses
+                             (now 1.8 %, derived from the FEET), and the velocity clamp was measuring
+                             its own output and fired on 80 % of poses (now 0.4 %).
+                             NOT a sensor result -- video path only, no stereo.
+                             AVATAR A/B NOW DONE (F-27 section 8). F-26's fidelity metric run with
+                             the layer ON, OFF, and ON-with-bone-lengths-OFF, 4000+ live frames each,
+                             reference = the RAW tracked pose in every arm:
+                               ON vs OFF              0 bones better, 3 worse, 6 unchanged
+                               ON-no-bone-len vs OFF  0 better, 0 worse, 9 unchanged
+                             So the velocity clamp, the knee fix and the joint limits cost the avatar
+                             NOTHING, and the entire ~1 deg arm cost is bone-length normalisation --
+                             isolated by measurement, not inferred. That 1 deg IS the correction: ARM
+                             V2 aims the bone at its input (follow 1.00 in every arm), so measured
+                             against raw the error equals how far the layer moved the arm. Whether
+                             that move is an improvement CANNOT be decided here, because deciding it
+                             needs a reference better than the raw tracker and none exists.
+                             F-27 does NOT fix the leg over-drive: follow stays 1.26-2.06 in all
+                             three arms. That is the Kalidokit leg solve, not the input.
+                             VERDICT: on CLEAN tracking the layer is neutral-to-slightly-negative for
+                             avatar fidelity, and its value rests entirely on the fault cases this
+                             clip does not contain (0 holds, 0 NaN, 0 collapses in either stream).
+                             Do not claim it improves the avatar; do not switch it off on this either.
+   SKELETON AS THE PRODUCT   NEW (F-28). Scenes/SkeletonShow.unity: three live-switchable modes
+                             driven by the SAME production tracking and the F-27 layer, with the
+                             retarget skipped entirely. 1 GLOW SKELETON (lines, cores, trails,
+                             coloured by speed), 2 ENERGY BODY (a hologram skin built from the joint
+                             positions -- no mesh, no skinning, no retarget, so the body cannot be in
+                             a pose the tracker did not report), 3 MOTION EFFECTS (hand particles, a
+                             beam, floor ripples). 114-118 fps in the editor. Driven from video only;
+                             never seen with a person in front of an OAK-D.
+   TRANSPORT ROBUSTNESS      FIXED (F-20A): sessions, stale watchdog, neutral failsafe. Reconnect
+                             re-proven 2026-09-14 across the language boundary: three REAL producer
+                             session ids -> the REAL C# TrackingStreamHealth (FirstSession once,
+                             NewSession per restart, a dead producer's straggler -> OldSession).
+   UNATTENDED OPERATION      PASS (F-20B), and a PRODUCTION-BLOCKING DEFECT WAS FOUND AND FIXED on
+                             2026-09-14 (ADR-055): the sidecar's frames= heartbeat was printed only
+                             AFTER a successful pose emission, so an EMPTY ROOM printed none at all,
+                             the supervisor read that as a stuck startup, and it killed a healthy
+                             sidecar every 45 s -> FAILED_PERMANENT in ~4 min. The original SS17
+                             matrix passed only because a person stood at the camera throughout.
+                             Fixed in the sidecar (idle liveness line). Automated suite 4/6 -> 6/6
+                             WITH AN EMPTY ROOM. Deployment hardening 35/35.
+   TARGET OWNERSHIP          CONDITIONAL (F-21), OFFLINE ENGINEERING COMPLETE. 46/46 unit, 63/63
+                             across 17 deterministic multi-target scenarios, real 8-person footage
+                             at the production-equivalent margin: 0 switches, 0 releases, 0
+                             rejections. ONE REAL DEFECT FOUND AND FIXED (ADR-054: a returning owner
+                             past REACQUIRE_WINDOW was rejected 51x as "not_owner", released, and
+                             re-acquired with a spurious TARGET_SWITCH). ONE REAL SILENT
+                             WRONG-PERSON HAND-OFF REPRODUCED AND IMAGED on real two-person footage
+                             (ADR-056) -- documented, deliberately NOT fixed today.
+   POSE VALIDATION           CONDITIONAL (F-22), OFFLINE ENGINEERING COMPLETE. 22/22 unit + 120/120
+                             across 18 adversarial cases driven through the PRODUCTION insertion
+                             point to what the consumer actually receives. Threshold table
+                             RECOMPUTED in real degrees (the old one was a mixed-unit pixel space).
+                             0 absolute-angle false rejections on legitimate single-person footage
+                             (1 single-frame rate hold); all 12 real
+                             absolute rejections came from multi-person footage and were each
+                             classified against the raw image. Cost measured: 20.1 us/frame.
+   multi-user                MEASURED, AND IT STILL FAILS. F-21 closes the M15-crop mechanism but
+                             NOT the reacquire-path hand-off (ADR-056). Unchanged conclusion:
+                             UNSUPPORTED for a public installation.
 
 1. RUN A CLEAN LIVE F-21 TWO-PERSON SESSION.            <-- blocks "target ownership: PASS"
    f21_live_protocol.py now draws instructions ON the camera preview (fixed after attempt 1's UX
    failure). Launch through sidecar_supervisor.py if possible so a device crash (attempt 2's failure)
    recovers instead of ending the session -- needs --show/--cue-file passthrough added to the
-   supervisor first. Specifically target the named "well-timed handoff" limitation: have B stand
-   exactly where A was the instant A leaves. See docs/F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md.
+   supervisor first. PRIORITY TARGET, now that it has a known-positive offline counterpart to compare
+   against: the same-spot hand-off of ADR-056 -- have B walk into exactly where A was, within the
+   reacquire window, and check whether target_id changes. Offline it does not.
+   See docs/F21_SINGLE_PERSON_TARGET_OWNERSHIP_2026-09-14.md SS27.
 
 2. RUN A LIVE F-22 L2 SESSION (hands near face).        <-- blocks "pose validation: PASS"
    The one test that reproduces F-19's own original defect against pose_validation.py's raw-geometry
-   threshold. See docs/F22_HUMAN_POSE_VALIDATION_2026-09-14.md SS17/SS20. L1/L3-L7 also open but L2
-   is the specific, named priority since it is F-19's exact finding.
+   threshold. See docs/F22_HUMAN_POSE_VALIDATION_2026-09-14.md SS17/SS29. Watch it against the
+   measured headroom, not the superseded one: the 160 deg elbow REJECT has only 9.9 deg of margin
+   over legitimate single-person motion (SS25), not the 1-5 deg the old mixed-unit table implied.
 
 3. DECIDE WHETHER SUB-PIXEL 1/8 SHIPS.                  <-- every F-18/F-19 number depends on it
    Shipped config has a 6.80 deg torso-yaw quantum at 0.90 m vs 0.85 deg with sub-pixel.
@@ -363,6 +471,17 @@ DECIDED BY F-18/F-19/F-20A/F-20B/F-21, do not revisit without new evidence:
      rejected closeout found the length signal's natural variation overlaps real corruption on this
      hardware. Do not resurrect a bone-length-ratio rejection approach without new evidence the
      upstream measurement-quality problem P1-4's closeout named has actually been solved.
+   - A LIVENESS heartbeat must report that the CAMERA LOOP is alive, NOT that a subject is present
+     (ADR-055). Do not re-gate the sidecar's frames= line behind a successful pose emission, and do
+     not "fix" a future variant of this in the supervisor - the supervisor's readiness contract was
+     never the thing that was wrong.
+   - TARGET_SWITCH == 0 is NOT evidence of correct ownership (ADR-056). It counts DECLARED
+     hand-overs only; a silent wrong-person hand-off through the reacquire path is invisible to it,
+     and one has now been reproduced and imaged on real footage. Quote silent wrong-person EMISSION
+     (f21_adversarial.py's ground-truth-labelled metric) instead.
+   - 123.webm is a TWO-PERSON clip (entry ~f626, exit shortly after), not the single-person stress
+     video F-21 SS13 originally treated it as. video.webm is the only genuinely single-person clip
+     of the three. Do not re-cite 123.webm as single-person evidence.
 
 ALSO OPEN, UNAFFECTED BY F-18:
    6. +-90 deg still collapses (span 11-25 px, |dx| 22-63 mm). Portrait does not address it.
@@ -479,3 +598,66 @@ Palm robustness                   LATER
 Foot / ground locking             LATER
 IK                                OFF
 ```
+
+---
+
+## 2026-09-15 (evening) — F-21 instrument ready; F-23 answers the milestone question
+
+**The F-21 live two-person session DID NOT HAPPEN** — no second person was available. The
+instrument was rebuilt and verified instead, and a separate milestone question was answered.
+
+```text
+F-21 INSTRUMENT     READY, NEVER RUN. 10 defects fixed before spending human time (report S32).
+                    The worst: a cue.json write race that killed whole runs; a recorder that
+                    captured 70.2 s of an 86 s session; composites silently built from the WRONG
+                    WINDOW. Two NEW protocol cases - OWNER_OCCLUDED / OWNER_TURN - are the REAL
+                    false-hold rate and no offline clip has ever exercised them.
+F-23 RETARGET       PROVEN on real human footage: r = +0.714, 435/435 frames, parseErr = 0,
+                    through the production landmark builder and wire. Retarget, arm solver, legs,
+                    hands and pelvic roll all exercised.
+PELVIC ROLL         FIXED (ADR-059). 25.1 deg p2p of hip tilt was being discarded by
+                    kalidokitBodyTorsoRoll = 0. Image-plane derived, so it TRANSFERS to the OAK-D.
+DAMPING             NOT the avatar/skeleton gap (ADR-060, measured negative result). Removing slerp
+                    damping entirely buys 33 ms and is slightly worse. The gap is STRUCTURAL.
+```
+
+### The finding that should shape the next planning conversation
+
+*"If the avatar matches the video, the OAK-D will follow"* is **false for the channel that matters**,
+and this session demonstrated it rather than argued it:
+
+```text
+transfers to OAK-D      pelvic roll (image plane), arms, legs, hands, bone mapping, root policy
+does NOT transfer       pelvic yaw, torso twist, waist bend - all built from shoulder/hip dZ
+```
+
+The dancer's real pelvic twist is **std 7.4 deg**. The OAK-D's torso-yaw REST jitter is **5.4-7.6
+deg**. On the depth channel signal and noise are the same size, and the 8 deg deadzone that exists
+to suppress the noise therefore zeroes **76.6 %** of the real motion. Even with perfect, noise-free
+MONOCULAR depth, hip yaw was either unstable enough to swing the avatar into profile or - once
+smoothed enough to be stable - below the gate. The hip line is ~0.21 m wide, so any depth error
+becomes a large angle. **That is geometry, not tuning.**
+
+**The lever is sub-pixel 1/8** (torso-yaw quantum 6.80 deg -> 0.85 deg at 0.90 m, +2 ms, no FPS
+cost). Lower the noise floor and the deadzone can come down honestly. It is a decision, not research.
+
+### NEXT, in order
+
+```text
+1. F-21 LIVE TWO-PERSON SESSION          <- blocks "target ownership: PASS". Instrument is ready.
+                                            Needs TWO people, ~30 min. CLEAR CHAIRS FIRST: the
+                                            tracker was seen locking an empty office chair at
+                                            conf=0.38 vs a 0.30 floor, which voids a rep silently.
+2. TRUNK-YAW NOISE FLOOR                 <- blocks the deadzone decision. ~30 s, ONE person, still,
+                                            at 0.90 m. The 2026-09-15 attempt is INVALID (no
+                                            subject was in frame) and its numbers are discarded.
+3. RE-RUN UNITY EDITMODE 170/170         <- torsoRoll 0->1 is applied but NOT validated. Needs the
+                                            editor CLOSED.
+4. F-22 L2 hands-near-face live          <- blocks "pose validation: PASS"
+5. SUB-PIXEL 1/8 DECISION                <- every F-18/F-19 number depends on it, and it is what
+                                            unblocks item 2's follow-up.
+```
+
+Unchanged and not to be re-litigated: operating distance 0.90 m portrait; single user only;
+multi-user UNSUPPORTED; reliable +/-90 deg torso not achievable with this sensor; do not procure
+wider-baseline hardware (F-17 - the LENS is the lever).

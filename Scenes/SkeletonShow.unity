@@ -119,7 +119,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &375600626
+--- !u!1 &145970748
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -127,100 +127,135 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 375600628}
-  - component: {fileID: 375600627}
+  - component: {fileID: 145970751}
+  - component: {fileID: 145970750}
+  - component: {fileID: 145970749}
   m_Layer: 0
-  m_Name: AppBootstrap
-  m_TagString: Untagged
+  m_Name: Main Camera
+  m_TagString: MainCamera
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &375600627
-MonoBehaviour:
+--- !u!81 &145970749
+AudioListener:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 375600626}
+  m_GameObject: {fileID: 145970748}
   m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 92577e6976ef96f47a8eb546efa0f9c5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: VirtualMirror.App::VirtualMirror.App.AppBootstrap
-  mirrorSceneName: Mirror
-  avatarRootName: AvatarRoot
-  loadMirrorSceneOnStart: 1
-  settingsSaveDebounceSeconds: 0.4
-  mirrorLogToConsole: 1
-  maxAvatarFileBytes: 268435456
-  useOakUdpTracking: 1
-  oakUdpPort: 8899
-  useVideoSource: 0
-  useMediaPipeTracking: 1
-  useKalidokitBody: 1
-  kalidokitBodyFlipQuat: 2
-  kalidokitBodyEulerSigns: {x: 1, y: 1, z: 1}
-  kalidokitBodyLerp: 0.5
-  kalidokitBodyMirror: 0
-  kalidokitBodyTorsoRoll: 1
-  kalidokitSpineBendScale: 1
-  kalidokitSpineBendBaselineTau: 8
-  kalidokitTorsoYawScale: 1
-  kalidokitBodyLegs: 1
-  kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
-  kalidokitFingerWeight: 1
-  poseInterpolationDelayMs: 40
-  kalidokitAimArms: 1
-  kalidokitDirectionTrace: 0
-  kalidokitDirectionTraceEveryFrames: 60
-  limbConfidenceThreshold: 0.3
-  poseFlipX: 0
-  poseFlipY: 1
-  poseFlipZ: 0
-  useFaceTracking: 1
-  useHandTracking: 1
-  wristRotationWeight: 0
-  trackLegs: 1
-  trackPosition: 1
-  positionScale: 1
-  showDebugSkeleton: 1
-  debugSkeletonScale: 1.5
-  debugSkeletonOffset: {x: 1.4, y: 1, z: 0}
-  pipelineLogging: 1
-  pipelineLogDir: D:/Unity/viitorx-vrm-avtar-unity-base-project/Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/pipeline_logs
-  poseModelFileName: pose_landmarker_heavy.bytes
-  sampleVideoPath: D:\Unity\viitorx-vrm-avtar-unity-base-project\Assets\StreamingAssets\vid.mp4
-  cameraWidth: 1280
-  cameraHeight: 720
-  cameraFps: 30
-  filterMinCutoff: 1
-  filterBeta: 0.2
-  filterDerivativeCutoff: 1
-  retargetMinConfidence: 0.5
-  retargetExitConfidence: 0.3
-  poseStaleSeconds: 0.5
-  positionSmoothing: 12
-  useMediaPipeFace: 1
-  faceModelFileName: face_landmarker.bytes
-  useMediaPipeHand: 1
-  handModelFileName: hand_landmarker.bytes
-  useIkDriver: 0
-  useSentis3dTracking: 0
-  sentisModel: {fileID: 5022602860645237092, guid: 521045b5f9b746a44bdda694478d1c83, type: 3}
-  sentisImageNetNorm: 1
-  sentisMetreScale: 1.7
-  sentisDepthScale: 0.8
-  sentisPersonCrop: 1
-  sentisFilterBeta: 0.6
-  sentisFilterMinCutoff: 1.5
---- !u!4 &375600628
+--- !u!20 &145970750
+Camera:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 145970748}
+  m_Enabled: 1
+  serializedVersion: 2
+  m_ClearFlags: 2
+  m_BackGroundColor: {r: 0.012, g: 0.016, b: 0.035, a: 1}
+  m_projectionMatrixMode: 1
+  m_GateFitMode: 2
+  m_FOVAxisMode: 0
+  m_Iso: 200
+  m_ShutterSpeed: 0.005
+  m_Aperture: 16
+  m_FocusDistance: 10
+  m_FocalLength: 50
+  m_BladeCount: 5
+  m_Curvature: {x: 2, y: 11}
+  m_BarrelClipping: 0.25
+  m_Anamorphism: 0
+  m_SensorSize: {x: 36, y: 24}
+  m_LensShift: {x: 0, y: 0}
+  m_NormalizedViewPortRect:
+    serializedVersion: 2
+    x: 0
+    y: 0
+    width: 1
+    height: 1
+  near clip plane: 0.3
+  far clip plane: 1000
+  field of view: 46
+  orthographic: 0
+  orthographic size: 5
+  m_Depth: 0
+  m_CullingMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_RenderingPath: -1
+  m_TargetTexture: {fileID: 0}
+  m_TargetDisplay: 0
+  m_TargetEye: 3
+  m_HDR: 1
+  m_AllowMSAA: 1
+  m_AllowDynamicResolution: 0
+  m_ForceIntoRT: 0
+  m_OcclusionCulling: 1
+  m_StereoConvergence: 10
+  m_StereoSeparation: 0.022
+--- !u!4 &145970751
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 375600626}
+  m_GameObject: {fileID: 145970748}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0.017452406, y: 0, z: 0, w: 0.9998477}
+  m_LocalPosition: {x: 0, y: 1, z: -3.2}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1019772032
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1019772034}
+  - component: {fileID: 1019772033}
+  m_Layer: 0
+  m_Name: SkeletonShow
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1019772033
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1019772032}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9301f210d5eaa844ea6e76641c941ee5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: VirtualMirror.SkeletonShow::VirtualMirror.SkeletonShow.SkeletonShowBootstrap
+  udpPort: 8899
+  poseInterpolationDelayMs: 40
+  flipX: 0
+  flipY: 1
+  flipZ: 0
+  useHumanizedSkeleton: 1
+  bodyOrigin: {x: 0, y: 0.95, z: 0}
+  bodyScale: 1
+  startMode: 0
+--- !u!4 &1019772034
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1019772032}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -233,4 +268,5 @@ Transform:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 375600628}
+  - {fileID: 145970751}
+  - {fileID: 1019772034}

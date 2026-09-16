@@ -373,20 +373,23 @@ namespace VirtualMirror.Retargeting {
             vrm.Runtime.Process();
         }
 
-        public void Apply(PoseFrame frame) {
-            if (!bound || frame == null || !frame.IsValid) {
-                return;
-            }
-            // Adapt PoseFrame (Unity Y-up) into Kalidokit's convention (Y-down); indices == MediaPipe order.
-            // mirrorX = true presents a reflected skeleton to the solver (negate X + swap L/R) so the avatar
-            // mirrors the user like a real mirror instead of copying same-side ("looks right but mirrored").
+        /// <summary>
+        /// Adapt a <see cref="PoseFrame"/> (Unity Y-up) into Kalidokit's convention (Y-down); indices
+        /// == MediaPipe order. <c>mirrorX</c> presents a reflected skeleton to the solver (negate X +
+        /// swap L/R) so the avatar mirrors the user like a real mirror instead of copying same-side.
+        ///
+        /// Extracted so the SOLVER's input and the FIDELITY metric's reference cannot drift apart: the
+        /// metric compares a direction built from landmarks against a rendered bone, and a reference
+        /// conditioned even slightly differently would produce a plausible, meaningless number.
+        /// </summary>
+        private void Condition(PoseFrame frame, Vector3[] dst, float[] dstConf) {
             float mx = mirrorX ? -1f : 1f;
             int i = 0;
             while (i < PoseFrame.LandmarkCount) {
                 PoseLandmark lmk = frame.GetLandmark((JointId)i);
                 Vector3 p = lmk.Position;
-                landmarks[i] = new Vector3(p.x * mx, -p.y, p.z);
-                conf[i] = lmk.Confidence;   // P0-1: carry per-joint confidence alongside the position
+                dst[i] = new Vector3(p.x * mx, -p.y, p.z);
+                dstConf[i] = lmk.Confidence;   // P0-1: carry per-joint confidence alongside the position
                 i = i + 1;
             }
             if (mirrorX) {
@@ -394,16 +397,52 @@ namespace VirtualMirror.Retargeting {
                 while (pi < MirrorPairs.Length) {
                     int a = MirrorPairs[pi];
                     int b = MirrorPairs[pi + 1];
-                    Vector3 tmp = landmarks[a];
-                    landmarks[a] = landmarks[b];
-                    landmarks[b] = tmp;
-                    // Swap confidence identically so conf[] stays aligned with the landmarks the solver used.
-                    float ctmp = conf[a];
-                    conf[a] = conf[b];
-                    conf[b] = ctmp;
+                    Vector3 tmp = dst[a];
+                    dst[a] = dst[b];
+                    dst[b] = tmp;
+                    // Swap confidence identically so conf[] stays aligned with the landmarks used.
+                    float ctmp = dstConf[a];
+                    dstConf[a] = dstConf[b];
+                    dstConf[b] = ctmp;
                     pi = pi + 2;
                 }
             }
+        }
+
+        /// <summary>
+        /// F-26 + F-27: the pose the fidelity metric measures AGAINST. Defaults to whatever drove the
+        /// avatar, which is correct while only one pose exists - but once F-27's humanized layer sits
+        /// between the tracker and this driver, "whatever drove the avatar" IS the humanized pose, and
+        /// measuring the avatar against its own input would flatter that layer by construction: the
+        /// retarget is handed an easier pose and then scored on how well it followed it.
+        ///
+        /// Setting the RAW tracked frame here makes the metric answer the question that matters - how
+        /// far is the rendered avatar from what the TRACKER saw - identically in both arms of an A/B.
+        ///
+        /// CAVEAT, to be stated wherever this number is quoted: raw is not the subject either. It is
+        /// the only INDEPENDENT reference available, and F-27 exists precisely because raw contains
+        /// poses a body cannot make. So this is a CONSERVATIVE test of that layer: every correction it
+        /// makes moves the pose away from raw and can only cost it points here.
+        /// </summary>
+        public void SetFidelityReference(PoseFrame raw) {
+            if (raw == null || !raw.IsValid) {
+                hasFidelityReference = false;
+                return;
+            }
+            Condition(raw, fidelityLandmarks, fidelityConf);
+            hasFidelityReference = true;
+        }
+
+        /// <summary>Drop the reference; <see cref="SampleFidelity"/> falls back to the driving pose.</summary>
+        public void ClearFidelityReference() {
+            hasFidelityReference = false;
+        }
+
+        public void Apply(PoseFrame frame) {
+            if (!bound || frame == null || !frame.IsValid) {
+                return;
+            }
+            Condition(frame, landmarks, conf);
 
             KalidokitFullPose pose = KalidokitPoseSolver.Solve(landmarks);
 
@@ -759,6 +798,121 @@ namespace VirtualMirror.Retargeting {
                 Vector3 gotForward = chest.forward * -1f;   // avatar faces -Z in the model frame
                 LogTrace("chestFacing", wantForward, gotForward, Vector3.zero);
             }
+        }
+
+        // ---- F-26 §9.1 POSE FIDELITY ------------------------------------------------------------
+        // The measurement that has never existed: how far the RENDERED bone direction is from the
+        // direction the tracked subject's own segment points. Read-only, allocation-free, and it
+        // changes no decision the retarget makes.
+        //
+        // It is here rather than in a separate component because the comparison needs four things
+        // that are private to this class and getting any of them wrong silently produces a
+        // plausible, meaningless number: the landmark buffer AFTER the mirror/swap conditioning
+        // (line ~388), the Kalidokit->rig axis map, the left/right CROSS-map (the avatar's LEFT arm
+        // is solved from source landmarks 12/14/16), and the rig frame.
+        //
+        // THE RIG FRAME MATTERS. `want` is expressed in the rig's rest frame, so `got` is converted
+        // into it before the angle is taken. The older TraceBone() below compares a rig-frame `want`
+        // against a WORLD-space `got`; those coincide only while the avatar root's rotation is
+        // identity, which is true today but is an assumption, not a guarantee.
+        // F-26 + F-27: the reference pose SampleFidelity measures against. Separate buffers so a
+        // diagnostic can never disturb the solver's input.
+        private readonly Vector3[] fidelityLandmarks = new Vector3[PoseFrame.LandmarkCount];
+        private readonly float[] fidelityConf = new float[PoseFrame.LandmarkCount];
+        private bool hasFidelityReference;
+
+        private static readonly string[] FidelityBoneNames = {
+            "leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm",
+            "leftUpperLeg", "leftLowerLeg", "rightUpperLeg", "rightLowerLeg", "trunk",
+        };
+
+        /// <summary>Number of bones <see cref="SampleFidelity"/> reports; size the buffer to this.</summary>
+        public static int FidelityBoneCount {
+            get {
+                return FidelityBoneNames.Length;
+            }
+        }
+
+        /// <summary>
+        /// Fill <paramref name="buffer"/> with this frame's per-bone direction error and return how
+        /// many entries were written. Caller-owned buffer so the per-frame path allocates nothing
+        /// (AGENTS.md §4). Call AFTER the pose has been applied and processed — see
+        /// AvatarFidelityRecorder, which samples on Application.onBeforeRender for that reason.
+        /// </summary>
+        public int SampleFidelity(BoneFidelity[] buffer) {
+            if (buffer == null || !IsBound) {
+                return 0;
+            }
+            int n = 0;
+            Quaternion toRig = Quaternion.Inverse(RigFrame());
+            Vector3[] src = hasFidelityReference ? fidelityLandmarks : landmarks;
+            float[] srcConf = hasFidelityReference ? fidelityConf : conf;
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "leftUpperArm", leftUpperArm, leftLowerArm, 12, 14);
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "leftLowerArm", leftLowerArm, leftHand, 14, 16);
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "rightUpperArm", rightUpperArm, rightLowerArm, 11, 13);
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "rightLowerArm", rightLowerArm, rightHand, 13, 15);
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "leftUpperLeg", leftUpperLeg, leftLowerLeg, 24, 26);
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "leftLowerLeg", leftLowerLeg, leftFoot, 26, 28);
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "rightUpperLeg", rightUpperLeg, rightLowerLeg, 23, 25);
+            n = FillFidelity(buffer, n, toRig, src, srcConf, "rightLowerLeg", rightLowerLeg, rightFoot, 25, 27);
+            n = FillTrunkFidelity(buffer, n, toRig, src, srcConf);
+            return n;
+        }
+
+        private int FillFidelity(BoneFidelity[] buffer, int n, Quaternion toRig,
+                                 Vector3[] src, float[] srcConf, string name,
+                                 Transform bone, Transform child, int sourceFrom, int sourceTo) {
+            if (n >= buffer.Length) {
+                return n;
+            }
+            BoneFidelity entry = default(BoneFidelity);
+            entry.Bone = name;
+            entry.Valid = false;
+            entry.ErrorDeg = -1f;
+            entry.MinConfidence = Mathf.Min(srcConf[sourceFrom], srcConf[sourceTo]);
+            if (bone != null && child != null) {
+                Vector3 want = MirrorX(KalidokitToRig(src[sourceTo] - src[sourceFrom]));
+                Vector3 got = toRig * (child.position - bone.position);
+                if (want.sqrMagnitude > 1e-8f && got.sqrMagnitude > 1e-8f) {
+                    entry.ErrorDeg = Vector3.Angle(want.normalized, got.normalized);
+                    entry.SourceDeg = Vector3.Angle(want.normalized, Vector3.up);
+                    entry.RigDeg = Vector3.Angle(got.normalized, Vector3.up);
+                    entry.Valid = true;
+                }
+            }
+            buffer[n] = entry;
+            return n + 1;
+        }
+
+        // Trunk: mid-hip -> mid-shoulder against hips -> the highest bound upper-trunk bone. This is
+        // the channel F-26 §4.2 says cannot leave vertical, so it is measured explicitly rather than
+        // inferred from the limbs hanging off it.
+        private int FillTrunkFidelity(BoneFidelity[] buffer, int n, Quaternion toRig,
+                                      Vector3[] src, float[] srcConf) {
+            if (n >= buffer.Length) {
+                return n;
+            }
+            Transform top = upperChest != null ? upperChest : (chest != null ? chest : spine);
+            BoneFidelity entry = default(BoneFidelity);
+            entry.Bone = "trunk";
+            entry.Valid = false;
+            entry.ErrorDeg = -1f;
+            entry.MinConfidence = Mathf.Min(Mathf.Min(srcConf[11], srcConf[12]),
+                                            Mathf.Min(srcConf[23], srcConf[24]));
+            if (hips != null && top != null) {
+                Vector3 midShoulder = (src[11] + src[12]) * 0.5f;
+                Vector3 midHip = (src[23] + src[24]) * 0.5f;
+                Vector3 want = MirrorX(KalidokitToRig(midShoulder - midHip));
+                Vector3 got = toRig * (top.position - hips.position);
+                if (want.sqrMagnitude > 1e-8f && got.sqrMagnitude > 1e-8f) {
+                    entry.ErrorDeg = Vector3.Angle(want.normalized, got.normalized);
+                    entry.SourceDeg = Vector3.Angle(want.normalized, Vector3.up);
+                    entry.RigDeg = Vector3.Angle(got.normalized, Vector3.up);
+                    entry.Valid = true;
+                }
+            }
+            buffer[n] = entry;
+            return n + 1;
         }
 
         private void TraceBone(string name, Transform bone, Transform child, int sourceFrom, int sourceTo, Vector3 solvedEuler) {

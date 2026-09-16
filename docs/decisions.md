@@ -1590,3 +1590,734 @@ exactly 3 momentary rate-based holds (0.7% of frames), each recovering within on
 session (explicit instruction). The specific test that closes the loop back to F-19 - a live L2
 (hands-near-face) reproduction confirming this raw-geometry threshold suppresses the same defect F-19
 measured in rendered geometry - has not run.
+
+---
+
+## ADR-054 — F-21: the frozen-reference match runs for the whole release budget, not only inside
+## REACQUIRE_WINDOW (2026-09-14)
+
+**Context.** F-21's §9 describes `REACQUIRE_WINDOW` (2.0 s) as "the faster path within that budget",
+language that presupposes a slower path also existing inside `RELEASE_TIMEOUT` (4.0 s). The code did
+not implement one: it gated the frozen-reference match itself on `loss_elapsed <=
+reacquire_window_s`, so past 2.0 s matching was not slowed down, it was switched off.
+
+**Evidence (offline, deterministic, `f21_adversarial.py` scenario s08b).** An owner who stepped away
+for 2.33 s and returned to their exact original position at full confidence was rejected **51
+consecutive times** as `not_owner`, held un-emitted for 1.87 s, `TARGET_RELEASED`, then re-acquired
+with a `TARGET_SWITCH` logged — against a person who never moved. `TARGET_SWITCH` is this report's
+single headline safety metric, so the defect also corrupted the metric used to judge it.
+
+**Decision.** Attempt the frozen-reference match for the whole release budget. `REACQUIRE_WINDOW`
+keeps its documented meaning as the selector for the confirm count (fast path inside, full
+acquisition standard outside). Both counts default to 5, so default numeric behaviour is unchanged —
+what changes is that the owner can be matched at all.
+
+**Why this was done without live evidence**, when F-21's thresholds are otherwise explicitly pending
+live tuning: it is **strictly safer than the behaviour it replaces**. The alternative the old code
+forced — release, then fresh acquisition — accepts *any* body at *any* position with *no*
+frozen-reference check whatsoever. Requiring the position+scale gate against the frozen owner is a
+strictly stronger admission test than the release-and-reacquire path it avoids. This is a logic fix,
+not a threshold change; no threshold value was altered.
+
+**Also changed:** `TARGET_REJECTED_CANDIDATE` now reports the real discriminator (`position_jump` /
+`scale_mismatch` / `no_reference`) instead of a flat `not_owner` that hid which gate fired.
+
+**Guarded by** `test_target_ownership.py` `t17` (the returning owner is re-locked with no release, no
+switch, no rejection) and `t18` (a *different* body arriving in the same widened interval is still
+rejected on position and still cannot acquire without waiting out the full release). 36/36 → 46/46.
+
+---
+
+## ADR-055 — A liveness heartbeat reports that the CAMERA LOOP is alive, not that a SUBJECT is
+## present (2026-09-14)
+
+**Context.** F-20B's supervisor detects readiness from two markers the sidecar already prints: the
+session-id banner, then the first `frames=` line. That contract is sound. The sidecar broke it by
+printing `frames=` only *after* `build_body_landmarks` and the UDP send — so every `continue` above
+skipped it: the "no hip depth" path, and (since F-21) any frame ownership withholds.
+
+**Evidence (offline, real hardware, empty room).** With the OAK-D attached and healthy and nobody in
+front of it, a fully-booted sidecar printed **zero** `frames=` lines. The supervisor logged
+`STARTUP STUCK pid=24460 not ready after 45s - killing for restart` and restarted it, repeatedly;
+5 such restarts trip `FAILED_PERMANENT` in ~4 minutes, after which each 60 s retry fails identically.
+**An empty room is the normal state of an unattended public installation between visitors.**
+
+F-20B's live §17 matrix passed originally because a person was standing at the camera throughout
+every run in it. The defect requires the *absence* of a person to reproduce.
+
+**Decision.** Fix it in the **sidecar**, not the watchdog — the watchdog's contract was never wrong.
+`wholebody_udp_sender.py` now emits an idle liveness line when the detailed status line has been
+starved for 3 s (longer than its own 2 s cadence, so it never doubles up during normal tracking):
+
+```text
+[wb] frames=76 sent=0 idle - camera loop alive, no pose emitted (no subject / withheld) fps~25.3 ...
+```
+
+It carries `frames=`, satisfying the existing readiness contract unchanged, and is strictly more
+informative than before: an operator can now distinguish *camera healthy, nobody there* from *camera
+dead*, which was previously impossible from the log.
+
+**General principle, worth applying beyond this instance:** a liveness signal must not be gated on
+the presence of the thing whose absence it needs to survive. Conflating "is the pipeline alive" with
+"is a person being tracked" made an empty room indistinguishable from a dead camera.
+
+**Evidence of the fix**, same conditions: `SIDECAR READY sid=1a61dbe970d3 elapsed=6.777s`,
+`RestartCount=0`, 72.7 s continuous uptime with nobody present. `f20b_failure_tests.py` went from
+**4/6 to 6/6 with an empty room** — a state in which it previously could not pass at all.
+
+---
+
+## ADR-056 — F-21's silent wrong-person hand-off is documented and left unfixed today, deliberately
+
+> **SUPERSEDED IN PART by [ADR-057](#adr-057) (2026-09-15).** The hand-off is now fixed. The
+> reasoning below still stands as the record of why it was deferred, and one of its premises
+> turned out to be wrong in an informative way: it assumed only live data could price the
+> false-rejection cost of a path-consistency rule. Offline ground-truth labelling measured that
+> cost directly (96 frames of a legitimate returning owner on `123.webm`), which is what made
+> the decision possible today. The **named candidate fix** below is the one that was built.
+## (2026-09-14)
+
+**Context.** Replaying `123.webm` (which, contrary to F-21 §13's original premise, contains two
+people) through the real ownership path reproduced a **silent wrong-person hand-off**: F-21 correctly
+refused the intruder for 54 frames, but the second person then walked to within the switch margin of
+the first person's frozen last-known position, passed the frozen-reference match, and was re-locked
+as the **same `target_id`** — `TARGET_SWITCH = 0`, `TARGET_RELEASED = 0`. Confirmed frame by frame
+with images. This is the F-19 defect occurring inside the layer built to prevent it, via the
+reacquire path rather than the M15 crop path.
+
+**Decision: document and measure it now; do not fix it today.** Three reasons, in order of weight:
+
+1. Closing it properly needs either an identity signal this pipeline does not have — and inventing
+   one without evidence is explicitly out of scope — or new admission logic, which is development,
+   not the validation the next session is meant to be.
+2. The fix has a real false-rejection cost that only live evidence can price. Any path-consistency
+   rule tight enough to catch this hand-off will also reject some genuine occlusion recoveries, and
+   there is no offline data that distinguishes the two populations.
+3. It is a *known, named* limitation (F-21 §11/§16) being promoted from "not ruled out" to
+   "reproduced and imaged", which is itself the deliverable.
+
+**Named candidate for when it is fixed**, so the next session has something concrete to arbitrate
+rather than a blank page: require a reacquire to be **path**-consistent as well as
+position-consistent. A candidate observed far outside the margin during the loss, which then walks
+back inside it, is the exact signature — and it is derivable from positions the module already holds,
+with no new identity signal. What is unknown, and needs live data, is how often a genuine owner
+produces that same signature by walking back into frame from the side.
+
+**Do not** meanwhile quote `TARGET_SWITCH = 0` as evidence of correct ownership. It counts declared
+hand-overs only; the silent ones are precisely the ones it cannot see.
+
+## ADR-057 — F-21: reacquisition is PATH-consistent, not only position-consistent; the ambiguous
+## case resolves towards a DECLARED hand-over
+
+**Status:** Accepted (2026-09-15). **Supersedes the "not today" half of [ADR-056](#adr-056).**
+**Scope:** `python-sidecar~/target_ownership.py` only. No Runtime/ change, no F-22 change, no new
+identity signal.
+
+**Context.** ADR-056 recorded a silent wrong-person hand-off reproduced on real footage, left it
+unfixed, and named the candidate fix: require a reacquire to be path-consistent as well as
+position-consistent. It also named the thing that was unknown and that supposedly needed live data:
+*how often a genuine owner produces the same signature by walking back into frame.*
+
+That question turned out to be answerable offline, and the answer is what makes this decision
+possible. It is not "rarely". On `123.webm` the returning owner produces **exactly** the impostor
+signature, and the two are not merely similar — from a hip position they are **the same observation
+stream**. So the choice was never "catch impostors without touching genuine returns". The real choice
+is what to do with an ambiguity that cannot be resolved with the signals this pipeline has.
+
+**Decision.** Track the candidate's own observed path during a loss episode:
+
+> `_chain_walked_in` is true iff the candidate currently being observed has, at any point in an
+> unbroken observation chain during this loss episode, been seen outside `SWITCH_MARGIN_M` of the
+> frozen owner position.
+
+A matched candidate carrying that flag is refused (`reason="path_walked_in"`). It then releases
+normally at `RELEASE_TIMEOUT_S` and re-acquires as a **new epoch with `TARGET_SWITCH` logged**.
+
+The point is not that the gate identifies anybody — it cannot, and does not claim to. The point is
+that it converts a hand-over the consumer was **never told about** into one it **is** told about.
+
+Two supporting choices, both deliberate:
+
+* **A chain break that lands inside the gate clears the flag.** A body appearing at the owner's spot
+  with no observed approach is indistinguishable from the owner stepping back out from behind an
+  obstruction, so it stays admissible. Only the distinguishable case is refused.
+* **The continuity distance reuses `SWITCH_MARGIN_M`** rather than adding a tunable. It is already
+  the module's "a one-frame move further than this means a different body" quantity. Measured across
+  all three clips: largest single-frame displacement of a continuous body 126.1 px against a 141 px
+  margin; the three real body-to-body jumps 303.5, 323.0 and 687.5 px - so 2.15x below the
+  SMALLEST of them, not merely below the largest.
+
+**Consequences, including the one that costs something.**
+
+```text
+123.webm   silent wrong-person emission   38 frames (0.63 s)  ->  0
+           the hand-over becomes DECLARED: release + TARGET_SWITCH + new epoch
+           COST: 96 frames (1.60 s) of the legitimate owner withheld, one contiguous block,
+                 because she walked back in
+video.webm PATH_OFF and PATH_ON identical - the gate never fires on single-person motion
+cost       +0.204 us/frame (+0.00061 % of a 30 fps budget); three scalars of state.
+           Measured with no model in the loop, so it does not depend on which execution
+           provider the harness happened to get.
+```
+
+Roughly 2.5 frames of the right person withheld per frame of the wrong person suppressed, **on this
+clip**. That ratio is a property of a clip in which the owner leaves and returns once; it is not an
+installation rate and must not be quoted as one.
+
+**Why this direction and not the other.** Brief §7, and this module's own §14, already decide it: a
+false temporary hold is acceptable, a silent wrong-person hand-off is not. F-20A already shows
+neutral during a hold, so the visible cost of holding is bounded and understood, whereas the cost of
+a silent hand-off is an avatar driven by the wrong human with nothing in any log to say so.
+
+**`RELEASE_TIMEOUT_S` is the knob that prices this**, trading blackout duration against epoch churn.
+It is deliberately left at 4.0 s and flagged for the live session rather than tuned against one clip.
+
+**Rejected:** direction-of-arrival matching (overfits `123.webm`, where impostor and owner both
+arrive from the left — brief §5 forbids it, and scenarios P4/P7 keep it forbidden); owner-velocity
+extrapolation (a person about to be occluded has a noisy, low-information velocity); releasing
+immediately on a path-inconsistent candidate instead of holding (equal wrong-person safety and better
+availability, but it destroys the frozen reference the moment any passer-by crosses, losing a
+genuinely occluded owner's epoch to a stranger); tightening `SWITCH_MARGIN_M` (trades a measured
+margin for an unmeasured one and does not address a candidate reaching the exact frozen position);
+ReID / appearance / face / detector (forbidden, and absent from this pipeline).
+
+**`path_consistency=False` restores the previous behaviour exactly**, and is kept as the control that
+makes the claim falsifiable — scenario P11 asserts that the same input silently emits the wrong person
+with the gate off and does not with it on. It is excluded by name from the suite aggregate so a
+deliberately-disabled run can never be read as production behaviour.
+
+**Still not closed by this**, and not to be claimed: the gate is verified against replayed footage
+with no hip depth and no live two-person data. F-21's verdict stays **CONDITIONAL**.
+
+---
+
+## ADR-058 — The live-session cue must be sized for the SUBJECT at the camera, not the operator at
+## the desk; and it is drawn by the producer, in one window
+
+**Status:** Accepted (2026-09-15). **Scope:** `f21_cue_display.py` (new), `wholebody_udp_sender.py`
+`--cue-panel` (opt-in, preview-only), `sidecar_supervisor.py` flag forwarding. No tracking change.
+
+**Context.** F-21 S31.4 fixed `--cue-file` (a missing `import io` had made the banner dead since it
+was written) and the banner was then imaged and declared working. It had still never been read by a
+human at the camera, which is the only place it matters: in a two-person protocol NOBODY is at the
+keyboard.
+
+**The measurement that decided it.** The preview is the camera frame — 640x400, 400x640 under
+`--portrait` — shown through `cv2.imshow` with no `namedWindow`, i.e. WINDOW_AUTOSIZE, i.e. a 400 px
+window at native size. `_draw_cue`'s instruction line is FONT_HERSHEY_SIMPLEX scale 0.55 = **13 px
+cap-height, 1 px stroke**. On a 24" 1080p monitor that is 3.6 mm; at the 2-3 m a subject stands from
+it that subtends **4.1-6.2 arcmin**, against ~5 arcmin for the 20/20 threshold of RESOLUTION and
+15-25 arcmin for glanceable reading. Correctly sized for the desk; ~4x too small at the camera.
+
+**Decision.** A separate renderer (`f21_cue_display.py`) draws a large cue PANEL, and the sidecar
+composites it beside the feed in ONE window under `--cue-panel`. Measured: instruction **60 px
+cap-height = 20.5-25.7 arcmin at 2.5 m**. Three redundant channels, because text is the first thing
+to fail at distance: a colour field down both edges, a ~300 px actor glyph (A/B), and a top-down
+diagram of camera/floor-cross/movement. The sentence is the fourth channel, not the only one.
+
+**Why in the producer and not a second window.** One 1920x1080 monitor: a fullscreen cue covers the
+preview, and the operator and the screen recording both lose the F-21 HUD. `--cue-panel` is
+preview-only, opt-in (default path byte-identical), and imports the renderer lazily so the
+live-critical import graph is unchanged under the default.
+
+**Cost, measured, because the composite is 7.4x the pixels.** Naive composite 4.29 ms/frame vs
+0.62 ms for the small banner (+11 % of a 30 fps budget). With the panel cached on the fields that
+change what is drawn (rebuilt ~1x/s, not ~30x/s) and the canvas preallocated: **0.38 ms median,
+p95 0.48, max 3.93** — cheaper than the banner it replaces, and no per-frame allocation.
+
+**DO NOT**
+* do not judge cue legibility by looking at a screenshot on the desk — it is a visual-angle
+  question and the answer is a number
+* do not make the cue fullscreen on a single-monitor rig
+* do not add a generic `--extra-args` passthrough to the supervisor (S31.2); `--cue-panel` is a
+  third NAMED flag for the same reason
+
+---
+
+## ADR-059 — Pelvic roll is re-enabled: it is an IMAGE-PLANE signal and was switched off as
+## collateral of a bug that had already been fixed separately
+
+**Status:** Accepted (2026-09-15), **applied but NOT yet validated by the Unity EditMode suite.**
+**Scope:** `Scenes/Bootstrap.unity` `kalidokitBodyTorsoRoll: 0 -> 1`. No code change.
+
+**Context.** A user watching the F-23 dance replay reported that the dancer moves her hips and the
+avatar does not. Three independent causes were found; this ADR covers the one that is a product
+decision rather than a harness defect (the other two were bugs in `f23_video_to_unity.py` — see the
+F-23 report).
+
+**What was measured.** The pelvis has three rotational axes and, in the shipped configuration, one
+of them is live:
+
+```text
+ApplyBone(hips, new Vector3(0f, hipsYaw, hipsRoll * HipsRollDamp))
+  pitch  hardcoded 0f
+  yaw    survives, but through the 8-22 deg deadzone -> 76.6 % of this dancer's frames zeroed
+  roll   hipsRoll = pose.Hips.z * torsoRoll, and torsoRoll = 0 -> ALWAYS ZERO
+```
+
+The dancer's pelvic obliquity is **25.1 deg peak-to-peak** and none of it reached the avatar.
+
+**Why it is safe, which is the whole argument.** `torsoRoll` was set to 0 on 2026-08-07 alongside
+the real fix for a "leaned right all the time" complaint — the spine euler was applied to BOTH Spine
+and Chest, doubling to ~45 deg yaw + ~20 deg roll. **That doubling was fixed independently** by the
+0.5/0.5 Spine/Chest split. The roll was zeroed as a second, belt-and-braces measure citing ADR-019's
+no-unreliable-roll precedent. But ADR-019 is about axes that are unreliable FROM DEPTH, and roll is
+not one:
+
+```text
+KMath.RollPitchYaw2(a, b).z = Find2DAngle(a.x, a.y, b.x, b.y)      X and Y only - never Z
+```
+
+Pelvic roll is derived purely from the image plane, which is the most reliable thing RTMW3D
+produces. Two protections that were inert at `torsoRoll = 0` become live again and are kept:
+`hips.z *= 1 - turnHips` fades roll out as the person turns, and `HipsRollDamp = 0.7`.
+
+**Consequence for the OAK-D.** Because it is image-plane derived, this gain **transfers** to the
+live sensor path unchanged — unlike anything on the depth-derived yaw channel.
+
+**DO NOT**
+* do not read this as permission to re-enable depth-derived roll or chest axial twist — ADR-019
+  stands for those
+* do not claim this validated until Unity EditMode 170/170 has been re-run; the suite needs the
+  editor closed and that had not happened when this was written
+
+---
+
+## ADR-060 — Global slerp damping is NOT what separates the avatar from the debug skeleton
+## (a measured negative result)
+
+**Status:** Accepted (2026-09-15). **Scope:** none — `kalidokitBodyLerp` stays at its validated 0.5.
+Recorded because the hypothesis was plausible, acted on, and wrong.
+
+**Context.** `PoseDebugSkeleton` draws RAW landmark positions; its own docstring says that if the
+skeleton tracks cleanly and the avatar does not, the retarget is at fault. A user observed exactly
+that. `ApplyBone` slerps EVERY bone toward its target with `lerpAmount = 0.5` every frame, with no
+frame-rate compensation, so it was hypothesised to be the dominant sluggishness term.
+
+**The A/B, on the F-23 dance clip, everything else identical.** Metric: peak Pearson correlation
+between the commanded arm-span and the avatar's rendered width, measured from pixels.
+
+```text
+lerp 0.5 (shipped)        best r +0.714   lag 300 ms
+lerp 1.0 (no damping)     best r +0.691   lag 267 ms
+```
+
+Removing the damping ENTIRELY buys **one frame (33 ms)** and makes correlation slightly WORSE.
+
+**Why, in hindsight, and the arithmetic that should have come first.** `Slerp(cur, tgt, 0.5)`
+converges 50 % per frame; at 30 fps its time constant is ~1 frame (~33 ms) — precisely what the
+measurement returned. The 300 ms decomposes instead as One-Euro `yawSmoothTau = 0.15 s` (~150 ms,
+trunk yaw only) + P1-3 `interpDelayMs = 40` + slerp 33 ms + inference/transport/render.
+
+**The result that matters more than the lag.** `r` barely moved. **Responsiveness is not what
+separates the avatar from the skeleton.** The ~0.7 ceiling is structural: the deadzone zeroing
+76.6 % of hip yaw, the hardcoded hips pitch, and the arm solver. Damping was the wrong target.
+
+**Also checked and rejected:** driving the hardcoded hips pitch. `RollPitchYaw2`'s pitch is
+`Find2DAngle(a.z, a.y, ...)` — depth-derived — and the pitch of the HIP LINE is not forward bend
+anyway (that is the spine `bend` term). The `0f` looks deliberate, not accidental.
+
+**DO NOT**
+* do not raise `kalidokitBodyLerp` to chase responsiveness — it is measured at 33 ms
+* do not attribute the avatar/skeleton gap to smoothing without re-running this A/B
+
+## ADR-061 — F-21's owner reference DRIFTS while LOCKED, and that is a second silent wrong-person
+## route which ADR-057's gate is structurally unable to see (live evidence, 2026-09-16)
+
+**Status:** Accepted as a FINDING (2026-09-16). The drift is now **MEASURED** and a mechanism exists
+**behind a flag that defaults to OFF**, so production behaviour is byte-identical to before. The
+budget itself is deliberately **not chosen** — see *Mechanism* below. **Scope:**
+`python-sidecar~/target_ownership.py`, the `LOCKED` branch.
+
+**Context.** ADR-057 closed the *reacquisition* route to a silent hand-off: a candidate tracked
+walking in from outside the margin is refused. That fix stands and was re-confirmed live on
+2026-09-16 (`IMPOSTOR_WALKIN` 0/2 silent, 2/2 declared).
+
+The first two-person session then produced a silent wrong-person emission **anyway**, in a case
+nobody was watching.
+
+**The measurement.** `OWNER_OCCLUDED` rep 7. A stands on the cross; B walks between A and the camera.
+Emitted hip depth, read off the recorded preview at 0.5 s intervals — `hip` is `float(mid_hip[2])`,
+printed only on the emitting path:
+
+```text
+sent=5740  hip 1.61m  LOCKED   A
+sent=5768  hip 1.34m  LOCKED     migrating
+sent=5781  hip 1.16m  LOCKED   B      <- skeleton visibly on B
+sent=5796  hip 1.19m  LOCKED   B
+sent=5837  hip 1.58m  LOCKED   A
+```
+
+97 datagrams emitted. `target_id` 13 throughout, `switches` 12 throughout, **zero ownership events
+logged for the entire manoeuvre**. Imaged in `oak_v4_evidence/f21/walkin/s34_evidence/`.
+
+**Root cause.** The `LOCKED` branch updates the reference on every accepted frame:
+
+```python
+if ok:
+    self.owner_pos = obs.pos
+```
+
+`SWITCH_MARGIN_M` is therefore tested against the **previous accepted frame**, not against the
+position the epoch locked onto. The reference is frozen only *after* a loss is declared. While
+`LOCKED`, an observation that migrates by less than the margin per frame is accepted step by step and
+the reference slides from one human to another, never failing a single test. ADR-057's gate lives in
+the `TEMPORARILY_LOST`/`REACQUIRING` branch and is never reached, because the state never leaves
+`LOCKED`. **The gate is behaving exactly as specified; the specification does not cover this path.**
+
+**Why every previous test missed it.** All of §30's offline evidence is built on `123.webm`, where the
+observation *teleports* between bodies — the three real body-to-body jumps there are 303.5, 323.0 and
+687.5 px. The margin was designed against jumps and validated against jumps. Rep 7 moved
+1.61 -> 1.16 m over about a second: **a few millimetres per frame.** A slow drift is a different
+failure mode and nothing in the module looks for it. The deterministic suite could not have caught it
+either — `steps_path()` builds walk-ins that start OUTSIDE the margin, which is the reacquisition
+case, not this one.
+
+**Honest limit of this measurement.** The emitted hip was sampled from the preview at 2 Hz, not
+logged per frame; there was no wire recording for this run. The migration and the continuous emission
+are certain (the `sent` counter increments monotonically and the status string distinguishes
+emitting from withholding), but **the exact wrong-person frame count is not measured** and is not
+claimed. Closing that is the first task in §34.5.
+
+**Two of the four options are RULED OUT by measurement, not by argument.** Taken from the live trace
+where the emitted hip walked from a person at 1.61 m onto a person at 1.16 m:
+
+```text
+per-frame distance   the migration moved 0.015 m PER FRAME against a 0.35 m margin - 23x under.
+                     No per-frame threshold catches that without forbidding ordinary motion.
+scale gate           torso span scales as 1/Z, so B's apparent span was 1.39x A's = +39 %,
+                     inside the +/-45 % ADR-052 set wide on purpose. It cannot see this either.
+```
+
+Only the **cumulative displacement from the anchor** separates them, and only because the anchor
+stops moving.
+
+**Mechanism, implemented 2026-09-16, OFF by default:**
+
+```text
+_anchor_pos       recorded at _lock(), and NOT updated while locked - unlike owner_pos, whose
+                  per-frame update is the line that lets a migration through.
+owner_drift_m     distance from the anchor, measured every accepted frame. DIAG-ONLY.
+                  Surfaced on snapshot() so the live HUD shows it - which is how the next
+                  session gets the distribution a budget could honestly be set from.
+drift_budget_m    default None = DISABLED = exactly today's behaviour. Verified: the unit suite
+                  and the 101/101 adversarial suite are unchanged with the default.
+                  When SET, exceeding it emits TARGET_DRIFT_EXCEEDED and drops into
+                  TEMPORARILY_LOST with reason "drift_budget", routing the candidate through
+                  the normal reacquisition path INCLUDING ADR-057's path gate.
+```
+
+**Honest limit of the mechanism, pinned by test t25:** a reacquire RE-ANCHORS, so the budget is a
+**ratchet, not a refusal** — a long migration is announced once per budget-length rather than
+forbidden. It converts silence into a repeating announcement; it does not by itself change identity.
+That is a deliberate stopping point: refusing outright is the decision that needs the false-rejection
+cost priced against real walking owners, and no such measurement exists yet.
+
+**The budget remains UNSET because it is UNMEASURED.** Choosing a number here would be exactly the
+mistake this ADR documents. The next live session should run with the HUD drift readout and record
+the distribution for an owner who walks, turns, and is occluded.
+
+**Tests:** `test_target_ownership.py` 61/61 -> **75/75**. t23 reproduces the live failure in a unit
+test (30/30 frames emitted, never leaves LOCKED, 0.450 m of drift); t24 asserts the per-frame
+measurement that rules out a per-frame fix; t25/t26 pin the opt-in mechanism and that an owner
+standing still never trips it.
+
+**Options for the eventual behavioural fix, still none chosen:**
+
+| Option | Cost |
+|---|---|
+| Freeze `owner_pos` at lock and test every frame against it | breaks a legitimate owner who walks anywhere; the margin becomes a leash, not a jump detector |
+| Keep the rolling reference, add a **cumulative-displacement budget** from the lock anchor | needs a budget number nothing has measured yet, and a legitimate walking owner still exhausts it |
+| Test scale against the **original** lock rather than the rolling one | scale is a weak discriminator (±45 % by design, ADR-052) and two adults of similar build defeat it |
+| Require re-confirmation after N metres of accumulated drift | converts a silent hand-off into a declared one without forbidding movement; cost is churn for an active owner |
+
+**DO NOT** in the meantime:
+- do not quote "false holds = 0/4" as evidence that occlusion is handled. It is true and it is blind
+  to this; see §34.4.
+- do not treat `TARGET_SWITCH = 0` as evidence of correct ownership. That is the *third* time this
+  report has had to say so (§30.2, §33.1, here).
+- do not ship single-person ownership as a SAFETY property on the current evidence. The occlusion
+  case costs either 4.19 s of blackout or a silent wrong person depending on which way the detector
+  falls, and both were observed in the same 8-rep session.
+
+---
+
+## ADR-062 — The avatar now has a POSE FIDELITY metric, and its first measurement says the trunk
+## LEAN channel is dead while the aimed arms track the subject to ~1 degree
+
+**Date:** 2026-09-16  **Status:** ACCEPTED (instrument); measurement is FIRST EVIDENCE, two clips,
+one avatar, video path only. **Supersedes nothing. Blocks nothing. Changes no product behaviour.**
+
+### The gap this closes
+
+Every avatar-side number this project has produced measures the avatar against ITSELF — yaw jitter,
+snap count, bone-length constancy, left/right swap count. F-19 reported all four as "AVATAR QUALITY:
+PROVEN GOOD". All four are satisfied by an avatar that is smoothly, stably and consistently in the
+WRONG pose, which is what the 2026-09-16 recording shows (F-26 §5.1). Nothing anywhere compared the
+avatar's pose to the SUBJECT's pose. ADR-060 reached the same wall from the other side: it ruled out
+global slerp damping as the difference between avatar and skeleton, and could go no further without
+a fidelity number.
+
+### The instrument
+
+`KalidokitControlRigDriver.SampleFidelity(BoneFidelity[])` — 9 bones, read-only, allocation-free,
+caller-owned buffer. Per bone it reports the angle between the direction the SUBJECT's segment points
+and the direction the RENDERED avatar bone ends up pointing, plus the two source landmarks' minimum
+confidence, plus each side's own inclination from the rig's vertical.
+
+It lives on the driver, not in a separate component, because the comparison needs four things that
+are private to it and getting any of them wrong produces a plausible, meaningless number: the
+landmark buffer AFTER the mirror/swap conditioning, the Kalidokit->rig axis map, the left/right
+CROSS-map (the avatar's LEFT arm is solved from source landmarks 12/14/16), and the rig frame.
+
+`AvatarFidelityRecorder` writes one JSON record per frame and samples on `Application.onBeforeRender`
+— NOT LateUpdate. The retarget chain ends with UniVRM's `Vrm10Runtime.Process()`; a LateUpdate sample
+races it and can capture the pose one stage early, silently measuring a skeleton that was never
+drawn. `F19BoneRecorder` records the same reasoning; here it matters more, because a stale sample
+would bias the very number the metric exists to establish.
+
+`f26_fidelity_analyze.py` reports the distribution. **22/22 self-test.**
+
+### Four choices, each made to stop a specific failure this project has already had
+
+1. **PER BONE, never a single blended score.** A mean over nine bones hides a trunk failing while the
+   arms are fine — exactly the failure the video shows. The analyser REFUSES to emit a combined score.
+2. **A DISTRIBUTION (median / p90 / max), not a mean.** The failures are intermittent and
+   pose-dependent; a mean over a mostly-standing session reports "good".
+3. **Low-confidence frames are EXCLUDED and counted, not averaged in**, at the retarget's own
+   `limbConfidenceThreshold` (0.3). A bone whose source is not observed says nothing about the
+   retarget. The recorder writes `null`, never `0`, so an unmeasurable bone can never read as perfect.
+4. **STALE frames are dropped.** When the pose stream stops, `ReleaseToRest` walks the avatar back to
+   rest while the recorded target stays frozen at the last packet — manufacturing a large error out of
+   the shutdown. A source value repeating for longer than `poseStaleSeconds` means no packet arrived;
+   it cannot mean a still subject, because RTMW3D's own estimation noise changes the value every
+   packet. **This was not hypothetical**: the first run reported forearm maxima of 121.6 deg and
+   155.4 deg and a ~5 % catastrophic tail on every arm. All of it was the release-to-rest tail. With
+   the 742 stale frames dropped the same recording reads max 59.3 / 71.9 deg and 0.0-0.1 % over 30
+   deg. Reporting that tail would have been a fourth wrong instrument this month.
+
+### What it measured (Run A: video.webm x4, subject at ~1.4 m, 5929 recorded / 742 stale / 5187 analysed)
+
+| bone | median | p90 | max | >10 deg | follow (rig swing / subject swing) |
+|---|---|---|---|---|---|
+| leftUpperArm | 0.4 | 1.0 | 4.0 | 0.0 % | 1.00 follows |
+| leftLowerArm | 1.0 | 3.8 | 59.3 | 0.7 % | 1.00 follows |
+| rightUpperArm | 0.6 | 1.3 | 27.6 | 0.0 % | 0.99 follows |
+| rightLowerArm | 1.1 | 3.4 | 71.9 | 1.0 % | 1.00 follows |
+| leftUpperLeg | 9.3 | 20.1 | 31.4 | 46.2 % | 1.50 OVER-DRIVEN |
+| leftLowerLeg | 14.8 | 28.9 | 42.1 | 70.5 % | 2.32 OVER-DRIVEN |
+| rightUpperLeg | 9.2 | 20.6 | 31.6 | 47.7 % | 1.40 |
+| rightLowerLeg | 15.1 | 35.8 | 45.5 | 71.0 % | 2.25 OVER-DRIVEN |
+| **trunk** | **16.7** | **19.3** | **22.1** | **100.0 %** | **0.27 UNDER-DRIVEN** |
+
+Run B (456.webm x5, subject at ~3 m) is weak evidence and is recorded as such: 80-90 % of its frames
+fall below the confidence floor and are excluded. It replicates the trunk result (median 15.2 deg,
+follow 0.41) and the leg over-drive (1.08-1.58); its arm numbers are dominated by source noise at
+3 m and should not be quoted as a retarget verdict.
+
+### The arms cannot validate the coordinate mapping, so the debug skeleton did
+
+`kalidokitAimArms` is ON: the arm retarget AIMS the bone along the same landmark pair the metric
+compares against, so a mapping error would cancel on both sides and near-zero arm error would prove
+nothing. The non-aimed channels (trunk, legs) are exactly the ones showing error — an uncomfortable
+coincidence that had to be ruled out.
+
+Cross-checked in WORLD space against `PoseDebugSkeleton`, which shares none of the driver's
+conditioning (`joints[i].localPosition = landmark.Position * scale`) and which the operator confirms
+tracks correctly:
+
+```text
+L-ARM   skeleton(12->14)=(-0.095, -0.977,  0.192)   avatar=( 0.111, -0.975,  0.192)
+        angle after the known X mirror = 0.9 deg          <- the mapping is right
+TRUNK   skeleton         =( 0.086,  0.989, -0.122)   avatar=( 0.000,  0.989,  0.148)
+        angle = 16.3 deg, X mirror changes nothing        <- confirms 16.7 deg independently
+```
+
+The two paths agree to within 0.4 deg on the trunk. The metric is validated.
+
+### What the trunk number actually is
+
+The bound VRM's REST hips->upperChest chain is itself `(0.0000, 0.9883, 0.1522)`, **8.76 deg off
+vertical**. That is the trunk channel's floor: a perfect retarget cannot report 0 deg. Across four
+snapshots the avatar's trunk sat **0.00 / 0.23 / 0.40 / 1.20 deg from that rest vector** while the
+subject's trunk moved through ±0.15 in both X and Z. The avatar's lateral component was
+**identically 0.000** every time.
+
+So the trunk is not merely biased — the LEAN channel does not move. Two mechanisms, both already in
+the code and both deliberate:
+
+* **Lateral lean is multiplied by zero.** `spineRoll = pose.Spine.z * torsoRoll`, and
+  `kalidokitBodyTorsoRoll = 0` (ADR-059 re-enabled PELVIC roll; trunk roll stayed off). Hence
+  X = 0.000 exactly.
+* **Sagittal lean is high-passed away.** `rawPitch = Atan2(trunk.z, vert)` is measured against an
+  ADAPTIVE baseline with `spineBendBaselineTau = 8 s`, and only the residual is applied. A SUSTAINED
+  lean decays to nothing as the baseline follows it; only fast transients survive. This is the
+  measured follow ratio of 0.27, and it is also the mechanism behind F-26 §4.2 "the avatar cannot
+  sit": a seated posture is precisely a sustained lean.
+
+Neither is a broken line of code. Both are decisions whose cost had never been measured. It is now.
+
+### What this metric does NOT measure — four limits, stated so they are not forgotten
+
+1. **Direction, not position.** Two poses can agree on every bone direction and still put the hands in
+   different places, because the avatar's bone lengths are its own (F-26 §3). Endpoint error is a
+   different measurement and is deliberately not conflated with this one.
+2. **It cannot see trunk YAW.** Axial twist leaves the hip->shoulder line unchanged. The 16.7 deg is
+   LEAN only, and says nothing about the torso-yaw blocker of F-16/F-17/F-18. In the sampled frames
+   the subject's own shoulder yaw varied only ~8 deg — inside the documented dead zone — so this clip
+   cannot test yaw in either direction.
+3. **The video path has no stereo.** Every joint's depth is synthesised (F-23). This exercises the
+   RETARGET, not the sensor. It has not yet been run on an OAK-D session.
+4. **"Frames" are RENDERED frames (~118 Hz), not independent samples.** 5187 rendered frames carry
+   ~1300 pose packets at 30 Hz. The percentages are over what was drawn — which is what the viewer
+   sees — but they are not 5187 independent observations.
+
+One avatar, one rig, two clips. Nothing here is a product claim.
+
+### Decision
+
+**Accept the instrument. Change nothing in the retarget on the strength of one session.** The
+measurement's purpose is to make the next retarget change PROVABLE rather than arguable; spending it
+immediately on an unvalidated fix would waste it. The baseline above is the before-number.
+
+**DO NOT**, on this evidence:
+- do not quote a single "fidelity score" — the analyser refuses to produce one, on purpose;
+- do not quote Run B's arm numbers as a retarget result (80-90 % of it is below the confidence floor);
+- do not treat the arms' ~1 deg as proof the retarget is right — for an AIMED channel that is close to
+  a tautology, and it is silent about the mapping (see the skeleton cross-check);
+- do not read the trunk result as a yaw result;
+- do not re-enable `kalidokitBodyTorsoRoll` or lengthen/shorten `spineBendBaselineTau` as a "quick
+  fix" — both are ADR-level decisions with their own reasons, and the cost of changing them has not
+  been measured either.
+
+---
+
+## ADR-063 — Tracking output is a SUGGESTION: a humanized skeleton layer sits between the filter
+## and the retarget, and it is measured to be latency-free on 99.6 % of poses
+
+**Date:** 2026-09-16  **Status:** ACCEPTED, DEFAULT ON. Video path only; never run on stereo.
+**Changes nothing** in the tracking, the filtering, P0-1, P1-1/2/3, Arm V2 or Torso V5/V6.
+
+### The gap
+
+The tracker reports 33 positions independently, every frame, with no knowledge that they belong to
+one body. Nothing in it prevents a forearm from changing length, an elbow from folding through
+itself, a knee from bending forwards, or a dropped joint from being reported AT THE ORIGIN — which in
+a hip-centred frame is the mid-hip. Downstream the avatar's bones are rigid and can only be AIMED,
+never placed (F-26 §3), so each of those becomes an aim error the retarget is structurally unable to
+absorb. P0-1's `LimbGate` holds a limb whose CONFIDENCE is low, and P1-3 refuses to interpolate
+across an invalid endpoint, but nothing anywhere asked whether the pose was a possible human shape.
+
+### Decision
+
+`VirtualMirror.Core.Humanize.HumanizedSkeleton`, injected in `AppBootstrap.UpdateTracking()` after
+filtering and after the debug skeleton is drawn, before anything retargets. Stage order is
+reject → clamp → rebuild structurally → enforce joint limits → blend re-acquisitions; rebuilding
+before rejecting would bake a bad sample into the bone lengths.
+
+Four constraints on the design, each protecting something that already works:
+
+1. **No smoothing filter.** The project owns three (the sidecar's One-Euro, P1-1's tracker, P1-3's
+   interpolation). A fourth would be latency for its own sake. Every stage here is either a per-frame
+   geometric projection — no memory, cannot lag — or fires only on a fault.
+2. **Confidence passes through untouched.** A held joint keeps the confidence it arrived with, so
+   P0-1 still sees an unobserved limb as unobserved. What changes is the consumers that read
+   landmarks with NO gate — the Kalidokit torso solve reads 11/12/23/24 with no validation at all.
+   Fabricating confidence here would silently disable a protection that works.
+3. **It does not own torso yaw.** V5's composition and V6's wrap guard own yaw POLICY (ADR-037 /
+   ADR-045). The twist limit is 90 deg — past any human spine — so it can only refuse the impossible.
+4. **It does not touch the root position.** Walk/jump translation has its own smoothing and its own
+   open question in F-21; conflating them would tangle two investigations.
+
+### Measured (video path, 2462 poses, both streams from the SAME frames in ONE pass)
+
+| | before | after |
+|---|---|---|
+| bone-length deviation, median | 0.0568 m | **0.0181 m** (−68 %) |
+| bone-length deviation, worst frame | 0.2526 m | 0.0520 m (−79 %) |
+| landmark jump, median | 0.0123 m | 0.0119 m (−3 %) |
+| landmark jump, p99 | 0.0708 m | 0.0844 m (**+19 % worse**) |
+| poses no STATEFUL stage touched | — | **99.6 %** |
+
+The p99 regression is real and is not dismissed: holding a bone at a fixed length moves its child
+whenever the tracker's length estimate wanders, and at the tail that costs more motion than it saves.
+
+**Tests:** 32/32 synthetic + fault-injection (C#, headless), 18/18 analyser self-test (Python).
+
+### THERE IS DELIBERATELY NO SHOULDER CONE
+
+A 175 deg cone about the trunk's down axis was implemented first and MEASURED firing on exactly one
+pose in a full arm sweep — arms straight overhead — moving the elbow 24 mm. That is the single pose
+F-26 §4.1 records as this project's worst avatar failure. A cone is the wrong shape for a joint that
+genuinely reaches 180 deg of elevation. The self-test carries arms-overhead as a permanent regression
+guard against re-adding one.
+
+Hyperextension is likewise NOT enforced: three landmarks give an interior angle that is
+direction-agnostic and capped at 180 deg, so a forearm bent 10 deg the wrong way and one bent 10 deg
+the right way are the same three distances. Only the knee case, whose sign against the body's forward
+axis is unambiguous, is corrected.
+
+### Two defects the measurement found that 32 passing tests did not
+
+Both were found by the NUMBERS, after the synthetic suite was green, and neither was visible by eye.
+
+* **The body-forward axis was ambiguous and the knee fix fired on 84 % of poses.** Forward was
+  `cross(hipLine, up)`, whose handedness depends on which side landmark 23 sits on — and the
+  mirror/swap conditioning happens LATER, inside the driver. With the sign inverted a normal leg is
+  reflected every frame. Now derived from the FEET (toes are anterior to heels on every human, and the
+  vector is ~0.12 m), falling back to the nose, and every front/back test STANDS DOWN when neither is
+  observed. Measured: 84.0 % -> 1.8 %.
+* **The velocity clamp was measuring its own output and fired on 80 % of poses.** `lastAccepted`
+  stored the REBUILT position, so the structural rebuild moved a joint, the next frame's step was
+  measured from the moved position, and the clamp fired on the difference it had created itself. The
+  clamp is a statement about the TRACKER, so it now compares tracker to tracker. Measured: 80.3 % ->
+  0.4 %, and the median landmark jump went from +269 % WORSE to −3 %.
+
+A third, in the instrument: the recorder's bone metric borrowed `BoneLengthCalibrator`, whose mirror
+lookup indexes a different bone table, and was averaging the shoulder span against a forearm. Fourth
+wrong instrument this month; caught because the number was implausible on the RAW stream too.
+
+### DO NOT, on this evidence
+
+- do not claim this improves the AVATAR. It measures the POSE. Whether a more human pose produces a
+  more human avatar is F-26 §11's metric's question, and running it with this layer on and off is the
+  obvious next measurement — it has not been done.
+- do not treat the video-path result as a sensor result. There is no stereo on that path (F-23), and
+  the rejection, hold and recovery stages had NOTHING to do on that clip: 0 holds, 0 NaN, 0
+  collapses, 0 impossible angles in either stream. They are demonstrated by fault injection, not by
+  this recording.
+- do not quote "99.6 % latency-free" as a latency measurement of the PRODUCT. It says this layer's
+  stateful stages were idle; it says nothing about the three smoothing stages upstream of it.
+- do not tighten the speed ceilings to make the clamp "do more". They are outlier rejectors set above
+  what a person in front of a mirror produces, on purpose. A ceiling a real arm can reach is a defect.
+
+### ADR-063 addendum (same day) — the avatar A/B was run, and F-27 does NOT improve avatar fidelity
+
+F-26's fidelity metric, ON vs OFF vs ON-with-bone-lengths-OFF, 4000+ live frames per arm, reference =
+the RAW tracked pose in every arm (`SetFidelityReference`, added for this and documented there as a
+deliberate handicap):
+
+```text
+ON vs OFF                0 bones better, 3 worse, 6 unchanged   (arms +1.0 to +1.3 deg)
+ON-no-bone-len vs OFF    0 better, 0 worse, 9 unchanged
+```
+
+**The protections are free and the cost is entirely bone-length normalisation** — isolated by
+measurement rather than inferred. The ~1 deg on the arms IS the correction: ARM V2 aims the bone at
+its input (follow 1.00 in every arm), so against a raw reference the error equals the distance the
+layer moved the arm. Whether that is an improvement cannot be decided by this metric, because
+deciding it would need a reference better than the raw tracker and none exists.
+
+**F-27 does not fix the leg over-drive** (follow 1.26-2.06 in all three arms). That belongs to the
+Kalidokit leg solve, not to the bone lengths fed into it.
+
+**Verdict: on CLEAN tracking the layer is neutral-to-slightly-negative for avatar fidelity.** Its
+value rests on the fault cases this clip does not contain. That is not a reason to switch it off - it
+buys the protections at no measured cost - but it IS a reason never to claim it improves the avatar.
+The next honest test is footage containing real dropouts and occlusion, or a live OAK-D session.
+
+**Also corrected here:** F-26 section 11.5's "the trunk lean channel is dead" was measured against a
+RUNTIME `kalidokitBodyTorsoRoll = 0`; the scene ships 1. Same clip, same subject trunk motion, freshly
+opened scene: trunk median **16.7 -> 7.3 deg**, follow **0.27 -> 1.29**. The trunk is not dead in the
+shipped configuration. This incidentally validates the standing `tasks.md` item "torsoRoll 0 -> 1
+applied, NOT validated".

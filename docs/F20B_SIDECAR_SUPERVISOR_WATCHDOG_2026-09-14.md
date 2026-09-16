@@ -1,8 +1,21 @@
 # F-20B — Sidecar Supervisor / Watchdog
 
 ```text
-VERDICT: PASS
+VERDICT: PASS  (restored 2026-09-14 after the SS14 empty-room defect was found and fixed)
 ```
+
+> **2026-09-14 — a production-blocking defect was found in this feature, offline, and fixed. See
+> §14.** In summary: readiness detection requires the sidecar's `frames=` line, but that line is
+> printed *after* the UDP send, so with **nobody in front of the camera** a perfectly healthy sidecar
+> printed no `frames=` line at all. The supervisor read that as a stuck startup and killed it every
+> 45 s, reaching `FAILED_PERMANENT` in about 4 minutes. An empty room is the normal state of an
+> unattended installation between visitors.
+>
+> The §17 matrix below passed originally because **a person was standing in front of the camera
+> throughout every one of those runs.** That is not a flaw in the tests' honesty — it is exactly the
+> blind spot that only shows up when nobody is available to stand there, which is what made today's
+> no-human session able to find it. Fixed in `wholebody_udp_sender.py`; the automated suite now
+> passes **6/6 with an empty room**, which it could not do before.
 
 The producer-side supervisor is implemented and validated against the full §17 test matrix, **A
 through H**, every one of them against real evidence — 6/6 automated scenarios (normal start, two
@@ -351,9 +364,118 @@ new (python-sidecar~/):
 
 Nothing in `Runtime/` changed. F-20A's `TrackingStreamHealth`/`GetStreamHealth()` already gives an
 operator everything needed to see recovery happen from the Unity side, and this task's own diagnostics
-file (§21 of the brief) is explicitly scoped as a file, not a dashboard. Because nothing in `Runtime/`
-changed, the 124-test EditMode suite is not expected to be affected and was not re-run (it requires
-closing the Unity Editor for ~3 minutes in batch mode); happy to run it if asked.
+file (§21 of the brief) is explicitly scoped as a file, not a dashboard.
+
+> **EditMode suite update (2026-09-14):** this paragraph previously said the 124-test suite "was not
+> re-run" because nothing in `Runtime/` changed. It has now been run anyway, via a reflection runner
+> inside the live Editor rather than batch mode (which would require closing the Editor): **170/170
+> pass, 0 failures.** The "124" figure was itself an undercount — it counted the 124 parameterless
+> `[Test]` methods and omitted 46 `[TestCase]` expansions. 124 + 46 = 170 resolved test cases.
+
+---
+
+## 14. The empty-room defect (found 2026-09-14, offline, with no person available)
+
+The one failure mode the entire §17 matrix could not see, because every run in it had a person
+standing at the camera.
+
+**Symptom.** With the OAK-D attached, healthy, and nobody in front of it:
+
+```text
+[18:46:07] SIDECAR START pid=24460 run=1
+[18:46:53] STARTUP STUCK pid=24460 not ready after 45s - killing for restart
+[18:46:53] SIDECAR EXIT pid=24460 rc=1 uptime=45.4s cause=startup_stuck
+[18:46:53] RESTART scheduled delay=1s
+[18:46:54] SIDECAR START pid=39728 run=2      ... and so on, forever
+```
+
+The sidecar was completely healthy in every run — it opened the device, read intrinsics, configured
+portrait and stereo, and printed its full banner including `F-21 target ownership ON` and `F-22 pose
+validation ON`. It was killed anyway, on a 45 s cycle, and would reach `FAILED_PERMANENT` after 5
+restarts (~4 minutes), after which it retries only every 60 s and each retry fails the same way.
+
+**Root cause.** Readiness is "the SID banner, then the first `frames=` line" (`SID_MARKER` /
+`FRAME_MARKER`). That contract is sound. What broke it is *where* the sidecar prints that line:
+`wholebody_udp_sender.py`'s periodic status print sits **after** `build_body_landmarks` and the UDP
+send, so every `continue` above it skips the heartbeat entirely — the "no hip depth" path, and, since
+F-21 landed, any frame ownership withholds. `frames` itself increments correctly at the top of the
+loop; only the *printing* of it was gated behind having a subject.
+
+So the heartbeat was answering "is a person being tracked?" while the supervisor was asking "is the
+camera loop alive?". Those are different questions, and conflating them makes an empty room
+indistinguishable from a dead pipeline.
+
+**Fix**, in the sidecar rather than the watchdog, because that is where the defect is: an idle
+liveness line emitted when the detailed one has been starved for 3 s (longer than its own 2 s
+cadence, so it never doubles up during normal tracking):
+
+```text
+[wb] frames=76 sent=0 idle - camera loop alive, no pose emitted (no subject / withheld) fps~25.3 age=30ms stale=17
+```
+
+It carries `frames=`, so the existing readiness contract is satisfied unchanged, and it is more
+informative than the old behaviour ever was: an operator can now tell *camera healthy, nobody there*
+from *camera dead* at a glance, which was previously impossible.
+
+**Verification, same conditions, real hardware, empty room:**
+
+```text
+[18:50:46] SIDECAR START pid=40328 run=1
+[18:50:53] SIDECAR READY sid=1a61dbe970d3 pid=40328 elapsed=6.777s
+   ... 72.7 s continuous uptime, RestartCount=0, 23 idle heartbeat lines, no person present
+```
+
+And the automated suite, which previously could not pass without a human in frame:
+
+```text
+before the fix (empty room)          4/6   A_NORMAL_START FAIL, B_FORCED_KILL FAIL
+after the fix  (empty room)          6/6   A ready=7.4s; B kill#1 recovered 9.2s, kill#2 10.1s,
+                                            each with a new session id
+```
+
+**Why this was invisible until now.** It needs the *absence* of a person to reproduce — the opposite
+of what every previous live session had. It is a good argument for keeping a no-human offline pass in
+the routine rather than treating hardware sessions as strictly better.
+
+---
+
+---
+
+## 15. Deployment hardening verification (2026-09-14) — 35/35 PASS
+
+`f20b_deployment_verify.py` covers what `f20b_failure_tests.py` does not: the seams between the
+supervisor and the machine it has to survive on.
+
+```text
+1 run_supervisor.bat        the command it actually runs (not its prose) launches the supervisor;
+                            every flag it passes still exists in the supervisor's CLI; its default
+                            model path resolves; it cds to %~dp0 so a logon launch has the right cwd
+2 logon registration        the documented schtasks command is well-formed, points at the same .bat
+                            verified in check 1, and that path exists. NOT registered on this machine
+                            and deliberately NOT executed by the script - a persistent system change
+                            stays an operator action, which is this report's own SS12 position
+3 duplicate guard           second supervisor aborts: "another supervisor already owns lock_port=8907"
+4 diagnostics after logon    a seeded previous-boot supervisor_state.json is fully overwritten - no
+                            stale sid, no stale RestartCount; all 9 operator fields present;
+                            supervisor.log + supervisor_events.jsonl both present for post-mortem
+5 no duplicate sidecars     exactly one producer tree after a clean start, after a forced-kill
+                            restart, and none at all after the supervisor stops
+6 F-20A reconnect           three real producer launches -> three distinct 12-hex session ids
+```
+
+**One operational fact worth recording, found while writing check 5.** This venv's
+`.venv\Scripts\python.exe` is a **launcher shim** that spawns the real interpreter
+(`C:\Program Files\Python310\python.exe`) as its own child, so a single healthy sidecar is always
+**two** python processes: the shim the supervisor tracks as `SidecarPid`, plus its child. An operator
+running `tasklist | findstr python` will see two and should not read that as a duplicate. It is also
+the concrete reason the existing `taskkill /T` is load-bearing rather than defensive: killing the
+shim alone would orphan the real interpreter, which would keep holding UDP 8899 and the camera.
+
+The F-20A reconnect claim was additionally closed across the language boundary rather than by
+inspection: the three real session ids above were fed to the **real shipping C#**
+`TrackingStreamHealth` in the live Editor — `FirstSession` once, `NewSession` on each restart, 117
+`SameSession`, and a late straggler from the long-dead first producer correctly classified
+`OldSession` rather than re-adopted (which would have flushed a healthy buffer).
 
 ---
 
@@ -379,9 +501,18 @@ caught anyway), a cold start with the camera already absent, and Unity being sto
 while the supervisor/sidecar stayed alive throughout, with the avatar recovering live and unattended in
 every case - no Unity restart, no scene reload, no operator shell intervention.
 
+EMPTY-ROOM DECISION (2026-09-14):
+A liveness heartbeat must report that the CAMERA LOOP is alive, which is not the same question as
+whether a SUBJECT is present. The sidecar's frames= line was gated behind a successful pose emission,
+so an empty room - the normal state of an unattended installation - read as a stuck startup and the
+supervisor killed a healthy sidecar every 45 s, reaching FAILED_PERMANENT in ~4 minutes. Fixed in the
+sidecar (idle heartbeat), not in the watchdog, because the watchdog's contract was never wrong. The
+automated suite now passes 6/6 with nobody in front of the camera, which it could not do before.
+
 NEXT ENGINEERING ACTION:
 Consider lowering --failed-permanent-retry (currently 60s) if this installation expects camera outages
 to be brief, since it is now the dominant term in worst-case recovery time (SS13); optionally register
-run_supervisor.bat with Task Scheduler for logon-time auto-start (SS12, not done by this task); then
-return to F-21 (single-person lock / target ownership).
+run_supervisor.bat with Task Scheduler for logon-time auto-start (SS12, verified statically in
+f20b_deployment_verify.py check 2, still deliberately not automated); then return to F-21
+(single-person lock / target ownership).
 ```

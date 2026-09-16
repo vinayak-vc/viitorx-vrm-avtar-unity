@@ -1,9 +1,11 @@
 {
-    "name": "VirtualMirror.Diagnostics",
-    "rootNamespace": "VirtualMirror.Diagnostics",
+    "name": "VirtualMirror.SkeletonShow",
+    "rootNamespace": "VirtualMirror.SkeletonShow",
     "references": [
         "VirtualMirror.Core",
-        "VirtualMirror.Retargeting"
+        "VirtualMirror.Tracking",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

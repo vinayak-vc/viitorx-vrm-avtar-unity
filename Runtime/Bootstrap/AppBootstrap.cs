@@ -97,6 +97,28 @@ namespace VirtualMirror.App {
                  "collapsing toward the origin on an invalid/occluded joint. 0 disables the gate.")]
         [SerializeField] private float limbConfidenceThreshold = 0.3f;
 
+        [Header("Humanized Skeleton (F-27)")]
+        [Tooltip("F-27: run the tracked pose through the humanized skeleton before the retarget sees it - " +
+                 "fixed bone lengths, anatomical joint limits, teleport rejection, per-joint hold and a " +
+                 "smooth re-acquire. Tracking data is treated as a SUGGESTION. Off = the raw filtered " +
+                 "pose goes straight to the retarget, which is the pre-F-27 behaviour and the A/B baseline.")]
+        [SerializeField] private bool useHumanizedSkeleton = true;
+        [Tooltip("F-27: 'was this joint emitted at all', NOT 'is it good enough to drive a limb'. The " +
+                 "sidecar zero-fills a dropped joint to confidence 0. The quality question belongs to " +
+                 "P0-1's limbConfidenceThreshold downstream; setting this to the same value would preempt " +
+                 "a gate that already works.")]
+        [SerializeField] private float humanizedConfidenceFloor = 0.05f;
+        [Tooltip("F-27: seconds to ease a returning joint back in. Exists so a re-acquire does not SNAP, " +
+                 "not to smooth - longer reads as the avatar lagging its own tracking on every recovery.")]
+        [SerializeField] private float humanizedRecoverSeconds = 0.15f;
+        [Tooltip("F-27 A/B: reject/clamp joints that move faster than their class can.")]
+        [SerializeField] private bool humanizeVelocity = true;
+        [Tooltip("F-27 A/B: hold every bone at its calibrated length (the learned skeleton).")]
+        [SerializeField] private bool humanizeBoneLengths = true;
+        [Tooltip("F-27 A/B: enforce anatomical joint limits (elbow/knee hinge, hip cone, neck cone, " +
+                 "torso twist, knees not bending forwards).")]
+        [SerializeField] private bool humanizeAngles = true;
+
         [Header("Pose Mapping")]
         [SerializeField] private bool poseFlipX = true;
         [SerializeField] private bool poseFlipY = true;
@@ -170,6 +192,25 @@ namespace VirtualMirror.App {
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
         private KalidokitControlRigDriver kalidokitControlRig;
+        private VirtualMirror.Core.Humanize.HumanizedSkeleton humanizedSkeleton;
+        private PoseFrame lastHumanizedFrame;
+        private double lastHumanizeTimestamp;
+
+        /// <summary>
+        /// DIAG-ONLY (F-27): called once per applied frame with (raw filtered pose, humanized pose, dt).
+        /// Null unless a recorder is attached, and invoked only when non-null, so the production path
+        /// pays one null check. It exists so BEFORE and AFTER can be measured from the SAME input in
+        /// ONE pass — running the session twice would compare two different takes and call the
+        /// difference an improvement.
+        /// </summary>
+        public System.Action<PoseFrame, PoseFrame, float> HumanizeTap;
+
+        /// <summary>DIAG-ONLY (F-27): the live layer, for its stats and calibration readout.</summary>
+        public VirtualMirror.Core.Humanize.HumanizedSkeleton HumanizedLayer {
+            get {
+                return humanizedSkeleton;
+            }
+        }
         private PoseDebugSkeleton debugSkeleton;
         private System.IO.StreamWriter modelLog;
         private bool modelLogFailed;
@@ -284,6 +325,13 @@ namespace VirtualMirror.App {
                     if (kalidokitControlRig != null) {
                         kalidokitControlRig.ResetHoldState();
                     }
+                    if (humanizedSkeleton != null) {
+                        // F-27: the stream died, so the learned skeleton and every held direction belong
+                        // to a session that is over. Carrying them into the next one would dress the next
+                        // person in the last person's bone lengths.
+                        humanizedSkeleton.Reset();
+                        lastHumanizedFrame = null;
+                    }
                     logService.Log(LogLevel.Warning,
                         "F-20A: tracking stream stale beyond the failsafe threshold - releasing the avatar "
                         + "to its neutral pose (the last tracked pose is NOT held indefinitely).");
@@ -373,7 +421,52 @@ namespace VirtualMirror.App {
                     }
                     filtered = lastFilteredFrame;
                 }
+                // The debug skeleton is drawn from the RAW filtered pose, deliberately and permanently.
+                // Its whole diagnostic value is that it shows what the TRACKER said, so that "the
+                // skeleton is right and the avatar is not" stays a meaningful sentence (F-26). Drawing
+                // the humanized pose here would make the skeleton agree with the avatar by construction
+                // and destroy the only independent reference this project has.
                 RenderDebugSkeleton(filtered);
+
+                // ---- F-27 HUMANIZED SKELETON -------------------------------------------------------
+                // tracking -> filtering -> [HERE] -> retarget. Fixed bone lengths, anatomical joint
+                // limits, teleport rejection, per-joint hold in LOCAL space and a smooth re-acquire.
+                // Confidence passes through untouched, so P0-1's LimbGate downstream still sees an
+                // unobserved limb as unobserved and holds its rotation exactly as before; what changes
+                // is that the consumers which read landmarks WITHOUT a gate - the Kalidokit torso solve
+                // reads 11/12/23/24 with no validation at all - now get a possible body instead of a
+                // zero-filled one.
+                //
+                // RUN ONCE PER POSE, NOT ONCE PER RENDER FRAME. TryGetLatestFrame returns the SAME
+                // cached pose on every render tick, and the editor renders at ~100 fps over a ~30 Hz
+                // stream — so processing per tick would run this layer ~3x per pose with dt = the
+                // RENDER delta. Its temporal stages would then advance three times per observation: a
+                // velocity-clamped joint would creep toward its target between poses, which MEASURED as
+                // the humanized stream jumping MORE between frames than the raw one (0.046 m vs
+                // 0.014 m) — the exact opposite of the layer's purpose. This is the same trap the
+                // One-Euro filter above documents in its M10 note, and it is fixed the same way: key
+                // off the timestamp and use the INTER-POSE delta.
+                PoseFrame humanized = filtered;
+                if (useHumanizedSkeleton && humanizedSkeleton != null) {
+                    double poseTimestamp = filtered.TimestampSeconds;
+                    if (lastHumanizedFrame == null || poseTimestamp != lastHumanizeTimestamp) {
+                        float poseDelta = deltaSeconds;
+                        if (lastHumanizedFrame != null && poseTimestamp > lastHumanizeTimestamp) {
+                            poseDelta = (float)(poseTimestamp - lastHumanizeTimestamp);
+                        }
+                        humanizedSkeleton.SetTuning(humanizedConfidenceFloor, humanizedRecoverSeconds);
+                        humanizedSkeleton.SetStages(humanizeVelocity, humanizeBoneLengths, humanizeAngles);
+                        lastHumanizedFrame = humanizedSkeleton.Process(filtered, poseDelta);
+                        lastHumanizeTimestamp = poseTimestamp;
+                        if (HumanizeTap != null) {
+                            // Tapped inside the new-pose branch on purpose: a recording keyed to render
+                            // frames would count the same pose several times and report a jump rate
+                            // that belongs to the display, not the tracker.
+                            HumanizeTap(filtered, lastHumanizedFrame, poseDelta);
+                        }
+                    }
+                    humanized = lastHumanizedFrame;
+                }
                 if (kalidokitBodyActive) {
                     // ADR-022 whole-body: the normalized control rig owns the entire skeleton, so release
                     // FK + IK (they must not write raw bones the control rig would overwrite each Process).
@@ -382,7 +475,7 @@ namespace VirtualMirror.App {
                     if (ikSolver != null && ikSolver.IsBound) {
                         ikSolver.SetActive(false);
                     }
-                    if (!IsPoseStale(filtered)) {
+                    if (!IsPoseStale(humanized)) {
                         kalidokitControlRig.SetTuning(kalidokitBodyEulerSigns, kalidokitBodyFlipQuat, kalidokitBodyLerp, kalidokitBodyLegs, kalidokitBodyMirror, kalidokitBodyTorsoRoll);
                         kalidokitControlRig.SetSpineBend(kalidokitSpineBendScale);
                         kalidokitControlRig.SetSpineBendDynamics(kalidokitSpineBendBaselineTau);
@@ -390,7 +483,13 @@ namespace VirtualMirror.App {
                         kalidokitControlRig.SetLimbConfidence(limbConfidenceThreshold); // P0-1 live-tunable gate
                         kalidokitControlRig.SetUseAimArms(kalidokitAimArms);            // ARM RETARGET V1 (live A/B)
                         kalidokitControlRig.SetDirectionTrace(kalidokitDirectionTrace, kalidokitDirectionTraceEveryFrames);
-                        kalidokitControlRig.Apply(filtered);
+                        // F-26 + F-27: the fidelity metric measures against the RAW tracked pose, not
+                        // against whatever drove the avatar. With the humanized layer on, those differ -
+                        // and scoring the avatar against its own input would flatter that layer by
+                        // construction. Set before Apply so a sample taken this frame sees this frame's
+                        // reference.
+                        kalidokitControlRig.SetFidelityReference(filtered);
+                        kalidokitControlRig.Apply(humanized);
                     }
                 } else {
                     // FK and IK are mutually exclusive on the arm/leg bones: when the IK solver is active and
@@ -404,10 +503,10 @@ namespace VirtualMirror.App {
                     if (ikSolver != null && ikSolver.IsBound) {
                         ikSolver.SetActive(useIkDriver);
                     }
-                    if (!IsPoseStale(filtered)) {
-                        retargeter.Apply(filtered, retargetMinConfidence, retargetExitConfidence);
+                    if (!IsPoseStale(humanized)) {
+                        retargeter.Apply(humanized, retargetMinConfidence, retargetExitConfidence);
                         if (ikActive) {
-                            ikSolver.Apply(filtered, retargetMinConfidence);
+                            ikSolver.Apply(humanized, retargetMinConfidence);
                         }
                     }
                 }
@@ -727,6 +826,9 @@ namespace VirtualMirror.App {
             retargeter = new HumanoidPoseRetargeter();
             kalidokitControlRig = new KalidokitControlRigDriver(); // ADR-022: whole-body via normalized control rig
             kalidokitControlRig.SetLogger(logService); // P0-1: sparse limb hold/reacquire diagnostics
+            // F-27: the humanized skeleton sits between filtering and retargeting. It owns no smoothing
+            // and no confidence - it makes the POSE anatomically possible before anything solves from it.
+            humanizedSkeleton = new VirtualMirror.Core.Humanize.HumanizedSkeleton();
             if (useIkDriver) {
                 EnsureIkSolver();
             }
