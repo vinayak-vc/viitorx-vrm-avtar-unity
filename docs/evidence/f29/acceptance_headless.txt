@@ -1,0 +1,55 @@
+=== F-29 ACCEPTANCE (headless, real provider, real packets) ===
+
+--- PURE LOGIC ---
+  PASS  presence does not trigger on 0.2 s of tracking   still attract, needs 0.4 s
+  PASS  presence triggers after the enter delay   live
+  PASS  a 2 s dropout does NOT dump a present visitor back to attract   still live after 2.0 s absent (leave is 3 s)
+  PASS  presence releases after the leave delay   back to attract
+  PASS  attract fills exactly the 17 joints it models   17 joints, unmodelled slots left unobserved
+  PASS  attract includes the four foot contacts   heels and toes present
+  PASS  attract actually animates   wrist travels 0.20 m
+  PASS  attract produces a floor   floor y 0.000
+  PASS  attract head stays at human height   head y 1.66 - 1.68 m
+  PASS  attract carries no telemetry   nothing to report about a synthetic body
+  PASS  grounding settles the floor onto the grid   max |floor| over the last 10 s = 0.3 mm
+  PASS  grounding does not ring or overshoot downward   most negative floor after settling begins = 0.0 mm
+  PASS  implausible hand refused   palm 360 mm rejected
+  PASS  touching fingertips read as a pinch   gap 7 mm = 0.08 palms
+  PASS  gesture verdict is scale invariant   same pinch at 0.5x scene scale, palm still 90 mm
+
+--- LIVE WIRE  (UDP 8899, 20 s) ---
+render frames 810, valid poses 742, datagrams received 431, parse errors 0, lastSeq 66212893
+  PASS  trust channel on every valid frame   742/742
+  PASS  per-joint states decoded   NoTracker=15582  Tracked=8757  Weak=136  Predicted=11
+  PASS  exactly 21 joints report no tracker   21.00 per frame
+  PASS  ownership state present   LOCKED=742
+  PASS  depth provenance honest on a monocular source   src present on 742/742 frames, measured joints total 0 (expected 0)
+  PASS  end-to-end latency plausible (fresh frames only)   mean 53.4 ms, max 493.5 ms
+  PASS  floor estimated on every frame (feet are on the wire)   742/742
+  PASS  floor estimate stable (<100 mm sd)   sd 27.8 mm, mean y -0.153 m
+  PASS  foot contact detected at least once   220/742 frames had a planted foot
+  PASS  camera depth reconstructed in a sane range   mean hip depth 1.43 m
+  PASS  presence gate went live   1 enter, 0 leave transitions
+
+  HANDS f29_probe: 862 observations, 99.1% plausible, 8 rejected, palm mean 84 mm, pinch on 227, finger counts [2,22,29,64,201,536]
+  PASS  hand observations found in f29_probe   862 hands
+  PASS  every hand is either accepted or explicitly rejected   854 + 8 = 862
+  HANDS f29_probe456: 494 observations, 59.9% plausible, 198 rejected, palm mean 110 mm, pinch on 144, finger counts [9,35,32,68,69,83]
+  PASS  hand observations found in f29_probe456   494 hands
+  PASS  every hand is either accepted or explicitly rejected   296 + 198 = 494
+
+provider log:
+    Info: OAK-D UDP pose provider listening on 127.0.0.1:8899 (run the Python sidecar udp_pose_sender.py).
+    Info: OAK-D UDP rx=1 parseErr=0 (port 8899).
+    Info: TrackingState NoStream -> Live  (sid=vid6aaa8d04 acceptedSeq=66212463 receivedSeq=66212463 sinceAccepted=1ms transitions=0)
+    Info: OAK-D UDP rx=2 parseErr=0 (port 8899).
+    Info: OAK-D UDP rx=3 parseErr=0 (port 8899).
+    Info: OAK-D UDP rx=90 parseErr=0 (port 8899).
+    Warning: OAK-D UDP: 150+ datagrams with no lh/rh — fingers will not track. Run wholebody_udp_sender.py (not the deprecated blazepose sender) and keep hands in view.
+    Info: OAK-D UDP rx=180 parseErr=0 (port 8899).
+    Info: OAK-D UDP rx=270 parseErr=0 (port 8899).
+    Info: OAK-D UDP rx=360 parseErr=0 (port 8899).
+    Warning: TrackingState Live -> StaleHold  (sid=vid6aaa8d04 acceptedSeq=66212893 receivedSeq=66212893 sinceAccepted=503ms transitions=0)
+    Info: [P1-3] poseBufferDepth=16 interpDelayMs=40.0 sourceSeqA=66212893 sourceSeqB=66212893 alpha=1.00 packetAgeMs=535.0 interp=549 clampNewest=50 dupRej=0 oooRej=0
+
+=== ALL CHECKS PASSED ===

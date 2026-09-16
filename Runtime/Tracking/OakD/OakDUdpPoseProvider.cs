@@ -23,6 +23,18 @@ namespace VirtualMirror.Tracking.OakD {
     /// <c>lm</c> is JointId order (index maps 1:1); optional <c>lh</c>/<c>rh</c> feed the companion
     /// <see cref="OakDUdpHandProvider"/>. Landmarks are hip-relative metres run through the shared
     /// <see cref="PoseSpaceConverter"/>. Reads happen on a background thread; frames are double-buffered.
+    ///
+    /// F-29 adds three OPTIONAL fields — <c>"st"</c> (per-joint P1-1/P1-4 tracking state), <c>"own"</c>
+    /// (F-21 ownership) and <c>"lat"</c> (sidecar-side latency, ms) — surfaced through
+    /// <see cref="TryGetTelemetry"/> together with the long-present <c>src</c> depth provenance. They
+    /// are read-only: nothing here or downstream changes behaviour because of them. A sidecar that
+    /// omits them is reported as not having a trust channel rather than as an unhealthy stream.
+    /// <see cref="TryGetRawHands"/> publishes the 21 landmarks per hand that were previously read,
+    /// reduced to five curls, and discarded.
+    ///
+    /// Feet need no special handling and never did: the sidecar maps heels to JointId 29/30 and big
+    /// toes to 31/32 inside <c>lm</c>, so they arrive with the rest of the body. Measured coverage on
+    /// both F-29 regression clips was 431/431 and 330/330 frames.
     /// </summary>
     public sealed class OakDUdpPoseProvider : IBodyTrackingProvider {
         private const int NumKeypoints = 33;
@@ -69,6 +81,17 @@ namespace VirtualMirror.Tracking.OakD {
         private volatile HandFrame mainHandFrame;
         private bool hasNewHand;
         private bool hasAnyHand;
+        // F-29 trust channel + raw hand landmarks. Both are read-only echoes of data already in the
+        // datagram, published on the side so neither PoseFrame nor HandFrame grows a field for them.
+        // Snapshot-copied under `gate` rather than reference-swapped: unlike the pose, a consumer may
+        // hold these across frames (a HUD draws the same telemetry for several render frames while
+        // one datagram is current), and a swapped reference would be rewritten underneath it.
+        private readonly TrackingTelemetry workerTelemetry = new TrackingTelemetry();
+        private readonly TrackingTelemetry mainTelemetry = new TrackingTelemetry();
+        private readonly RawHandFrame workerRawHands = new RawHandFrame();
+        private readonly RawHandFrame mainRawHands = new RawHandFrame();
+        private bool hasAnyTelemetry;
+        private bool trustChannelWarned;
         private long framesReceived;
         private long parseErrors;
         private bool handsSeen;      // M17: warn once if the stream never carries lh/rh (old body-only sender?)
@@ -399,6 +422,60 @@ namespace VirtualMirror.Tracking.OakD {
             return available;
         }
 
+        /// <summary>
+        /// F-29 — what the pipeline believes about the pose it last sent. Copies into
+        /// <paramref name="target"/> rather than handing out the live instance, because a HUD holds
+        /// its telemetry across several render frames while one datagram stays current, and the
+        /// receive thread would otherwise rewrite it mid-draw.
+        ///
+        /// Returns false until the first datagram arrives. It returning TRUE says only that a
+        /// datagram was parsed — whether that sidecar reports its state at all is
+        /// <see cref="TrackingTelemetry.HasTrustChannel"/>, which is a separate question.
+        ///
+        /// <paramref name="target"/>'s AgeSeconds is filled here: telemetry describes the newest
+        /// RECEIVED datagram while the drawn pose is P1-3's interpolation a presentation delay
+        /// behind it, and a consumer showing both together should be able to see that gap.
+        /// </summary>
+        public bool TryGetTelemetry(TrackingTelemetry target) {
+            if (target == null) {
+                return false;
+            }
+            bool available;
+            lock (gate) {
+                available = hasAnyTelemetry;
+                if (available) {
+                    mainTelemetry.CopyTo(target);
+                }
+            }
+            if (available) {
+                // Epoch against epoch. The sidecar runs on this machine so its time.time() and
+                // DateTimeOffset.UtcNow are the same clock; the provider's own arrival stamp is a
+                // Stopwatch since start and must NEVER be mixed in here (see TrackingTelemetry).
+                // A sender that omits `t` leaves SendEpochSeconds at 0, which would make the age the
+                // entire epoch, so that case reports no age at all rather than a vast number.
+                if (target.SendEpochSeconds > 0.0) {
+                    double now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+                    target.AgeSeconds = (float)(now - target.SendEpochSeconds);
+                } else {
+                    target.AgeSeconds = -1f;
+                }
+            }
+            return available;
+        }
+
+        /// <summary>F-29 — the 21 landmarks per hand, in pose space. Copied for the same reason as
+        /// <see cref="TryGetTelemetry"/>. Check the frame's per-hand tracked flags: an absent hand is
+        /// reported as untracked rather than as a hand at the origin.</summary>
+        public bool TryGetRawHands(RawHandFrame target) {
+            if (target == null) {
+                return false;
+            }
+            lock (gate) {
+                mainRawHands.CopyTo(target);
+            }
+            return target.LeftTracked || target.RightTracked;
+        }
+
         public void Dispose() {
             Teardown();
         }
@@ -491,6 +568,7 @@ namespace VirtualMirror.Tracking.OakD {
                 target.MarkInvalid(timestampSeconds);
             }
 
+            ParseTelemetry(root, landmarks, seq, timestampSeconds, sendEpoch);
             ParseHands(root, timestampSeconds);
             // P1-3: buffer this pose on the RECEIVE clock (Unity's own epoch, so no sender-skew
             // assumption). Duplicate / out-of-order / backwards-timestamp packets are rejected inside.
@@ -616,9 +694,102 @@ namespace VirtualMirror.Tracking.OakD {
             return Quaternion.Slerp(smoothed, target, t);
         }
 
+        // ---- F-29 TRUST CHANNEL -----------------------------------------------------------------
+        // `st` (per-joint P1-1/P1-4 state), `src` (per-joint depth provenance), `own` (F-21 lock) and
+        // `lat` (sidecar-side latency). Every one is OPTIONAL: an older sidecar simply omits them and
+        // the flags on TrackingTelemetry say so, which is a different and more useful statement than
+        // reporting thirty-three untracked joints. Nothing here feeds tracking behaviour.
+        private void ParseTelemetry(JObject root, JArray landmarks, long seq, double timestampSeconds,
+                                    double sendEpoch) {
+            workerTelemetry.Reset();
+            workerTelemetry.Seq = seq;
+            workerTelemetry.ArrivalSeconds = timestampSeconds;
+            workerTelemetry.SendEpochSeconds = sendEpoch;
+
+            JArray states = root["st"] as JArray;
+            if (states != null) {
+                workerTelemetry.HasTrustChannel = true;
+                int n = states.Count < TrackingTelemetry.JointCount ? states.Count : TrackingTelemetry.JointCount;
+                int i = 0;
+                while (i < n) {
+                    workerTelemetry.SetState(i, ToJointTrackState(states[i].Value<int>()));
+                    i = i + 1;
+                }
+            }
+
+            JArray src = root["src"] as JArray;
+            if (src != null) {
+                workerTelemetry.HasDepthChannel = true;
+                int n = src.Count < TrackingTelemetry.JointCount ? src.Count : TrackingTelemetry.JointCount;
+                int i = 0;
+                while (i < n) {
+                    workerTelemetry.SetDepthMeasured(i, src[i].Value<int>() != 0);
+                    i = i + 1;
+                }
+            }
+
+            // Confidence is carried per landmark, not in a separate field — read it back out of the
+            // pose so a HUD has one place to ask rather than re-parsing `lm`.
+            if (landmarks != null) {
+                int n = landmarks.Count < TrackingTelemetry.JointCount ? landmarks.Count : TrackingTelemetry.JointCount;
+                int i = 0;
+                while (i < n) {
+                    JArray point = landmarks[i] as JArray;
+                    if (point != null && point.Count >= 4) {
+                        workerTelemetry.SetConfidence(i, point[3].Value<float>());
+                    }
+                    i = i + 1;
+                }
+            }
+
+            workerTelemetry.OwnershipState = root["own"] != null ? root["own"].Value<string>() : null;
+            workerTelemetry.SidecarLatencyMs = root["lat"] != null ? root["lat"].Value<float>() : -1f;
+
+            if (!workerTelemetry.HasTrustChannel && !trustChannelWarned
+                    && Interlocked.Read(ref framesReceived) >= 150) {
+                trustChannelWarned = true;
+                logService.Log(LogLevel.Info,
+                    "OAK-D UDP: 150+ datagrams with no 'st' field - this sidecar predates the F-29 "
+                    + "trust channel, so per-joint tracking state is unavailable and any HUD will "
+                    + "show it as UNREPORTED rather than guessing.");
+            }
+
+            lock (gate) {
+                workerTelemetry.CopyTo(mainTelemetry);
+                hasAnyTelemetry = true;
+            }
+        }
+
+        // Out-of-range values map to NoTracker rather than throwing: a future sidecar adding a sixth
+        // state must degrade to "we do not know" here, not take the receive thread down.
+        private static JointTrackState ToJointTrackState(int raw) {
+            if (raw == 0) {
+                return JointTrackState.Tracked;
+            }
+            if (raw == 1) {
+                return JointTrackState.Weak;
+            }
+            if (raw == 2) {
+                return JointTrackState.Predicted;
+            }
+            if (raw == 3) {
+                return JointTrackState.Lost;
+            }
+            if (raw == 4) {
+                return JointTrackState.Recovering;
+            }
+            return JointTrackState.NoTracker;
+        }
+
         private void ParseHands(JObject root, double timestampSeconds) {
             Vector3[] left = ReadHand(root["lh"] as JArray);
             Vector3[] right = ReadHand(root["rh"] as JArray);
+            // F-29: publish the positions too, not just the curls derived from them. Converted through
+            // the SAME PoseSpaceConverter as the body, so a fingertip and a wrist land in one
+            // coherent space — without that a hand drawn next to the skeleton is mirrored or inverted
+            // relative to the arm it belongs to. The curl maths below is angle-based and unaffected
+            // by which space it runs in, so it keeps reading the raw points.
+            PublishRawHands(left, right, timestampSeconds);
             if (left == null && right == null) {
                 workerHandFrame.MarkInvalid(timestampSeconds);
                 return;
@@ -670,6 +841,33 @@ namespace VirtualMirror.Tracking.OakD {
             }
             workerHandFrame.SetWristRotations(smoothedLeftWrist, lTracked, smoothedRightWrist, rTracked);
             workerHandFrame.SetMeta(timestampSeconds, lTracked || rTracked);
+        }
+
+        // F-29: convert both hands into pose space and snapshot them for consumers that need the
+        // positions rather than the curls. A null hand means the sidecar declined to send it (audit
+        // H7: an unconfident hand is omitted, never sent as noise), which is published as untracked.
+        private void PublishRawHands(Vector3[] left, Vector3[] right, double timestampSeconds) {
+            workerRawHands.MarkInvalid(timestampSeconds);
+            if (left != null) {
+                workerRawHands.SetHand(true, ConvertHand(left));
+            }
+            if (right != null) {
+                workerRawHands.SetHand(false, ConvertHand(right));
+            }
+            workerRawHands.SetMeta(timestampSeconds);
+            lock (gate) {
+                workerRawHands.CopyTo(mainRawHands);
+            }
+        }
+
+        private Vector3[] ConvertHand(Vector3[] points) {
+            Vector3[] converted = new Vector3[RawHandFrame.LandmarkCount];
+            int i = 0;
+            while (i < RawHandFrame.LandmarkCount && i < points.Length) {
+                converted[i] = converter.ToUnity(points[i].x, points[i].y, points[i].z);
+                i = i + 1;
+            }
+            return converted;
         }
 
         // Read 21 [x,y,z] hand landmarks; null if absent/short.

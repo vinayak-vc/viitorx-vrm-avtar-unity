@@ -1,0 +1,25 @@
+  PASS  Attract_ActuallyMoves
+  PASS  Attract_CarriesNoMeasuredRoot
+  PASS  Attract_LeavesUnmodelledJointsUnobserved
+  PASS  Attract_StaysAtHumanProportions
+  PASS  Bones_IncludeTheHeels
+  PASS  CameraDepth_AddsTheHipRelativeLandmarkToTheMeasuredRoot
+  PASS  CameraDepth_IsZeroWithoutAMeasuredRoot
+  PASS  Floor_FallsFastAndRisesSlowly
+  PASS  Floor_SurvivesTheSubjectLeavingFrame
+  PASS  Floor_TracksTheFootContactsNotTheAnkles
+  PASS  Hand_GestureVerdictIsIndependentOfSceneScale
+  PASS  Hand_ImplausiblePalmIsRefusedNotDrawn
+  PASS  Hand_OpenFingertipsDoNotReadAsAPinch
+  PASS  Hand_PinchHasHysteresis
+  PASS  Hand_PlausiblePalmIsAccepted
+  PASS  Hand_TouchingFingertipsReadAsAPinch
+  PASS  Hand_UntrackedIsNeitherValidNorImplausible
+  PASS  Planted_RequiresBothProximityAndStillness
+  PASS  PresenceGate_DoesNotGoLiveBeforeTheEnterDelay
+  PASS  PresenceGate_GoesLiveAfterTheEnterDelay
+  PASS  PresenceGate_LeaveDelayExceedsTheProviderStaleFailsafe
+  PASS  PresenceGate_ReleasesAfterTheLeaveDelay
+  PASS  PresenceGate_SurvivesADropoutShorterThanTheLeaveDelay
+
+23 passed, 0 failed, 23 total

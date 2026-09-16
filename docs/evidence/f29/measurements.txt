@@ -1,0 +1,54 @@
+F-29 MEASUREMENTS - two regression clips, production wire, RTMW3D-x on DirectML
+==============================================================================
+
+video.webm   (431 packets, subject ~1.4 m)
+------------------------------------------------------------------------------
+  P1-1/P1-4 states (tracked joints only): TRACKED 97.9%, WEAK 2.0%, PREDICTED 0.2%
+  F-21 ownership: {'LOCKED': 431}
+  sidecar latency: mean 21.7 ms  p95 23.9 ms
+
+  FEET (slots 29/30 heels, 31/32 toes) - already on the wire, no sidecar change needed
+    L.ankle  slot 27   present 431/431 (100.0%)
+    R.ankle  slot 28   present 431/431 (100.0%)
+    L.heel   slot 29   present 431/431 (100.0%)
+    R.heel   slot 30   present 431/431 (100.0%)
+    L.toe    slot 31   present 431/431 (100.0%)
+    R.toe    slot 32   present 431/431 (100.0%)
+
+  FLOOR CONTACT RELIABILITY
+    per-frame lowest foot   sd  36.0 mm   p5-p95  125.9 mm
+    2 s rolling floor       sd  21.0 mm   p5-p95   74.5 mm
+    ankle -> true contact   +127 mm  (the offset an ankle-based floor carries)
+
+  HANDS (862 observations)
+    palm length      mean 84 mm   p95 109 mm
+    plausible (50-160 mm)  854/862 = 99.1%
+    pinch gap / palm   p5 0.25   p50 0.52   p95 1.42
+
+456.webm   (330 packets, subject ~2.9 m)
+------------------------------------------------------------------------------
+  P1-1/P1-4 states (tracked joints only): TRACKED 72.9%, WEAK 22.0%, PREDICTED 4.5%, LOST 0.7%
+  F-21 ownership: {'LOCKED': 330}
+  sidecar latency: mean 21.4 ms  p95 24.6 ms
+
+  FEET (slots 29/30 heels, 31/32 toes) - already on the wire, no sidecar change needed
+    L.ankle  slot 27   present 330/330 (100.0%)
+    R.ankle  slot 28   present 330/330 (100.0%)
+    L.heel   slot 29   present 330/330 (100.0%)
+    R.heel   slot 30   present 328/330 (99.4%)
+    L.toe    slot 31   present 322/330 (97.6%)
+    R.toe    slot 32   present 324/330 (98.2%)
+
+  FLOOR CONTACT RELIABILITY
+    per-frame lowest foot   sd  66.0 mm   p5-p95  212.0 mm
+    2 s rolling floor       sd  80.6 mm   p5-p95  234.2 mm
+    ankle -> true contact   +81 mm  (the offset an ankle-based floor carries)
+
+  HANDS (494 observations)
+    palm length      mean 165 mm   p95 362 mm
+    plausible (50-160 mm)  296/494 = 59.9%
+    pinch gap / palm   p5 0.13   p50 0.39   p95 1.82
+
+VERDICT ON FLOOR CONTACT: usable at 1.4 m (21 mm smoothed), NOT usable as true contact
+detection at 2.9 m (81 mm, and smoothing makes it WORSE because the error is drift, not noise).
+VERDICT ON HANDS: usable at 1.4 m (99.1%% plausible), unusable at 2.9 m (59.9%%).

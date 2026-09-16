@@ -10,6 +10,77 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ## [Unreleased]
 
+### Added
+
+- **Time Echo (F-31).** `Scenes/TimeEcho.unity` — four delayed copies of the tracked body trail
+  behind the live one. It exists to defeat the project's hardest limit: RTMW3D-x is single-person
+  with no detector and no track id, so this makes a crowd from one person without touching the
+  tracking. Everything shown is replay of already-validated pose data. `EchoBuffer` is a fixed,
+  clock-injected ring with 8 unit tests including the post-wrap case (ADR-069).
+- **Sound, as a layer rather than a scene (F-31).** `ExperienceAudio` is owned by `ExperienceBase`,
+  so all nine scenes gained a drone that follows whole-body energy, a movement layer driven by
+  extremity speed, and arrival/departure cues from the presence gate — without any of them being
+  edited. Event cues were wired into hooks that already existed: bubble pops rise with the combo, a
+  footprint petal plays a climbing note, an object hit is louder for a harder swing, plus grab,
+  release, a pose-match chord and a stroke start. Closes F-28 §7.4. `M` mutes (ADR-068).
+  - Every clip is **synthesised at runtime** — no audio assets, no import settings, no licence
+    questions, and a scene stays a camera and one GameObject.
+  - Every pitch comes from a **pentatonic scale**, and `Play` takes a scale degree rather than a
+    frequency, so a caller can compose a rising run and cannot produce a wrong note. A moving person
+    is a random trigger source; random semitones sound like a fault within about four notes.
+
+- **Seven experience scenes (F-30).** Each is a camera and one GameObject; everything visible is
+  built at runtime. `AirGraffiti` (pinch and draw in the air), `BubblePop` (timed, scored, combo),
+  `PoseMatch` (copy a ghost pose, per-joint feedback), `DepthReach` (rings at three real distances -
+  the demo that needs the depth camera), `Footprints` (stand still and the floor remembers, built on
+  F-29's foot contact), `Fluid` (a real velocity field the body stirs, which keeps swirling after
+  you stop) and `ObjectPlay` (bat, kick, head or pinch-and-throw objects with hand-written physics).
+- **`TrackedStage`** — everything between the socket and a usable body, owned once: provider,
+  converter, the F-27 humanized layer and its once-per-pose rule, world pose, both hands, trust
+  channel, attract loop, presence gate and floor grounding. A plain class rather than a component,
+  so the order of "advance the tracking" and "read the tracking" is in the code rather than in
+  Unity's script execution order.
+- **`ExperienceBase`** — shared staging, HUD and keys, plus `ScoringAllowed`, which stops any
+  experience scoring the synthetic attract figure.
+- **`ShowStage`**, **`BodyRenderer`**, and the `VirtualMirror.Experiences` assembly.
+- **`SkeletonPose.Velocity`** — per-joint world velocity, for anything that reacts directionally to
+  the body. Note that `|Velocity|` is NOT `Speed`: they agree exactly on straight-line motion but the
+  smoothed vector partly cancels on reversing motion (measured mean ratio 0.678 on a dancing
+  subject, max 0.999). Take direction from `Velocity` and magnitude from `Speed`.
+- **F-29 trust channel.** The sidecar now publishes what it believes about the pose it just sent:
+  `st` (P1-1/P1-4 tracking state per joint), `own` (F-21 ownership state) and `lat` (measured
+  camera-to-payload latency, ms). All three are optional and read-only — a consumer that ignores
+  them behaves exactly as before, and nothing upstream reads them back. Surfaced in Unity through
+  `TrackingTelemetry` and `OakDUdpPoseProvider.TryGetTelemetry`.
+- **SkeletonShow mode 4 — TRUST HUD.** Draws the per-joint tracking state that previously reached
+  only a log file: green TRACKED, amber WEAK, blue PREDICTED, red LOST, violet RECOVERING, grey
+  no-tracker, with a halo marking depth that was inferred rather than measured. Reports joint
+  counts, depth coverage, ownership, end-to-end latency, floor and per-joint camera depth.
+- **SkeletonShow mode 5 — HANDS.** Renders all 21 landmarks per hand, the palm plane, pinch state
+  and finger count. The landmarks were already arriving and being discarded after the five finger
+  curls were derived from them. Gesture measures are normalised by palm length so they cannot fire
+  on subject distance, and a hand whose palm falls outside 50–160 mm is refused rather than drawn.
+- **Attract loop.** With nobody tracked, a synthetic figure drives whichever mode is active through
+  the ordinary pose path, so an empty room shows the real modes instead of a black screen.
+  `PresenceGate` enters live after 0.4 s and returns to attract after 3.0 s.
+- **Feet are drawn.** Heels (JointId 29/30) and big toes (31/32) have always been on the wire;
+  each foot is now an ankle–heel–toe triangle rather than a single ankle-to-toe line.
+- `RawHandFrame`, `HandPose`, `AttractSkeleton`, `PresenceGate`, and 23 EditMode tests.
+
+### Fixed
+
+- **The figure stood 153 mm inside the floor.** `bodyOrigin` fixes the mid-hip at a set height, so
+  foot height depended entirely on the subject's proportions. With a measured floor available, the
+  new `groundToFloor` staging correction settles the feet onto the grid (0.3 mm, no overshoot).
+- **Floor-driven effects were 81–127 mm too high.** The floor was taken from the lowest *ankle*;
+  it is now taken from the four foot contact points, which is where the body meets the ground.
+
+### Known
+
+- Floor contact is reliable at ~1.4 m (21 mm smoothed) but **not** at ~2.9 m (81 mm, where
+  smoothing makes it worse because the error is drift rather than noise). Hand tracking is likewise
+  99.1% plausible at 1.4 m and 59.9% at 2.9 m. Measurements in `docs/evidence/f29/`.
+
 ## [0.1.0] — 2026-09-16
 
 First packaged release. The engineering behind it predates this version; `0.1.0` marks the point at

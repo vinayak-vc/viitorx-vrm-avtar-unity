@@ -2611,3 +2611,212 @@ PATH_ON_NO_F22          404      371        2          1         1        1
 `sent` counter, exactly as the ADR's own "honest limit of this measurement" paragraph already warned
 — that limit is now the only record. The next live session should capture and **commit** the frames,
 not merely write them to disk.
+
+---
+
+## ADR-066 — The pipeline publishes its own verdict on the wire (the F-29 trust channel)
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-061 (F-21 ownership), P1-1 (joint tracker), P1-4 (kinematic recovery), F-20A (`sid`).
+
+### Context
+
+P1-1's tracker, P1-4's recovery, F-22's validation and F-21's ownership each decide something about
+every joint of every frame. All of that reasoning reached a log file and nothing else. On screen a
+confidently measured elbow and one being extrapolated through an occlusion are the same white dot, so
+a viewer cannot tell a working system from a lucky one — and neither can an operator standing next to
+the installation. The most expensive engineering in the project was invisible.
+
+### Decision
+
+The sidecar publishes three OPTIONAL, READ-ONLY fields: `st` (P1-1/P1-4 state per JointId), `own`
+(F-21 ownership state) and `lat` (measured camera-to-payload latency, ms). Unity surfaces them
+through `TrackingTelemetry` / `OakDUdpPoseProvider.TryGetTelemetry`.
+
+Three properties were treated as non-negotiable:
+
+1. **Nothing reads them back.** They echo decisions already made. No tracking behaviour changes
+   because of them, so the diagnosis can never become the thing being diagnosed.
+2. **Optional, exactly as `sid` was.** A consumer that ignores them behaves as before; a sender that
+   omits them is reported as *not having a trust channel*, which is a different statement from
+   "everything is untracked".
+3. **`-1` is a claim, not padding.** Only the 12 joints in `DEFAULT_TRACKED` have a tracker.
+   Reporting the other 21 as TRACKED would overstate what the system knows.
+
+`st` is captured **after** P1-4, so it describes the geometry actually emitted — reading it before
+recovery would report LOST for a joint that was reconstructed and sent, and the HUD would contradict
+the skeleton drawn beside it.
+
+### Consequences
+
+* `TrackingTelemetry` is a side-channel, not a `PoseFrame` field. `PoseFrame` is the tracking
+  contract every consumer reads; a contract that accumulates each caller's extras stops being one.
+* The video harness now runs the real `SkeletonTracker` and `TargetOwnership` so the only testable
+  path reports genuine states. Geometry is deliberately **not** written back there, which keeps that
+  harness's emitted landmarks byte-identical to before and every `src` flag honestly 0.
+* An implementation trap, recorded because it cost a debugging cycle: age was first computed as
+  `UtcNow − arrivalStopwatchTime`. The provider's arrival stamp is a Stopwatch since start, not an
+  epoch, so the result was the epoch itself — 1.79 × 10¹² ms. `SendEpochSeconds` and `ArrivalSeconds`
+  are now separate, separately named fields with the hazard documented on both.
+
+### Alternatives rejected
+
+* **Widen `PoseFrame`.** Rejected: see above.
+* **Infer state in Unity from confidence.** Rejected — confidence is not validity, which is the
+  finding P1-1 exists because of (a limb can sit at a wrong position with confidence ~0.63).
+
+---
+
+## ADR-067 — Experiences are separate scenes over one shared tracking core
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-066, F-28 (skeleton show), F-27 (humanized skeleton), F-29 (feet, hands, attract).
+
+### Context
+
+Seven demonstration experiences were wanted, each in its own scene. F-28's bootstrap had grown the
+whole chain inside one MonoBehaviour — provider, converter, humanized layer, world pose, hands, trust
+channel, attract loop, presence gate, grounding. Copying that per scene is ~120 lines each, and a copy
+of *this* chain is worse than most: the subtle parts are exactly what a copy gets wrong. Advance the
+humanized layer once per **pose**, not per frame (F-27 measured per-frame advancement making the
+stream jump *more* than the raw one). Never let the attract figure carry telemetry. Keep the
+grounding loop slower than the floor estimator it feeds back through.
+
+### Decision
+
+`TrackedStage` owns everything between the socket and a usable body. `ExperienceBase` owns the shared
+staging, HUD and keys. Each experience is one `MonoBehaviour` in one scene containing a camera and one
+GameObject; everything visible is built at runtime.
+
+**`TrackedStage` is a plain class, not a MonoBehaviour.** As a component, each experience would read
+it in its own `Update` and Unity's arbitrary script execution order would decide whether the pose was
+this frame's or last frame's. `ExperienceBase` calls `Stage.Tick(dt)` and *then* `Play(dt)` — the
+ordering is in the code rather than in a project setting nobody inspects.
+
+**`ScoringAllowed` is part of the base class**, not left to each experience. The attract figure is
+synthetic; drawing it is right and scoring it is a lie. Fluid is the deliberate exception because
+nothing there is scored.
+
+### Consequences
+
+* New assembly `VirtualMirror.Experiences`, referencing `SkeletonShow` for the pose/hand/attract
+  types. The existing assemblies keep their dependency surfaces.
+* `SkeletonPose` gained per-joint `Velocity`, because anything reacting directionally to the body
+  needs a direction and `Speed` is a scalar. **`|Velocity|` is not `Speed`:** they agree exactly on
+  straight-line motion (measured 1.000 vs 1.000 m/s) but the smoothed vector partly cancels on
+  reversing motion (measured mean ratio 0.678 on a dancing subject, max 0.999, and `|Velocity| ≤
+  Speed` always). Take **direction** from `Velocity` and **magnitude** from `Speed`; using
+  `|Velocity|` as a speed under-reports a hard swing by about a third, landing the most vigorous
+  movement as the weakest hit.
+* **Known debt:** `SkeletonShowBootstrap` still carries its own copy of the chain. It was left alone
+  because it is the scene carrying verified F-28/F-29 evidence and the refactor could not be visually
+  checked while the Editor held the project lock. Two copies will drift. This is the top follow-up.
+
+### Alternatives rejected
+
+* **One scene with a mode switcher**, as F-28 does. Rejected for seven experiences: a mode owns
+  everything it creates and tears it down on switch, which is right for three visual treatments of
+  one skeleton and wrong for seven interactions with their own state, scoring and tuning.
+* **Unity physics for `ObjectPlay`.** Rejected: the tracked body is not a rigidbody and never will
+  be — it teleports between frames, and a physics engine resolves a teleporting collider by launching
+  whatever it touches across the room. The joints' measured velocity is the interesting input and a
+  kinematic collider discards it.
+
+---
+
+## ADR-068 — Sound is a shared layer, synthesised at runtime, and every pitch is pentatonic
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-067 (experience scaffold), F-28 §7.4 (which first recorded "no audio").
+
+### Context
+
+F-28 §7.4 listed "no audio" as missing when there were three modes. There are now nine scenes and the
+project contains no `AudioSource`, no `AudioClip` and no sound of any kind. An installation without
+sound is half an installation — visitors feel the absence before they can name it, and a silent room
+reads as a screensaver rather than as a thing that has noticed them.
+
+Every hook already existed: a bubble pops, a footprint blooms, an object is struck, a pose is
+matched, a person walks up. They simply made no noise.
+
+### Decision 1 — a layer on `ExperienceBase`, not a ninth scene
+
+`ExperienceAudio` is built and ticked by `ExperienceBase`, so all nine scenes get a drone that
+follows whole-body energy, a movement layer that follows extremity speed, and an arrival/departure
+cue from the presence gate — without any of them being edited. A subclass only calls `Play` for
+things that actually happened. Adding a "sound experience" instead would have left the other eight
+silent, which is a far worse return for the same work.
+
+### Decision 2 — synthesise at runtime; ship no audio assets
+
+No `.wav` files, no import settings, no licence questions, and the scene stays a camera and one
+GameObject — the same rule the visuals already follow. Clips are built once during `Build`; nothing
+allocates per frame. The drone's partials are snapped to frequencies that complete a whole number of
+cycles in the buffer, because a loop that does not close clicks once per cycle.
+
+### Decision 3 — every pitch comes from a pentatonic scale
+
+This is the decision that determines whether the room is bearable after an hour. A moving person is
+an effectively random trigger source, and random semitones sound like a fault within about four
+notes. A major pentatonic set contains no clashing interval, so **any** combination a visitor happens
+to play is consonant. `Play` therefore takes a scale DEGREE rather than a frequency: a caller can
+compose a rising run (a combo, petals opening) and is structurally unable to produce a wrong note.
+
+### Consequences
+
+* Continuous layers are smoothed hard (0.35 s for the drone). Audio amplitude reacts far more harshly
+  to a step than colour does; an un-smoothed gain follows the tracker's own jitter and produces a
+  crackle rather than a swell.
+* Sources are 2D (`spatialBlend = 0`). The sound belongs to the room, not to a point in it;
+  spatialising a drone makes it swing across the speakers as the body moves.
+* `ExperienceAudio.Build` adds an `AudioListener` if none exists. The scene template carries one on
+  the camera, but `ShowStage` will create a bare camera when none is present, and a silent
+  installation with no error is the worst possible way to discover that.
+* `M` mutes. `Volume = 0` silences without changing any other behaviour, so a noisy room can be
+  quietened without stopping the experience.
+* **Untested acoustically.** The synthesis is arithmetic and compiles, but `AudioClip.Create` is a
+  native call, so none of it can run headlessly — nobody has heard any of it.
+
+---
+
+## ADR-069 — Time Echo: replay the person to defeat the single-person limit
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-061 (F-21 ownership), ADR-067 (experience scaffold).
+
+### Context
+
+The hardest limitation in the project is that RTMW3D-x is a single-person top-down model with no
+detector and no track id. F-21's live two-person acceptance FAILED on 2026-09-16, and multi-person is
+a model change rather than a scene change. Every experience so far therefore shows exactly one body.
+
+### Decision
+
+Record the tracked pose into a fixed ring and draw several delayed copies of it. One person becomes a
+crowd without touching the tracking at all — the constraint becomes the subject.
+
+Nothing on screen is newly sensed: it is replay of pose data already validated, so this cannot fail
+in a way the existing pipeline does not already fail. It uses body joints only, so it works at the
+distance where hands are known to be unreliable and needs no floor precision.
+
+### Consequences
+
+* **World positions are stored, not hip-relative ones.** An echo is a record of where the body
+  actually WAS and must stay there as the person walks away; re-staging hip-relative poses would glue
+  every echo to the live body and destroy the effect. The cost is that the slow grounding correction
+  is baked into old frames — at a 1.5 s time constant and a few centimetres, far below visible.
+* **Nearest frame, not interpolated.** At the 60 Hz record rate the worst error is 8 ms of motion,
+  and interpolating across two frames would blend a real pose with a dropped one whenever tracking
+  flickered, producing a body that was never in that position. P1-3 interpolates the LIVE pose
+  because latency matters there; here it does not.
+* **Recording is at a fixed rate, not per render frame.** A buffer whose span depends on frame rate
+  would change how far back the echoes reach whenever the scene got busier.
+* **Colour means AGE here, not speed** — the same trade the trust HUD makes, for the same reason:
+  two meanings on one channel is unreadable, and the subject of this mode is time.
+* `EchoBuffer` is a top-level, clock-injected class rather than a private detail, because a
+  mis-indexed ring shows a plausible body at slightly the wrong time and no viewer can tell. Eight
+  unit tests pin it, including the post-wrap case.

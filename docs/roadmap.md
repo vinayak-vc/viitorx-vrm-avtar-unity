@@ -391,6 +391,58 @@ STATUS
                              a pose the tracker did not report), 3 MOTION EFFECTS (hand particles, a
                              beam, floor ripples). 114-118 fps in the editor. Driven from video only;
                              never seen with a person in front of an OAK-D.
+   TRUST CHANNEL             NEW (F-29, ADR-066). The pipeline now PUBLISHES its own verdict: st
+                             (P1-1/P1-4 state per joint), own (F-21 ownership), lat (measured
+                             camera->payload latency). Optional and read-only -- nothing upstream
+                             reads them back, a consumer that ignores them is unaffected. Drawn by
+                             SkeletonShow mode 4, which is the first time P1-1/P1-4/F-21 have been
+                             visible to anyone not reading a log file. Measured end to end: 53.4 ms.
+   HANDS AND FEET DRAWN      NEW (F-29). Both were ALREADY on the wire and being discarded: feet as
+                             JointId 29/30/31/32 inside lm (431/431 and 330/330 frames measured),
+                             hands as 21 landmarks per hand reduced to five curls and dropped. Mode
+                             5 draws the hands; every mode now draws feet as ankle-heel-toe.
+                             TWO DEFECTS FIXED, both invisible until the feet were drawn: the figure
+                             stood 153 mm INSIDE the floor in every mode since F-28, and every
+                             floor-driven effect spawned 81-127 mm too high because the floor came
+                             from the lowest ANKLE rather than the foot contacts.
+                             MEASURED LIMITS, which bound what should be built: floor contact is
+                             usable at ~1.4 m (21 mm smoothed) and NOT at ~2.9 m (81 mm -- and
+                             smoothing makes it WORSE there, the signature of drift not noise).
+                             Hands are 99.1% anatomically plausible at 1.4 m, 59.9% at 2.9 m.
+   ATTRACT LOOP              NEW (F-29). Closes F-28 section 7.4: with nobody tracked every mode
+                             previously drew NOTHING, so an empty room was indistinguishable from a
+                             crashed machine. Attract is a synthetic pose SOURCE, not a separate
+                             renderer, so it demonstrates the REAL modes and every future mode gets
+                             it free. It never carries telemetry and is never scored.
+   SEVEN EXPERIENCES         NEW (F-30, ADR-067). Footprints (stand still; the floor remembers,
+                             built on F-29 planted-foot detection), Fluid (a real velocity field the
+                             body stirs, which keeps swirling after you stop), ObjectPlay (bat, kick,
+                             head, pinch-and-throw, hand-written physics because a tracked body is
+                             not a rigidbody), BubblePop, PoseMatch, DepthReach, AirGraffiti. Each is
+                             its own scene: a camera and one GameObject. All seven share TrackedStage
+                             -- the socket-to-usable-body chain, owned once.
+                             NOT RENDERED. Three Editors held the project lock all session, so this
+                             is compile + headless logic + real-wire parsing only. No visual claim
+                             about any of the seven has been checked. Tune on first run.
+   TIME ECHO                 NEW (F-31, ADR-069). Four delayed copies of the tracked body trail
+                             the live one. This is the one item that DEFEATS the project's hardest
+                             limit rather than working around it: RTMW3D-x is single-person with no
+                             detector and no track id, F-21's live two-person acceptance FAILED, and
+                             multi-person is a MODEL change. Replaying the one person we can track
+                             makes a crowd without touching any of that, and cannot fail in a new way
+                             because everything shown is already-validated pose data. EchoBuffer is a
+                             fixed clock-injected ring, 8/8 unit tests including the post-wrap case.
+   SOUND                     NEW (F-31, ADR-068). Closes F-28 section 7.4, open since there were
+                             three modes and the project contained no audio of any kind. Built as a
+                             LAYER on ExperienceBase rather than a ninth scene, so all nine scenes
+                             gained a drone (whole-body energy), a movement layer (extremity speed)
+                             and arrival/departure cues without being edited; event cues went into
+                             hooks that already existed. Synthesised at runtime -- no assets, no
+                             import settings, scene stays a camera and one GameObject. Every pitch is
+                             PENTATONIC and Play() takes a scale degree, not a frequency, so a random
+                             human trigger source cannot produce a wrong note.
+                             NEVER HEARD. AudioClip.Create is a native call, so none of the synthesis
+                             runs headlessly. Retune the mix on first listen.
    TRANSPORT ROBUSTNESS      FIXED (F-20A): sessions, stale watchdog, neutral failsafe. Reconnect
                              re-proven 2026-09-14 across the language boundary: three REAL producer
                              session ids -> the REAL C# TrackingStreamHealth (FirstSession once,

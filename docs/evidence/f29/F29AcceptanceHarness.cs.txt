@@ -1,0 +1,390 @@
+// F-29 headless acceptance harness.
+//
+// Drives the REAL OakDUdpPoseProvider, the REAL SkeletonPose / HandPose / PresenceGate /
+// AttractSkeleton, from REAL packets produced by the production video harness. Nothing here is a
+// mock: the only thing missing versus the Editor is the renderer, and no assertion below depends on
+// anything being drawn.
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading;
+
+using UnityEngine;
+
+using VirtualMirror.Core;
+using VirtualMirror.SkeletonShow;
+using VirtualMirror.Tracking.OakD;
+
+internal sealed class ConsoleLog : ILogService {
+    public readonly List<string> Lines = new List<string>();
+    public void Log(LogLevel level, string message) {
+        Lines.Add(level + ": " + message);
+    }
+    public void LogException(Exception exception, string context) {
+        Lines.Add("EXC: " + context + " " + exception.Message);
+    }
+    public void Flush() { }
+}
+
+internal static class Program {
+    private static int failures;
+
+    private static void Check(bool ok, string label, string detail) {
+        Console.WriteLine((ok ? "  PASS  " : "  FAIL  ") + label + "   " + detail);
+        if (!ok) {
+            failures++;
+        }
+    }
+
+    private static int Main(string[] args) {
+        int port = args.Length > 0 ? int.Parse(args[0]) : 8899;
+        int seconds = args.Length > 1 ? int.Parse(args[1]) : 30;
+
+        Console.WriteLine("=== F-29 ACCEPTANCE (headless, real provider, real packets) ===\n");
+        PureLogicTests();
+
+        Console.WriteLine("\n--- LIVE WIRE  (UDP " + port + ", " + seconds + " s) ---");
+        ConsoleLog log = new ConsoleLog();
+        // flipY matches the SkeletonShow scene default: landmark space is Y-down, the scene is Y-up.
+        PoseSpaceConverter converter = new PoseSpaceConverter(false, true, false);
+        OakDUdpPoseProvider provider = new OakDUdpPoseProvider(log, converter, port);
+        provider.SetPoseInterpolation(40f);
+        provider.StartTracking();
+
+        SkeletonPose pose = new SkeletonPose();
+        HandPose left = new HandPose();
+        HandPose right = new HandPose();
+        TrackingTelemetry telemetry = new TrackingTelemetry();
+        RawHandFrame rawHands = new RawHandFrame();
+        PresenceGate presence = new PresenceGate();
+        Vector3 origin = new Vector3(0f, 0.95f, 0f);
+
+        var stateCounts = new Dictionary<JointTrackState, int>();
+        var ownStates = new Dictionary<string, int>();
+        List<float> floorY = new List<float>();
+        List<float> latency = new List<float>();
+        List<float> hipDepth = new List<float>();
+        List<float> palmLeft = new List<float>();
+        int frames = 0, valid = 0, withTelemetry = 0, footFrames = 0, plantedFrames = 0;
+        int handFrames = 0, handPlausible = 0, handRejected = 0, pinchFrames = 0;
+        int presenceEnters = 0, presenceLeaves = 0;
+        int depthMeasuredTotal = 0, depthChannelFrames = 0;
+
+        DateTime end = DateTime.UtcNow.AddSeconds(seconds);
+        const float dt = 1f / 60f;
+        while (DateTime.UtcNow < end) {
+            provider.Tick(dt);
+            PoseFrame frame;
+            bool live = provider.TryGetLatestFrame(out frame) && frame != null && frame.IsValid;
+            presence.Update(live, dt);
+            if (presence.Changed) {
+                if (presence.Present) { presenceEnters++; } else { presenceLeaves++; }
+            }
+
+            bool hasTel = provider.TryGetTelemetry(telemetry);
+            if (live) {
+                pose.Fill(frame, origin, 1f, dt);
+                pose.Telemetry = hasTel ? telemetry : null;
+                valid++;
+                if (hasTel) {
+                    withTelemetry++;
+                    for (int j = 0; j < TrackingTelemetry.JointCount; j++) {
+                        JointTrackState s = telemetry.State(j);
+                        stateCounts.TryGetValue(s, out int c);
+                        stateCounts[s] = c + 1;
+                    }
+                    string own = telemetry.OwnershipState ?? "(absent)";
+                    ownStates.TryGetValue(own, out int oc);
+                    ownStates[own] = oc + 1;
+                    // Only sample while the stream is FRESH. After the replay ends the newest
+                    // datagram keeps ageing, and averaging that tail in would report the silence
+                    // after the test as though it were pipeline latency.
+                    float ageMs = telemetry.AgeSeconds * 1000f;
+                    if (telemetry.SidecarLatencyMs >= 0f && ageMs >= 0f && ageMs < 500f) {
+                        latency.Add(telemetry.SidecarLatencyMs + ageMs);
+                    }
+                    if (telemetry.HasDepthChannel) {
+                        depthChannelFrames++;
+                        depthMeasuredTotal += telemetry.MeasuredDepthCount();
+                    }
+                }
+                if (pose.HasFloor) {
+                    floorY.Add(pose.FloorY);
+                    footFrames++;
+                    if (pose.Planted.Any(p => p)) {
+                        plantedFrames++;
+                    }
+                }
+                float d = pose.CameraDepth(23);
+                if (d > 0f) {
+                    hipDepth.Add(d);
+                }
+
+                if (provider.TryGetRawHands(rawHands)) {
+                    handFrames++;
+                    left.Fill(rawHands, true, origin, 1f);
+                    right.Fill(rawHands, false, origin, 1f);
+                    if (left.Valid) {
+                        handPlausible++;
+                        palmLeft.Add(left.PalmMetres);
+                        if (left.Pinching) { pinchFrames++; }
+                    }
+                    if (left.Implausible || right.Implausible) { handRejected++; }
+                }
+            }
+            frames++;
+            Thread.Sleep(16);
+        }
+        provider.StopTracking();
+        provider.Dispose();
+
+        Console.WriteLine("render frames " + frames + ", valid poses " + valid
+                          + ", datagrams received " + provider.ReceivedCount
+                          + ", parse errors " + provider.ParseErrorCount
+                          + ", lastSeq " + provider.LastSeq);
+        if (valid == 0) {
+            Console.WriteLine("  FAIL  no valid poses. provider log:");
+            foreach (string line in log.Lines.Take(20)) {
+                Console.WriteLine("    " + line);
+            }
+            return 1;
+        }
+
+        Check(withTelemetry == valid, "trust channel on every valid frame",
+              withTelemetry + "/" + valid);
+        int tracked = stateCounts.TryGetValue(JointTrackState.Tracked, out int t) ? t : 0;
+        int notracker = stateCounts.TryGetValue(JointTrackState.NoTracker, out int nt) ? nt : 0;
+        Check(tracked > 0 && notracker > 0, "per-joint states decoded",
+              string.Join("  ", stateCounts.OrderBy(k => (int)k.Key)
+                                           .Select(k => k.Key + "=" + k.Value)));
+        // The 12 joints in DEFAULT_TRACKED have a tracker; the other 21 must report NoTracker.
+        Check(Math.Abs(notermal(notracker, valid) - 21.0) < 0.01, "exactly 21 joints report no tracker",
+              (notermal(notracker, valid)).ToString("F2", CultureInfo.InvariantCulture) + " per frame");
+        Check(ownStates.Count > 0, "ownership state present",
+              string.Join("  ", ownStates.Select(k => k.Key + "=" + k.Value)));
+        Check(depthChannelFrames == valid && depthMeasuredTotal == 0,
+              "depth provenance honest on a monocular source",
+              "src present on " + depthChannelFrames + "/" + valid
+              + " frames, measured joints total " + depthMeasuredTotal + " (expected 0)");
+
+        if (latency.Count > 0) {
+            Check(latency.Average() > 0 && latency.Average() < 250,
+                  "end-to-end latency plausible (fresh frames only)",
+                  "mean " + latency.Average().ToString("F1", CultureInfo.InvariantCulture)
+                  + " ms, max " + latency.Max().ToString("F1", CultureInfo.InvariantCulture) + " ms");
+        }
+
+        Check(footFrames == valid, "floor estimated on every frame (feet are on the wire)",
+              footFrames + "/" + valid);
+        if (floorY.Count > 1) {
+            double mean = floorY.Average();
+            double sd = Math.Sqrt(floorY.Select(v => (v - mean) * (v - mean)).Average());
+            Check(sd < 0.10, "floor estimate stable (<100 mm sd)",
+                  "sd " + (sd * 1000).ToString("F1", CultureInfo.InvariantCulture)
+                  + " mm, mean y " + mean.ToString("F3", CultureInfo.InvariantCulture) + " m");
+        }
+        Check(plantedFrames > 0, "foot contact detected at least once",
+              plantedFrames + "/" + footFrames + " frames had a planted foot");
+
+        if (hipDepth.Count > 0) {
+            double md = hipDepth.Average();
+            Check(md > 0.3 && md < 8.0, "camera depth reconstructed in a sane range",
+                  "mean hip depth " + md.ToString("F2", CultureInfo.InvariantCulture) + " m");
+        } else {
+            Check(false, "camera depth reconstructed", "no root position on any frame");
+        }
+
+        Check(presenceEnters >= 1, "presence gate went live", presenceEnters + " enter, "
+              + presenceLeaves + " leave transitions");
+
+        // Hands are validated from the recorded dumps rather than over this socket: the provider's
+        // PRE-EXISTING hand path calls Quaternion.Slerp/Angle/LookRotation, which are Unity native
+        // and cannot execute outside a player. That is a property of code this work did not write,
+        // so the hand LANDMARKS are replayed straight from the wire recordings instead - same
+        // numbers, same HandPose, one less hop.
+        if (args.Length > 2) {
+            Console.WriteLine();
+            for (int i = 2; i < args.Length; i++) {
+                HandsFromDump(args[i]);
+            }
+        }
+
+        Console.WriteLine("\nprovider log:");
+        foreach (string line in log.Lines.Take(12)) {
+            Console.WriteLine("    " + line);
+        }
+
+        Console.WriteLine("\n=== " + (failures == 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED") + " ===");
+        return failures == 0 ? 0 : 1;
+    }
+
+    private static double notermal(int total, int frames) {
+        return frames > 0 ? (double)total / frames : 0.0;
+    }
+
+    // Run HandPose over every hand observation in a recorded dump: real landmarks, real distances.
+    private static void HandsFromDump(string path) {
+        string label = System.IO.Path.GetFileNameWithoutExtension(path);
+        RawHandFrame raw = new RawHandFrame();
+        HandPose hand = new HandPose();
+        int total = 0, plausible = 0, rejected = 0, pinching = 0;
+        var fingerHist = new int[6];
+        List<float> palms = new List<float>();
+        foreach (string line in System.IO.File.ReadLines(path)) {
+            Newtonsoft.Json.Linq.JObject root = Newtonsoft.Json.Linq.JObject.Parse(line);
+            foreach (string key in new[] { "lh", "rh" }) {
+                var arr = root[key] as Newtonsoft.Json.Linq.JArray;
+                if (arr == null || arr.Count < RawHandFrame.LandmarkCount) {
+                    continue;
+                }
+                Vector3[] pts = new Vector3[RawHandFrame.LandmarkCount];
+                for (int i = 0; i < RawHandFrame.LandmarkCount; i++) {
+                    var p = (Newtonsoft.Json.Linq.JArray)arr[i];
+                    // Y negated to match the scene's flipY, exactly as the provider's converter does.
+                    pts[i] = new Vector3((float)p[0], -(float)p[1], (float)p[2]);
+                }
+                raw.MarkInvalid(0.0);
+                raw.SetHand(key == "lh", pts);
+                hand.Fill(raw, key == "lh", Vector3.zero, 1f);
+                total++;
+                if (hand.Valid) {
+                    plausible++;
+                    palms.Add(hand.PalmMetres);
+                    if (hand.Pinching) { pinching++; }
+                    fingerHist[Math.Min(5, hand.FingerCount)]++;
+                } else if (hand.Implausible) {
+                    rejected++;
+                }
+            }
+        }
+        double pct = total > 0 ? 100.0 * plausible / total : 0.0;
+        Console.WriteLine("  HANDS " + label + ": " + total + " observations, "
+                          + pct.ToString("F1", CultureInfo.InvariantCulture) + "% plausible, "
+                          + rejected + " rejected"
+                          + (palms.Count > 0
+                             ? ", palm mean " + (palms.Average() * 1000).ToString("F0", CultureInfo.InvariantCulture) + " mm"
+                             : "")
+                          + ", pinch on " + pinching
+                          + ", finger counts [" + string.Join(",", fingerHist) + "]");
+        Check(total > 0, "hand observations found in " + label, total + " hands");
+        Check(plausible + rejected == total, "every hand is either accepted or explicitly rejected",
+              plausible + " + " + rejected + " = " + total);
+    }
+
+    // Logic that needs no wire: exercised with synthetic input so a failure here is unambiguous.
+    private static void PureLogicTests() {
+        Console.WriteLine("--- PURE LOGIC ---");
+
+        PresenceGate gate = new PresenceGate();
+        for (int i = 0; i < 10; i++) { gate.Update(true, 0.02f); }
+        Check(!gate.Present, "presence does not trigger on 0.2 s of tracking",
+              "still attract, needs " + PresenceGate.EnterSeconds + " s");
+        for (int i = 0; i < 20; i++) { gate.Update(true, 0.02f); }
+        Check(gate.Present, "presence triggers after the enter delay", "live");
+        for (int i = 0; i < 100; i++) { gate.Update(false, 0.02f); }
+        Check(gate.Present, "a 2 s dropout does NOT dump a present visitor back to attract",
+              "still live after 2.0 s absent (leave is " + PresenceGate.LeaveSeconds + " s)");
+        for (int i = 0; i < 60; i++) { gate.Update(false, 0.02f); }
+        Check(!gate.Present, "presence releases after the leave delay", "back to attract");
+
+        AttractSkeleton attract = new AttractSkeleton();
+        SkeletonPose pose = new SkeletonPose();
+        Vector3 origin = new Vector3(0f, 0.95f, 0f);
+        float minY = float.MaxValue, maxY = float.MinValue;
+        float maxWristTravel = 0f;
+        Vector3 firstWrist = Vector3.zero;
+        HashSet<int> everPresent = new HashSet<int>();
+        for (int i = 0; i < 600; i++) {
+            PoseFrame f = attract.Tick(1f / 60f);
+            pose.Fill(f, origin, 1f, 1f / 60f);
+            for (int j = 0; j < PoseFrame.LandmarkCount; j++) {
+                if (pose.Present[j]) { everPresent.Add(j); }
+            }
+            if (i == 0) { firstWrist = pose.World[15]; }
+            maxWristTravel = Mathf.Max(maxWristTravel, Vector3.Distance(firstWrist, pose.World[15]));
+            minY = Mathf.Min(minY, pose.World[0].y);
+            maxY = Mathf.Max(maxY, pose.World[0].y);
+        }
+        Check(everPresent.Count == 17, "attract fills exactly the 17 joints it models",
+              everPresent.Count + " joints, unmodelled slots left unobserved");
+        Check(everPresent.Contains(29) && everPresent.Contains(30)
+              && everPresent.Contains(31) && everPresent.Contains(32),
+              "attract includes the four foot contacts", "heels and toes present");
+        Check(maxWristTravel > 0.15f, "attract actually animates",
+              "wrist travels " + maxWristTravel.ToString("F2", CultureInfo.InvariantCulture) + " m");
+        Check(pose.HasFloor, "attract produces a floor",
+              "floor y " + pose.FloorY.ToString("F3", CultureInfo.InvariantCulture));
+        Check(minY > 1.4f && maxY < 1.9f, "attract head stays at human height",
+              "head y " + minY.ToString("F2", CultureInfo.InvariantCulture) + " - "
+              + maxY.ToString("F2", CultureInfo.InvariantCulture) + " m");
+        Check(pose.Telemetry == null, "attract carries no telemetry", "nothing to report about a synthetic body");
+
+        // Grounding: the bootstrap's feedback loop, reproduced exactly (same tau, same update order),
+        // driven by a body deliberately staged 0.4 m into the floor. It must settle, and it must not
+        // ring - the two time constants are chosen to prevent interaction with the floor estimator.
+        {
+            AttractSkeleton gAttract = new AttractSkeleton();
+            SkeletonPose gPose = new SkeletonPose();
+            const float tau = 1.5f;
+            float offset = 0f;
+            bool has = false;
+            List<float> floorTrace = new List<float>();
+            Vector3 sunk = new Vector3(0f, 0.55f, 0f);   // ~0.4 m too low
+            for (int i = 0; i < 1200; i++) {
+                float d = 1f / 60f;
+                gPose.Fill(gAttract.Tick(d), new Vector3(sunk.x, sunk.y + offset, sunk.z), 1f, d);
+                if (gPose.HasFloor) {
+                    float target = offset - gPose.FloorY;
+                    if (!has) { offset = target; has = true; }
+                    else { offset += (1f - Mathf.Exp(-d / tau)) * (target - offset); }
+                }
+                floorTrace.Add(gPose.FloorY);
+            }
+            float settled = floorTrace.Skip(600).Select(Mathf.Abs).Max();
+            float overshoot = floorTrace.Skip(120).Min();
+            Check(settled < 0.01f, "grounding settles the floor onto the grid",
+                  "max |floor| over the last 10 s = " + (settled * 1000).ToString("F1", CultureInfo.InvariantCulture) + " mm");
+            Check(overshoot > -0.05f, "grounding does not ring or overshoot downward",
+                  "most negative floor after settling begins = " + (overshoot * 1000).ToString("F1", CultureInfo.InvariantCulture) + " mm");
+        }
+
+        // A hand that is geometrically impossible must be refused, not drawn.
+        RawHandFrame huge = new RawHandFrame();
+        Vector3[] pts = new Vector3[RawHandFrame.LandmarkCount];
+        for (int i = 0; i < pts.Length; i++) { pts[i] = new Vector3(0f, i * 0.05f, 0f); }
+        pts[9] = new Vector3(0f, 0.36f, 0f);       // 360 mm palm - the far-clip failure mode
+        huge.SetHand(true, pts);
+        HandPose hand = new HandPose();
+        hand.Fill(huge, true, Vector3.zero, 1f);
+        Check(!hand.Valid && hand.Implausible, "implausible hand refused",
+              "palm " + (hand.PalmMetres * 1000).ToString("F0", CultureInfo.InvariantCulture) + " mm rejected");
+
+        // A plausible hand with thumb and index tips touching must read as a pinch.
+        RawHandFrame pinch = new RawHandFrame();
+        Vector3[] pinchPts = new Vector3[RawHandFrame.LandmarkCount];
+        for (int i = 0; i < pinchPts.Length; i++) { pinchPts[i] = new Vector3(0.02f * i, 0.01f * i, 0f); }
+        pinchPts[0] = Vector3.zero;
+        pinchPts[9] = new Vector3(0f, 0.09f, 0f);        // 90 mm palm
+        pinchPts[5] = new Vector3(-0.03f, 0.085f, 0f);
+        pinchPts[17] = new Vector3(0.03f, 0.08f, 0f);
+        pinchPts[4] = new Vector3(0.04f, 0.09f, 0f);     // thumb tip
+        pinchPts[8] = new Vector3(0.045f, 0.095f, 0f);   // index tip, 7 mm away
+        pinch.SetHand(false, pinchPts);
+        HandPose ph = new HandPose();
+        ph.Fill(pinch, false, Vector3.zero, 1f);
+        Check(ph.Valid && ph.Pinching, "touching fingertips read as a pinch",
+              "gap " + (ph.ThumbIndexMetres * 1000).ToString("F0", CultureInfo.InvariantCulture)
+              + " mm = " + ph.PinchNormalised.ToString("F2", CultureInfo.InvariantCulture) + " palms");
+
+        // Staging scale must not change the gesture verdict: the same hand at half scene scale is
+        // still the same hand.
+        HandPose scaled = new HandPose();
+        scaled.Fill(pinch, false, Vector3.zero, 0.5f);
+        Check(scaled.Valid && scaled.Pinching
+              && Mathf.Abs(scaled.PinchNormalised - ph.PinchNormalised) < 0.01f,
+              "gesture verdict is scale invariant",
+              "same pinch at 0.5x scene scale, palm still "
+              + (scaled.PalmMetres * 1000).ToString("F0", CultureInfo.InvariantCulture) + " mm");
+    }
+}

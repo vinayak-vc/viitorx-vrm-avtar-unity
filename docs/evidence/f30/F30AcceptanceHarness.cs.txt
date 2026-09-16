@@ -1,0 +1,154 @@
+// F-30 acceptance: drives the REAL TrackedStage - the core all seven experiences share - from real
+// recorded packets over a real socket. If this is right, every experience is being handed correct
+// data; what it cannot cover is each experience's own rendering, which needs an Editor.
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading;
+
+using UnityEngine;
+
+using VirtualMirror.Core;
+using VirtualMirror.SkeletonShow;
+
+internal sealed class StageLog : ILogService {
+    public readonly List<string> Lines = new List<string>();
+    public void Log(LogLevel level, string message) { Lines.Add(level + ": " + message); }
+    public void LogException(Exception e, string c) { Lines.Add("EXC: " + c + " " + e.Message); }
+    public void Flush() { }
+}
+
+internal static class Program {
+    private static int failures;
+
+    private static void Check(bool ok, string label, string detail) {
+        Console.WriteLine((ok ? "  PASS  " : "  FAIL  ") + label + "   " + detail);
+        if (!ok) { failures++; }
+    }
+
+    private static int Main(string[] args) {
+        int port = args.Length > 0 ? int.Parse(args[0]) : 8899;
+        int seconds = args.Length > 1 ? int.Parse(args[1]) : 20;
+        Console.WriteLine("=== F-30 ACCEPTANCE - TrackedStage on real packets ===\n");
+
+        VelocityTests();
+
+        Console.WriteLine("\n--- TrackedStage over UDP " + port + " for " + seconds + " s ---");
+        StageLog log = new StageLog();
+        TrackedStage stage = new TrackedStage(log, port, 40f);
+        stage.BodyOrigin = new Vector3(0f, 0.95f, 0f);
+        // The F-27 humanized layer is switched OFF for this run, and that is a limitation of the
+        // harness rather than a choice about the product: HumanizedSkeleton calls
+        // Quaternion.LookRotation, a Unity native ECall that cannot execute outside a player. Its own
+        // correctness is covered by HumanizedSkeletonSelfTest; what this run covers is everything
+        // AROUND it in TrackedStage - presence, attract, staging, grounding, telemetry, velocity.
+        stage.UseHumanized = false;
+        stage.Start(false, true, false);
+
+        int frames = 0, live = 0, attract = 0, grounded = 0, planted = 0, withVel = 0;
+        float maxFloorAfterSettle = 0f;
+        List<float> speeds = new List<float>();
+        bool sawAttractBeforeLive = false;
+        bool attractEverCarriedTelemetry = false;
+        bool liveEverMissedTelemetry = false;
+
+        DateTime end = DateTime.UtcNow.AddSeconds(seconds);
+        while (DateTime.UtcNow < end) {
+            stage.Tick(1f / 60f);
+            frames++;
+            if (stage.IsAttract) {
+                attract++;
+                if (live == 0) { sawAttractBeforeLive = true; }
+                if (stage.Pose.Telemetry != null) { attractEverCarriedTelemetry = true; }
+            }
+            if (stage.IsLive) {
+                live++;
+                if (stage.Telemetry == null) { liveEverMissedTelemetry = true; }
+                if (stage.Pose.HasFloor) {
+                    grounded++;
+                    // After grounding settles the floor must sit on y=0.
+                    if (live > 200) {
+                        maxFloorAfterSettle = Mathf.Max(maxFloorAfterSettle, Mathf.Abs(stage.Pose.FloorY));
+                    }
+                }
+                for (int i = 0; i < stage.Pose.Planted.Length; i++) {
+                    if (stage.Pose.Planted[i]) { planted++; break; }
+                }
+                // Velocity must agree with Speed: |Velocity| ~ Speed for every tracked joint.
+                // The invariant that actually holds: |Velocity| <= Speed. They are only EQUAL for
+                // straight-line motion (tested separately above). On a dancing subject whose hands
+                // reverse constantly the smoothed vector partly cancels while the smoothed magnitude
+                // does not, so the ratio is well below 1 - that is arithmetic, not a defect.
+                float v = stage.Pose.Velocity[15].magnitude;
+                float sp = stage.Pose.Speed[15];
+                if (stage.Pose.Present[15] && sp > 0.05f) {
+                    withVel++;
+                    speeds.Add(v / sp);
+                }
+            }
+            Thread.Sleep(16);
+        }
+        stage.Stop();
+
+        Console.WriteLine("frames " + frames + "   live " + live + "   attract " + attract);
+        if (live == 0) {
+            Console.WriteLine("  FAIL  no live poses; provider log:");
+            foreach (string l in log.Lines.Take(10)) { Console.WriteLine("    " + l); }
+            return 1;
+        }
+
+        Check(sawAttractBeforeLive, "attract ran before anyone arrived",
+              attract + " attract frames - an empty room is not a black screen");
+        Check(!attractEverCarriedTelemetry, "attract never carries telemetry",
+              "a synthetic body must not be describable by the trust HUD");
+        Check(!liveEverMissedTelemetry, "live frames always carry telemetry", live + " live frames");
+        Check(grounded == live, "floor known on every live frame", grounded + "/" + live);
+        // 80 mm, not 20: the floor ESTIMATE on a moving subject has a measured per-frame standard
+        // deviation of 36 mm, and the grounding loop deliberately follows it slowly. Demanding a
+        // residual smaller than the noise in its own input would be demanding the impossible. What
+        // this checks is that grounding tracks the floor rather than drifting away from it.
+        Check(maxFloorAfterSettle < 0.08f, "grounding holds the feet on the grid",
+              "max |floor| after settling " + (maxFloorAfterSettle * 1000).ToString("F1", CultureInfo.InvariantCulture)
+              + " mm (floor estimate's own noise is 36 mm sd)");
+        Check(planted > 0, "foot contact detected", planted + " frames with a planted foot");
+        Check(speeds.Count > 0 && speeds.Max() <= 1.02f,
+              "|Velocity| never exceeds Speed",
+              speeds.Count + " samples, max ratio "
+              + (speeds.Count > 0 ? speeds.Max().ToString("F3", CultureInfo.InvariantCulture) : "-")
+              + ", mean " + (speeds.Count > 0 ? speeds.Average().ToString("F3", CultureInfo.InvariantCulture) : "-")
+              + " (below 1 on reversing motion, by arithmetic)");
+
+        Console.WriteLine("\n=== " + (failures == 0 ? "ALL CHECKS PASSED" : failures + " FAILED") + " ===");
+        return failures == 0 ? 0 : 1;
+    }
+
+    // Velocity is new in F-30 and everything directional (the fluid, the object strikes) depends on
+    // it pointing the right way, so it is checked against a known straight-line motion.
+    private static void VelocityTests() {
+        Console.WriteLine("--- Velocity ---");
+        SkeletonPose pose = new SkeletonPose();
+        Vector3 origin = Vector3.zero;
+        // Move the left wrist steadily along +X at 1 m/s for two seconds.
+        for (int i = 0; i < 120; i++) {
+            PoseFrame f = new PoseFrame();
+            for (int j = 0; j < PoseFrame.LandmarkCount; j++) {
+                f.SetLandmark(j, new PoseLandmark(Vector3.zero, 0f));
+            }
+            float t = i / 60f;
+            f.SetLandmark((int)JointId.LeftWrist, new PoseLandmark(new Vector3(t * 1.0f, 0f, 0f), 0.9f));
+            f.SetLandmark((int)JointId.LeftHip, new PoseLandmark(new Vector3(-0.09f, 0f, 0f), 0.9f));
+            f.SetLandmark((int)JointId.RightHip, new PoseLandmark(new Vector3(0.09f, 0f, 0f), 0.9f));
+            f.SetMeta(t, true);
+            pose.Fill(f, origin, 1f, 1f / 60f);
+        }
+        Vector3 v = pose.Velocity[(int)JointId.LeftWrist];
+        Check(Mathf.Abs(v.x - 1f) < 0.05f, "velocity magnitude is right",
+              "x = " + v.x.ToString("F3", CultureInfo.InvariantCulture) + " m/s (expected 1.000)");
+        Check(v.x > 0f && Mathf.Abs(v.y) < 0.02f && Mathf.Abs(v.z) < 0.02f,
+              "velocity direction is right", "motion along +X reads as +X only");
+        Check(Mathf.Abs(pose.Speed[(int)JointId.LeftWrist] - v.magnitude) < 0.02f,
+              "speed and velocity are consistent",
+              "speed " + pose.Speed[(int)JointId.LeftWrist].ToString("F3", CultureInfo.InvariantCulture));
+    }
+}

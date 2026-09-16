@@ -1,6 +1,6 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-16
+Last updated: 2026-09-16 (F-29 trust channel + F-30 experiences)
 Purpose: next agent can continue without re-deriving context.
 
 **This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
@@ -11,9 +11,141 @@ for anything after 2026-08-11; the sections below are historical context for M0�
 
 ---
 
-## 🔷 CURRENT — v1 packaging and sidecar auto-launch (2026-09-16)
+## 🔷 CURRENT — F-29 trust channel + F-30 experiences + F-31 time echo & sound (2026-09-16)
 
-**This section is the live handoff. Read it before the historical material below.**
+**This section is the live handoff. Read it before anything below.**
+
+### What changed, in one paragraph
+
+The sidecar now publishes what it *believes* about each pose (`st` / `own` / `lat`), Unity draws it
+(trust HUD), hands and feet are rendered for the first time, an attract loop means an empty room is
+not a black screen, and seven interactive experience scenes were built on a shared tracking core
+extracted for the purpose. Reports: `F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md`,
+`F30_EXPERIENCES_2026-09-16.md`. Decisions: **ADR-066**, **ADR-067**.
+
+### F-31, added after the above
+
+**Time Echo** (`Scenes/TimeEcho.unity`) records the pose into a fixed ring and draws four delayed
+copies. It exists because the single-person limit is the project's hardest constraint and this turns
+it into the subject rather than working around it — see **ADR-069**. `EchoBuffer` is a top-level
+clock-injected class with 8 tests, deliberately not a private detail: a mis-indexed ring shows a
+plausible body at slightly the wrong time and no viewer can tell.
+
+**Sound** is a layer on `ExperienceBase`, not a scene, so all nine scenes gained audio without being
+edited — **ADR-068**. Synthesised at runtime (no assets), and every pitch comes from a pentatonic
+scale so a random human trigger source cannot produce a wrong note. `Play` takes a scale degree
+rather than a frequency to make that structural. **Nobody has heard it**: `AudioClip.Create` is a
+native call, so none of the synthesis runs headlessly.
+
+### The finding that mattered most
+
+**Two of the four F-29 items needed no new sensing at all.** Feet were already on the wire —
+`build_body_landmarks` has always emitted `FOOT_TO_JOINTID` (heels → JointId 29/30, toes → 31/32),
+measured present on 431/431 and 330/330 frames. Hands were already parsed — `ReadHand` read all 21
+landmarks, derived five curls for the avatar's fingers, and discarded the positions. The gap was
+presentation, not capability. Check what is already on the wire before adding to it.
+
+### Modified files
+
+```text
+python-sidecar~/
+  wholebody_udp_sender.py            + build_joint_states(), + st/own/lat, wire-contract docstring
+  tools/video/f23_video_to_unity.py  + real SkeletonTracker + TargetOwnership (states only)
+  README.md, CHANGELOG.md            wire contract + trust-channel semantics
+
+Runtime/Core/Models/
+  TrackingTelemetry.cs      NEW   trust channel, consumer side. Note the two-clock hazard on it.
+  RawHandFrame.cs           NEW   21 landmarks per hand, as positions
+
+Runtime/Tracking/OakD/
+  OakDUdpPoseProvider.cs    + ParseTelemetry, PublishRawHands, TryGetTelemetry, TryGetRawHands
+
+Runtime/SkeletonShow/
+  TrustHudMode.cs           NEW   mode 4
+  HandsMode.cs              NEW   mode 5
+  HandPose.cs               NEW   scale-invariant gesture layer
+  AttractState.cs           NEW   AttractSkeleton + PresenceGate
+  TrackedStage.cs           NEW   socket -> usable body, owned once (F-30)
+  ShowStage.cs              NEW   camera, bloom, floor grid, primitives (F-30)
+  SkeletonPose.cs           + foot bones, floor estimator, camera depth, telemetry, Velocity
+  SkeletonShowBootstrap.cs  + modes 4/5, attract, grounding, panels, keys
+
+Runtime/Experiences/        NEW assembly VirtualMirror.Experiences
+  ExperienceBase.cs, BodyRenderer.cs, AirGraffitiExperience.cs, BubblePopExperience.cs,
+  PoseMatchExperience.cs, DepthReachExperience.cs, FootprintsExperience.cs,
+  FluidFieldExperience.cs, ObjectPlayExperience.cs
+
+Runtime/Experiences/        F-31: ExperienceAudio.cs (shared sound), TimeEchoExperience.cs,
+                            EchoBuffer.cs; ExperienceBase + BodyRenderer extended
+Scenes/                     NEW   AirGraffiti, BubblePop, PoseMatch, DepthReach, Footprints,
+                                  Fluid, ObjectPlay, TimeEcho
+Tests/EditMode/             NEW   SkeletonShowF29Tests.cs (23 tests); asmdef + SkeletonShow ref
+docs/                       F29 + F30 reports, evidence/f29/, evidence/f30/
+```
+
+### Verified
+
+```text
+6/6 assemblies compile (Core, Tracking, SkeletonShow, Experiences, App, Tests)
+23/23 F-29 EditMode tests + 8/8 EchoBuffer tests (run outside the Editor - caveat below)
+29/29 F-29 acceptance checks   real provider, real socket, recorded production packets
+ 7/7 F-30 acceptance checks    TrackedStage over the same path
+ 3/3 velocity checks           against known straight-line motion
+173/173 sidecar unit tests still pass
+measured: 53.4 ms end-to-end latency on fresh frames
+```
+
+### ⚠ What is NOT verified — read before demoing
+
+1. **Nothing has been rendered on a screen this session.** Three Unity Editors held the project lock
+   throughout, so verification is compile + headless logic + real-wire parsing. Every geometric and
+   numeric claim is tested; **no visual claim is.**
+2. **No live OAK-D, ever.** All of it is recorded video through the production wire. The trust HUD's
+   depth row has only ever shown `0/33 MEASURED`.
+3. **The F-30 scene files were generated**, not authored in the Editor. Script GUIDs are md5 of the
+   asset path. A missing component means the `.meta` guid and the scene `m_Script` guid diverged.
+4. **Single person only, unchanged.** RTMW3D-x is single-person top-down; F-21's live two-person
+   acceptance failed on 2026-09-16. Nothing here changes that.
+
+### Two traps worth carrying forward
+
+* **Two clocks.** `TrackingTelemetry.SendEpochSeconds` (epoch) and `ArrivalSeconds` (a Stopwatch
+  since provider start) are separate fields on purpose. Subtracting one from the other yields the
+  epoch — 1.79 × 10¹² ms — which is exactly the bug that shipped in the first draft.
+* **`|Velocity|` is not `Speed`.** Equal for straight-line motion, but the smoothed vector partly
+  cancels on reversing motion (mean ratio 0.678 on a dancer). **Direction from `Velocity`, magnitude
+  from `Speed`.**
+
+### Next recommended task, in order
+
+0. **Listen to it.** F-31's audio has never been heard by anyone; the synthesis cannot run
+   outside a player. Do this at the same time as looking at the scenes.
+1. **Open the nine scenes and look at them.** This is the single highest-value next action and
+   nothing else should jump it. Expect to tune named constants; that is what they are for.
+2. **Refactor `SkeletonShowBootstrap` onto `TrackedStage`.** It still carries its own copy of the
+   chain. Deliberately deferred — it is the scene carrying verified evidence and the refactor could
+   not be visually checked — but two copies of that chain *will* drift. Do this once the Editor is
+   free and F-28/F-29's modes can be eyeballed after the change.
+3. **Run one live OAK-D session.** It is the only way to see the trust HUD's MEASURED depth path,
+   and the only way to know whether the floor and hand limits measured on video hold on stereo.
+4. **Calibrate the hand gesture thresholds** against a subject performing pinch/open on cue, rather
+   than against the pose distribution of two dance clips.
+
+### How to verify without the Editor
+
+The Editor lock is the normal state here, so the loop used all session is written up in
+`docs/evidence/f29/` and `docs/evidence/f30/`: `dotnet build` the generated `.csproj` (they are
+gitignored and carry an EXPLICIT file list — a new `.cs` must be added by hand or it is silently not
+compiled), then drive the real classes from a console harness referencing the built DLLs plus
+`UnityEngine.CoreModule.dll`. **The trap:** some `UnityEngine` maths is a native ECall and throws
+outside a player — `Quaternion.Slerp/Angle/LookRotation`, `Vector3.Slerp`, `Time.realtimeSinceStartup*`.
+`Vector3` arithmetic, `.normalized` and `Mathf.*` are fine. New code should avoid those calls where
+it cheaply can (this is why `HandPose.PalmRotation` is a computed property rather than a field);
+pre-existing ones — the provider's hand path, `HumanizedSkeleton` — must be routed around instead.
+
+---
+
+## v1 packaging and sidecar auto-launch (2026-09-16) — superseded as the live handoff by F-29/F-30 above
 
 ### What changed
 
@@ -181,7 +313,8 @@ OAK-D RGB+depth+intrinsics operating @30 fps; **packet loss 0.00 %** (0/1046 and
 correct label is LIMB ROTATION INSTABILITY.*
 
 **P0-1 UNITY GATE IS NOW PROVEN (2026-09-08).** Scripted occlusion injection
-([`inject_occlusion.py`](../python-sidecar~/inject_occlusion.py) → [`verify_gate.py`](../python-sidecar~/verify_gate.py))
+(`inject_occlusion.py` → `verify_gate.py` — **both absent from the tree and from git history;**
+these links were dead. The result below stands as a record; the harness would need rewriting to repeat it)
 streams the real UDP contract with occluded joints emitted as `[0,0,0,0]` — **with the sidecar not running
 at all**, so nothing is inferred from a Python-side hold. Result over 3/5/8/12/20-frame occlusions × 4 limbs:
 **20/20 PASS**, gate held for the full duration, **0 zero-rotations across 2765 held frames (no origin
@@ -191,7 +324,8 @@ collapse)**, 0 spurious holds on non-occluded limbs, re-acquired every time, bon
 (presence probe 2026-09-08: **0/359 frames, max 0/33 joints**) — no human has ever been in frame. Real
 confidence-*decay* profiles, spike magnitudes under fast motion, the 0.35 m cap's responsiveness, palm
 behaviour, trunk/root post-P0 comparison and avatar visual behaviour all need a person.
-→ Run [`python-sidecar~/guided_capture.py`](../python-sidecar~/guided_capture.py) — prompts through blocks
+→ `python-sidecar~/guided_capture.py` — **absent from the tree and from git history**; this link was
+dead. It prompted through blocks
 A–J on a countdown and reports every metric **per block**.
 
 **Gotchas found:**

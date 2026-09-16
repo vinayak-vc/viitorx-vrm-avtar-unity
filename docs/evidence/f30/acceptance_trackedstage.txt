@@ -1,0 +1,18 @@
+=== F-30 ACCEPTANCE - TrackedStage on real packets ===
+
+--- Velocity ---
+  PASS  velocity magnitude is right   x = 1.000 m/s (expected 1.000)
+  PASS  velocity direction is right   motion along +X reads as +X only
+  PASS  speed and velocity are consistent   speed 1.000
+
+--- TrackedStage over UDP 8899 for 22 s ---
+frames 899   live 750   attract 149
+  PASS  attract ran before anyone arrived   149 attract frames - an empty room is not a black screen
+  PASS  attract never carries telemetry   a synthetic body must not be describable by the trust HUD
+  PASS  live frames always carry telemetry   750 live frames
+  PASS  floor known on every live frame   750/750
+  PASS  grounding holds the feet on the grid   max |floor| after settling 53.9 mm (floor estimate's own noise is 36 mm sd)
+  PASS  foot contact detected   216 frames with a planted foot
+  PASS  |Velocity| never exceeds Speed   607 samples, max ratio 0.999, mean 0.678 (below 1 on reversing motion, by arithmetic)
+
+=== ALL CHECKS PASSED ===

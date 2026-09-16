@@ -22,9 +22,15 @@ namespace VirtualMirror.SkeletonShow {
     /// is not reviewable in a diff and drifts from the code that drives it. Here the scene file holds a
     /// camera and one GameObject, and every visual decision is in a file with a reason next to it.
     ///
-    /// CONTROLS: 1 / 2 / 3 pick a mode, TAB cycles, H toggles the humanized skeleton live (the fastest
-    /// way to see what F-27 does - the difference is most visible on a dropped or jittering limb), and
+    /// CONTROLS: 1-5 pick a mode, TAB cycles, H toggles the humanized skeleton live (the fastest
+    /// way to see what F-27 does - the difference is most visible on a dropped or jittering limb),
+    /// A toggles the F-29 attract loop, G toggles grounding the figure on its measured floor, and
     /// the on-screen buttons do the same for anyone who is not at the keyboard.
+    ///
+    /// F-29 ADDS: modes 4 (TRUST HUD) and 5 (HANDS); the attract loop, so an empty room shows a
+    /// demonstration figure through the real modes rather than a black screen; the trust channel from
+    /// the sidecar; and grounding, which corrects a 153 mm sink through the floor that has been in
+    /// every mode since F-28 and was invisible until the feet were drawn.
     /// </summary>
     public sealed class SkeletonShowBootstrap : MonoBehaviour {
         [Header("Tracking")]
@@ -42,14 +48,22 @@ namespace VirtualMirror.SkeletonShow {
         [Tooltip("Run the pose through the humanized layer before drawing it. Toggle live with H.")]
         [SerializeField] private bool useHumanizedSkeleton = true;
 
+        [Header("Attract (F-29)")]
+        [Tooltip("With nobody tracked, drive the active mode from a synthetic demonstration figure "
+                 + "instead of showing an empty scene. Toggle live with A.")]
+        [SerializeField] private bool attractEnabled = true;
+
         [Header("Staging")]
         [Tooltip("Where the mid-hip sits in the scene.")]
         [SerializeField] private Vector3 bodyOrigin = new Vector3(0f, 0.95f, 0f);
         [Tooltip("Metres of scene per metre of body. 1 = life size, which is what the camera is framed "
                  + "for; above that the figure is cropped.")]
         [SerializeField] private float bodyScale = 1f;
-        [Tooltip("Start in this mode (0-2).")]
+        [Tooltip("Start in this mode (0-4).")]
         [SerializeField] private int startMode;
+        [Tooltip("Slide the figure vertically so its measured foot contact sits on the floor grid. "
+                 + "Toggle live with G to see the difference.")]
+        [SerializeField] private bool groundToFloor = true;
 
         private ISkeletonMode[] modes;
         private int activeMode = -1;
@@ -68,6 +82,38 @@ namespace VirtualMirror.SkeletonShow {
         private PoseFrame humanizedFrame;
         private bool everTracked;
 
+        // F-29
+        private readonly TrackingTelemetry telemetry = new TrackingTelemetry();
+        private readonly RawHandFrame rawHands = new RawHandFrame();
+        private readonly HandPose leftHand = new HandPose();
+        private readonly HandPose rightHand = new HandPose();
+        private readonly PresenceGate presence = new PresenceGate();
+        private AttractSkeleton attract;
+        private bool hasTelemetry;
+        private float endToEndLatencyMs;
+        private TrustHudMode trustHud;
+        private HandsMode handsMode;
+
+        // ---- F-29 GROUNDING --------------------------------------------------------------------
+        // bodyOrigin places the mid-hip at a FIXED height, so how far the feet end up above or below
+        // the floor grid depends entirely on the subject's hip-to-floor length. Measured on the F-29
+        // regression clip, a 1.4 m subject's feet finish 153 mm BELOW the grid: the figure has been
+        // standing in the floor in every mode since F-28, which nobody could see before because the
+        // feet were not drawn and there was no floor measurement to compare them against.
+        //
+        // Corrected by shifting the staging origin, never the pose. Moving a joint to meet the floor
+        // would be inventing tracking data; moving the whole figure is a camera decision.
+        //
+        // THE TIME CONSTANT IS THE WHOLE DESIGN. This is a feedback loop - the offset changes the
+        // world positions, which change the measured floor, which changes the offset - and it shares
+        // that loop with SkeletonPose's own floor estimator (0.05 s falling, 0.6 s rising). At 1.5 s
+        // this correction is slower than the slowest part of that estimator by more than a factor of
+        // two, so the two cannot interact: the floor settles first and this follows a value that has
+        // already stopped moving. A fast correction here would oscillate against it.
+        private const float GroundingTau = 1.5f;
+        private float groundOffset;
+        private bool hasGroundOffset;
+
         private void Awake() {
             log = new UnityConsoleLog();
             palette = new SkeletonShowPalette();
@@ -79,10 +125,15 @@ namespace VirtualMirror.SkeletonShow {
 
             modeRoot = new GameObject("ModeRoot").transform;
             modeRoot.SetParent(transform, false);
+            attract = new AttractSkeleton();
+            trustHud = new TrustHudMode();
+            handsMode = new HandsMode();
             modes = new ISkeletonMode[] {
                 new GlowSkeletonMode(),
                 new EnergyBodyMode(),
                 new MotionEffectsMode(),
+                trustHud,
+                handsMode,
             };
 
             provider = new OakDUdpPoseProvider(log, converter, udpPort);
@@ -119,7 +170,28 @@ namespace VirtualMirror.SkeletonShow {
             provider.Tick(dt);
 
             PoseFrame frame;
-            if (provider.TryGetLatestFrame(out frame) && frame != null && frame.IsValid) {
+            bool live = provider.TryGetLatestFrame(out frame) && frame != null && frame.IsValid;
+            presence.Update(live, dt);
+            if (presence.Changed) {
+                log.Log(LogLevel.Info, presence.Present
+                        ? "F-29 attract: person acquired - going live."
+                        : "F-29 attract: nobody tracked for " + PresenceGate.LeaveSeconds
+                          + " s - returning to the attract loop.");
+            }
+
+            // F-29 trust channel. Fetched every frame regardless of presence so the HUD can report a
+            // stream that is arriving but not producing a valid pose - which is a real and very
+            // different condition from no stream at all, and the one an operator most needs named.
+            hasTelemetry = provider.TryGetTelemetry(telemetry);
+            if (hasTelemetry) {
+                // The receive-to-present leg. The sidecar reports its own leg in `lat`; this is the
+                // part Unity owns, which is the wire hop plus P1-3's deliberate presentation delay.
+                // Summing them is the only honest end-to-end figure, and neither half can be inferred
+                // from the other side alone.
+                endToEndLatencyMs = telemetry.AgeSeconds * 1000f;
+            }
+
+            if (live) {
                 everTracked = true;
                 PoseFrame shown = frame;
                 if (useHumanizedSkeleton) {
@@ -139,14 +211,67 @@ namespace VirtualMirror.SkeletonShow {
                     }
                     shown = humanizedFrame;
                 }
-                pose.Fill(shown, bodyOrigin, bodyScale, dt);
+                pose.Fill(shown, StagingOrigin(), bodyScale, dt);
+                pose.Telemetry = hasTelemetry ? telemetry : null;
+            } else if (attractEnabled && !presence.Present) {
+                // Attract drives the SAME path a person does, so whichever mode is active performs
+                // its real behaviour on a synthetic body. Telemetry is deliberately cleared: these
+                // joints were never tracked and a HUD must not report a state for them.
+                pose.Fill(attract.Tick(dt), StagingOrigin(), bodyScale, dt);
+                pose.Telemetry = null;
             } else {
-                pose.Fill(null, bodyOrigin, bodyScale, dt);
+                pose.Fill(null, StagingOrigin(), bodyScale, dt);
+                pose.Telemetry = hasTelemetry ? telemetry : null;
             }
+
+            // Hands arrive on their own channel and their own cadence: the sidecar omits a hand
+            // entirely below its confidence gate, so hand validity does not follow body validity.
+            // Never populated from attract - a synthetic body has no hand landmarks and inventing
+            // them would be the one thing that could make the attract loop pass for a real person.
+            bool handsLive = live && provider.TryGetRawHands(rawHands);
+            if (handsLive) {
+                leftHand.Fill(rawHands, true, StagingOrigin(), bodyScale);
+                rightHand.Fill(rawHands, false, StagingOrigin(), bodyScale);
+            } else {
+                leftHand.Fill(null, true, StagingOrigin(), bodyScale);
+                rightHand.Fill(null, false, StagingOrigin(), bodyScale);
+            }
+
+            UpdateGrounding(dt);
 
             if (activeMode >= 0) {
                 modes[activeMode].Render(pose, dt);
+                if (handsMode != null && modes[activeMode] == handsMode) {
+                    handsMode.RenderHands(leftHand, rightHand);
+                }
             }
+        }
+
+        /// <summary>Where the mid-hip is placed this frame: the authored origin plus the grounding
+        /// correction. One accessor so the body and the hands cannot be staged differently, which
+        /// would put a hand somewhere its own wrist is not.</summary>
+        private Vector3 StagingOrigin() {
+            return new Vector3(bodyOrigin.x, bodyOrigin.y + groundOffset, bodyOrigin.z);
+        }
+
+        // Drive the measured floor toward y = 0. See the field comments for why this is slow.
+        private void UpdateGrounding(float dt) {
+            if (!groundToFloor) {
+                groundOffset = Mathf.Lerp(groundOffset, 0f, 1f - Mathf.Exp(-dt / GroundingTau));
+                return;
+            }
+            if (!pose.HasFloor) {
+                return;
+            }
+            float target = groundOffset - pose.FloorY;
+            if (!hasGroundOffset) {
+                // Snap on the first measurement. Easing in from zero would slide the figure up
+                // through the floor over the first second and a half, in full view.
+                groundOffset = target;
+                hasGroundOffset = true;
+                return;
+            }
+            groundOffset = groundOffset + (1f - Mathf.Exp(-dt / GroundingTau)) * (target - groundOffset);
         }
 
         private void ReadInput() {
@@ -159,11 +284,27 @@ namespace VirtualMirror.SkeletonShow {
             if (Input.GetKeyDown(KeyCode.Alpha3)) {
                 SwitchTo(2);
             }
+            if (Input.GetKeyDown(KeyCode.Alpha4)) {
+                SwitchTo(3);
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha5)) {
+                SwitchTo(4);
+            }
             if (Input.GetKeyDown(KeyCode.Tab)) {
                 SwitchTo((activeMode + 1) % modes.Length);
             }
             if (Input.GetKeyDown(KeyCode.H)) {
                 useHumanizedSkeleton = !useHumanizedSkeleton;
+            }
+            if (Input.GetKeyDown(KeyCode.G)) {
+                groundToFloor = !groundToFloor;
+                hasGroundOffset = false;
+            }
+            if (Input.GetKeyDown(KeyCode.A)) {
+                attractEnabled = !attractEnabled;
+                if (!attractEnabled) {
+                    presence.Reset();
+                }
             }
         }
 
@@ -296,11 +437,15 @@ namespace VirtualMirror.SkeletonShow {
             }
             y = y + 22f;
             GUI.Label(new Rect(16f, y, 1200f, 22f),
-                      "1 / 2 / 3 or TAB switch mode      H toggles the humanized skeleton", hudStyle);
+                      "1-5 or TAB switch mode      H humanized      A attract      G ground-to-floor", hudStyle);
             y = y + 22f;
             string tracking;
             if (!everTracked) {
                 tracking = "WAITING for the sidecar on UDP " + udpPort + " - no pose has arrived yet";
+            } else if (!presence.Present && attractEnabled) {
+                // Named explicitly. An operator seeing a moving figure must never have to wonder
+                // whether it is a person being tracked or the demonstration loop.
+                tracking = "ATTRACT - synthetic figure, nobody tracked";
             } else if (pose.Valid) {
                 tracking = "TRACKING   energy " + pose.Energy.ToString("F2");
             } else {
@@ -308,6 +453,7 @@ namespace VirtualMirror.SkeletonShow {
             }
             GUI.Label(new Rect(16f, y, 1600f, 22f),
                       tracking + "      humanized: " + (useHumanizedSkeleton ? "ON" : "OFF")
+                      + "      attract: " + (attractEnabled ? "ON" : "OFF")
                       + "      " + smoothedFps.ToString("F0") + " fps",
                       hudStyle);
             if (useHumanizedSkeleton) {
@@ -315,6 +461,38 @@ namespace VirtualMirror.SkeletonShow {
                 HumanizedStats s = humanized.Stats;
                 GUI.Label(new Rect(16f, y, 1600f, 22f), "F-27  " + s.ToString(), hudStyle);
             }
+            DrawModePanel();
+        }
+
+        // F-29: the two new modes carry a numeric panel of their own. Drawn here rather than in the
+        // modes because one place owning every GUI call is what keeps the modes free of layout, and
+        // because a panel drawn top-right cannot collide with the switcher on the left.
+        private void DrawModePanel() {
+            if (activeMode < 0) {
+                return;
+            }
+            string text = null;
+            if (modes[activeMode] == trustHud) {
+                text = trustHud.BuildReadout(pose, endToEndLatencyMs) + "\n\n" + TrustLegend();
+            } else if (modes[activeMode] == handsMode) {
+                text = handsMode.BuildReadout(leftHand, rightHand);
+            }
+            if (text == null) {
+                return;
+            }
+            const float panelWidth = 640f;
+            float x = Screen.width - panelWidth - 16f;
+            GUI.Label(new Rect(x, 16f, panelWidth, 320f), text, hudStyle);
+        }
+
+        // The legend is permanent in the trust HUD, not a help overlay: this mode inverts the show's
+        // colour rule (speed everywhere else, TRUST here) and a viewer arriving mid-session has no
+        // way to know that.
+        private static string TrustLegend() {
+            return "COLOUR = TRUST (not speed, as in modes 1-3)\n"
+                   + "  green TRACKED    amber WEAK    blue PREDICTED\n"
+                   + "  red LOST    violet RECOVERING    grey no tracker\n"
+                   + "  brown halo = depth inferred, not measured";
         }
 
         /// <summary>Minimal <see cref="ILogService"/> so this scene needs no file logging and no

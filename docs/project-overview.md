@@ -1,6 +1,7 @@
 # Virtual Mirror — Project Overview
 
 **Status:** Milestone-2 — OAK-D depth path shipping. Stability program **P0 + P1-1 + P1-2 + P1-3 COMPLETE** (see `ai_handoff.md` for the status table).  
+**Demonstration branch:** F-28 → F-30. The avatar is parked (F-26: the tracking is sound, the *retarget* is not), and the debug skeleton is being built into the product — one show scene with five modes plus seven interactive experience scenes, all driven from joint POSITIONS with the retarget skipped entirely. See `architecture.md` → *Demonstration branch*.  
 **Stack:** Unity 6 + **OAK-D (DepthAI) + RTMW3D Python sidecar** + Kalidokit-ported retarget + VRM 1.0 (UniVRM); MediaPipe Tasks + Animation Rigging retained as the fallback path.  
 **Platform:** Windows x64 EXE  
 
@@ -41,6 +42,8 @@ Multiplayer, VR/AR, cloth authoring, marketplace, lip-sync from mic, non-Windows
 | Architecture | `architecture.md`, `04_SystemArchitecture.md` |
 | Milestones | `22_Milestones.md`, `roadmap.md` |
 | Next work | `tasks.md`, `ai_handoff.md` |
+| Experience scenes | `F30_EXPERIENCES_2026-09-16.md` |
+| Trust channel / hands / feet / attract | `F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md` |
 | Coding law | `AGENTS.md` (parent), `23_CodingStandards.md` |
 
 Full index: `README.md` in this folder.

@@ -157,6 +157,36 @@ the destination port to detect a stale producer, which means it reads Unity's he
 | 8899 | UDP | Pose stream, sidecar → Unity |
 | 8897 | TCP | Supervisor single-instance lock |
 
+### Experience scenes (F-30)
+
+Eight demonstration scenes under `Scenes/`, each a camera and one GameObject with everything built
+at runtime. All of them have sound: a drone that follows whole-body energy, a movement layer, and
+event cues — synthesised at runtime, so there are no audio assets to install. They all take the same sidecar on the same port — open one and press Play. With nobody
+in front of the camera each shows a synthetic attract figure rather than a black screen.
+
+| Scene | What a visitor does | Needs hands? |
+|---|---|---|
+| `Footprints` | Stand still; the floor grows a mark that remembers how long you stayed | no |
+| `Fluid` | Move; the space swirls and keeps swirling after you stop | no |
+| `ObjectPlay` | Bat, kick and head objects; pinch to pick one up and throw it | optional |
+| `BubblePop` | Swing at bubbles. 60 s, score, combo | no |
+| `PoseMatch` | Copy a ghost pose; your joints turn green as they land | no |
+| `DepthReach` | Reach *into* rings at three real distances — the demo that needs the depth camera | no |
+| `TimeEcho` | Move; four copies of you from seconds ago trail behind | no |
+| `AirGraffiti` | Pinch thumb and finger together and draw in the air | **yes** |
+| `SkeletonShow` | The five-mode show scene, including the trust HUD (F-28/F-29) | mode 5 only |
+
+Sound is on by default in every experience scene; `M` mutes.
+
+Shared keys in every experience: `R` reset, `H` humanized skeleton, `A` attract loop, `G` ground to
+floor, `M` mute. Some add their own — `C` clears in Air Graffiti, Footprints and Time Echo, `N` skips
+a pose in Pose Match.
+
+**Hand-driven experiences need the subject close to the camera.** At ~1.4 m 99.1% of hand
+observations are anatomically plausible; at ~2.9 m only 59.9% are. Air Graffiti and Object Play's
+grabbing say so on screen rather than failing silently, but they will frustrate at three metres.
+Everything else runs on body joints and is unaffected.
+
 ---
 
 ## How it is packaged (ADR-064)
@@ -251,8 +281,37 @@ These are open. Do not describe them as done.
 * **F-22 L2 hands-near-face** has not been run live.
 * **F-27 (humanized skeleton) has never run on stereo.** Both measurements used the video path,
   which synthesises every joint's depth, so every protective stage was idle.
-* **F-28 (skeleton show scene) has never run with a live camera.**
+* **F-28/F-29 (skeleton show scene) has never run with a live camera**, and F-29 has never been
+  rendered on a screen by a human — it is verified by compilation, 23 EditMode tests and a headless
+  harness that drives the real provider over a real socket with recorded packets. Every geometric
+  and numeric claim is tested; no **visual** claim is. The trust HUD's depth row has consequently
+  only ever shown `0/33 MEASURED`, because a video file has no stereo pair.
+* **Floor contact degrades with distance, and is not usable far away.** Measured on the F-29 clips:
+  the smoothed floor estimate is stable to 21 mm at ~1.4 m but only 81 mm at ~2.9 m, where
+  smoothing makes it *worse* because the error is a slow drift rather than noise. Hand tracking
+  fails the same way — 99.1% of hands are anatomically plausible at 1.4 m, 59.9% at 2.9 m, with
+  palms reported up to 362 mm. Both are gated and reported rather than hidden, but neither should
+  be built on at that range. See `docs/evidence/f29/measurements.txt`.
+* **F-29 hand gesture thresholds are uncalibrated.** Pinch and finger-extension thresholds are
+  derived from the distribution of ordinary hand poses in two dance clips, not from a subject
+  performing each gesture on cue. They separate open from closed on that data; they have not been
+  validated against intent.
+* **The F-31 sound layer has never been heard.** It compiles and the synthesis arithmetic is
+  checked, but `AudioClip.Create` is a Unity native call that cannot run outside a player, so every
+  judgement about how it actually sounds — levels, whether the drone masks the cues, whether it is
+  bearable for an hour — is unmade. Expect to retune; the mix constants are all named.
+* **The eight experience scenes have never been rendered.** They compile, their shared
+  tracking core is verified over a real socket with recorded packets, and F-29's 23 tests still
+  pass — but no experience's own visuals or feel have been seen. Expect to tune constants on first
+  run; they are all named, with the reasoning attached. The scene files were generated rather than
+  authored in the Editor, so if a component shows as missing, the script `.meta` GUID and the
+  scene's `m_Script` guid have diverged.
+* **`SkeletonShowBootstrap` still carries its own copy of the tracking chain.** `TrackedStage` was
+  extracted for the experiences; the F-28/F-29 scene was left alone because it is the one scene
+  carrying verified evidence and the refactor could not be visually checked. Two copies of that
+  chain will drift — this is the top follow-up.
 * **The Unity EditMode suite has not been re-run** since `kalidokitBodyTorsoRoll` changed 0 → 1.
+  F-29's own 23 tests were run outside the Editor (23/23) because the project lock was held.
 
 ---
 

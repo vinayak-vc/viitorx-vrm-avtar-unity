@@ -4,6 +4,117 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## ✅ F-31 TIME ECHO + SOUND (2026-09-16)
+
+```text
+BUILT AND COMPILING. 8/8 EchoBuffer tests. Nothing has been SEEN or HEARD — see below.
+ADR-068 (sound), ADR-069 (time echo).
+```
+
+- [x] **Time Echo** (`Scenes/TimeEcho.unity`) — four delayed copies of you trailing behind. Turns the
+      project's hardest limit into the subject: RTMW3D-x is single-person with no detector and no
+      track id, and F-21's live two-person acceptance failed, so this makes a crowd from one person
+      without touching any of that. Replay of already-validated pose data, so it cannot fail in a new
+      way; body joints only, so it works where the hands do not.
+- [x] **`EchoBuffer`** — a fixed, clock-injected ring, extracted to a top-level class **because a
+      mis-indexed ring shows a plausible body at slightly the wrong time and no viewer can tell**.
+      8 unit tests including the post-wrap case.
+- [x] **Sound as a shared layer** — `ExperienceAudio` on `ExperienceBase`, so all nine scenes gained
+      a drone that follows body energy, a movement layer, and arrival/departure cues without being
+      edited. Closes F-28 §7.4, open since there were three modes.
+- [x] **Synthesised at runtime** — no `.wav` assets, no import settings, no licence questions; the
+      scene stays a camera and one GameObject. Drone partials snap to whole-cycle frequencies so the
+      loop does not click.
+- [x] **Every pitch is pentatonic**, and `Play` takes a scale DEGREE rather than a frequency, so a
+      caller can compose a rising run and is structurally unable to produce a wrong note. This is what
+      decides whether the room is bearable after an hour of strangers triggering it.
+- [x] **Cues wired into the events that already existed**: bubble pops rise with the combo, a
+      footprint petal plays a climbing note, an object hit is louder for a harder swing, grab/release,
+      a pose match chord, a stroke starting in Air Graffiti.
+- [x] `M` mutes in every scene.
+
+### ⚠ Before demoing F-31
+- [ ] **Nobody has heard any of it.** `AudioClip.Create` is a native call, so the synthesis cannot
+      run headlessly — it compiles and the arithmetic is right, but every judgement about how it
+      SOUNDS is unmade. Expect to retune levels; the mix constants are all named.
+- [ ] **Nobody has seen Time Echo.** Same Editor-lock caveat as the other eight scenes.
+- [ ] Check the drone does not mask the cues in a real room; they are two octaves apart on paper.
+
+## ✅ F-30 EXPERIENCES (2026-09-16) — seven scenes on one shared tracking core
+
+```text
+BUILT AND COMPILING. Not rendered — see the caveat block below before demoing.
+Report: F30_EXPERIENCES_2026-09-16.md    ADR-067    Evidence: docs/evidence/f30/
+```
+
+- [x] **`TrackedStage`** — everything between the socket and a usable body, owned once: provider,
+      converter, the F-27 humanized layer *and its once-per-pose rule*, world pose, both hands, trust
+      channel, attract loop, presence gate, floor grounding. A plain class, not a MonoBehaviour, so
+      the order of "advance the tracking" and "read the tracking" lives in the code rather than in
+      Unity's script execution order (ADR-067).
+- [x] **`ExperienceBase`** — shared staging, HUD, keys (`R` reset / `H` humanized / `A` attract /
+      `G` ground), and `ScoringAllowed`, which stops any experience scoring the synthetic attract
+      figure.
+- [x] **Seven scenes**, each a camera and one GameObject: `Footprints`, `Fluid`, `ObjectPlay`,
+      `BubblePop`, `PoseMatch`, `DepthReach`, `AirGraffiti`.
+- [x] **`SkeletonPose.Velocity`** — per-joint world velocity. **`|Velocity|` is NOT `Speed`**: equal
+      on straight-line motion (1.000 vs 1.000 m/s), but the smoothed vector partly cancels on
+      reversing motion (mean ratio 0.678 on a dancer, max 0.999). Take direction from `Velocity`,
+      magnitude from `Speed`. Documented on the field; both the fluid and the object strikes comply.
+- [x] **Verified:** 6/6 assemblies compile; `TrackedStage` driven over a real socket with recorded
+      production packets, 7/7 checks; 3 velocity checks; F-29's 23 EditMode tests still pass.
+
+### ⚠ Before demoing F-30
+- [ ] **Nothing has been rendered on a screen.** Three Editors held the project lock all session.
+      Every geometric and numeric claim is tested; **no visual claim is** — colours, sizes, bloom,
+      whether a bubble is reachable, whether the fluid reads as fluid. Expect to tune constants on
+      first run; they are all named with the reasoning attached.
+- [ ] **Scene files were generated, not authored in the Editor.** Each is the F-28 scene with its
+      component swapped; script GUIDs are md5 of the asset path. If a component shows as missing, the
+      `.meta` guid and the scene's `m_Script` guid have diverged.
+- [ ] **`SkeletonShowBootstrap` still has its own copy of the tracking chain.** `TrackedStage` was
+      extracted for the experiences; F-28/F-29's scene was left alone because it carries the verified
+      evidence and the refactor could not be visually checked. **Top follow-up** — two copies drift.
+- [ ] Air Graffiti and Object Play's *grabbing* need the subject close in (hands are 99.1% plausible
+      at 1.4 m, 59.9% at 2.9 m). Both say so on screen; both will frustrate at three metres.
+
+## ✅ F-29 TRUST HUD / HANDS / FEET / ATTRACT (2026-09-16)
+
+```text
+BUILT AND VERIFIED HEADLESSLY. 23/23 EditMode tests, 29/29 acceptance checks against the real
+provider over a real socket. Report: F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md   ADR-066
+```
+
+- [x] **Trust channel on the wire** — `st` (P1-1/P1-4 state per joint), `own` (F-21 ownership),
+      `lat` (measured camera-to-payload latency). All optional and read-only; nothing upstream reads
+      them back. `st` captured AFTER P1-4 so it matches the geometry actually emitted.
+- [x] **Mode 4 TRUST HUD** — the per-joint state that previously reached only a log file, drawn.
+      Colour means TRUST here, deliberately breaking the show's speed rule; legend permanently on
+      screen for that reason.
+- [x] **Mode 5 HANDS** — all 21 landmarks per hand, palm plane, pinch, finger count. Gesture
+      measures normalised by palm length so they cannot fire on subject distance.
+- [x] **Attract loop** — a synthetic pose SOURCE, not a separate renderer, so it demonstrates the
+      real modes. Closes F-28 §7.4.
+- [x] **Feet drawn** — heels 29/30 and toes 31/32 were always on the wire (431/431 and 330/330
+      frames measured); each foot is now an ankle–heel–toe triangle.
+- [x] **Fixed: the figure stood 153 mm inside the floor** in every mode since F-28, invisible until
+      the feet were drawn. `groundToFloor` settles it to 0.3 mm with no overshoot.
+- [x] **Fixed: floor-driven effects were 81–127 mm too high** — the floor came from the lowest
+      *ankle*; it now comes from the four foot contact points.
+- [x] **Fixed: latency mixed two clocks** — `UtcNow − arrivalStopwatchTime` reported 1.79 × 10¹² ms.
+      Real figure: **53.4 ms end-to-end**.
+
+### ⚠ Measured limits that bound what should be built on this
+- [ ] **Floor contact is usable at ~1.4 m (21 mm smoothed), NOT at ~2.9 m (81 mm)** — and smoothing
+      makes it *worse* at distance, which is the signature of drift rather than noise. Do not build
+      true contact detection at three metres.
+- [ ] **Hands: 99.1% plausible at 1.4 m, 59.9% at 2.9 m**, with palms reported up to 362 mm. Gated
+      and reported rather than hidden, but do not depend on hands at range.
+- [ ] **Hand gesture thresholds are uncalibrated** — derived from the distribution of ordinary hand
+      poses in two dance clips, not from a subject performing gestures on cue.
+- [ ] The trust HUD's depth row has only ever shown `0/33 MEASURED`; the MEASURED path is correct by
+      construction and **has not been seen**, because no live OAK-D session has been run.
+
 ## ⚠ F-26 AVATAR vs DEBUG SKELETON (2026-09-16) — observation report, no decision taken
 
 Screen recording reviewed (`LatestScreenReording.mp4`, 129 s). **The tracking is not the problem; the

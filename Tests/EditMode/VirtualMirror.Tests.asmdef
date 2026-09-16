@@ -7,7 +7,9 @@
         "VirtualMirror.Core",
         "VirtualMirror.Tracking",
         "VirtualMirror.Retargeting",
-        "VirtualMirror.Diagnostics"
+        "VirtualMirror.Diagnostics",
+        "VirtualMirror.SkeletonShow",
+        "VirtualMirror.Experiences"
     ],
     "includePlatforms": [
         "Editor"
