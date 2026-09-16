@@ -1,7 +1,235 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-08-10  
+Last updated: 2026-09-16
 Purpose: next agent can continue without re-deriving context.
+
+**This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
+(OAK-D wall-probe sweeps, portrait, F-19 production validation, F-20A session/stale recovery, F-20B
+sidecar supervisor) is tracked in [`roadmap.md`](roadmap.md) ("NEXT PATH" section, kept current),
+[`decisions.md`](decisions.md) (ADR-044 onward) and dated `F##_*.md` report docs — read those first
+for anything after 2026-08-11; the sections below are historical context for M0–M2.
+
+---
+
+## 🔷 CURRENT — v1 packaging and sidecar auto-launch (2026-09-16)
+
+**This section is the live handoff. Read it before the historical material below.**
+
+### What changed
+
+The user no longer starts the sidecar by hand, and a build now carries one. See **ADR-064** in
+[`decisions.md`](decisions.md) for the full reasoning, including why pm2 and a copied `.venv` were
+both rejected.
+
+| File | Role |
+|---|---|
+| `Runtime/Tracking/OakD/SidecarProcessLauncher.cs` | Spawns `sidecar_supervisor.py`, pipes its output into `ILogService`, tears it down via a Win32 kill-on-close job object. |
+| `Runtime/Tracking/OakD/SidecarPaths.cs` | Editor/player path resolution + validation. UnityEngine-free so it is testable. |
+| `Runtime/Tracking/OakD/SidecarLocator.cs` | Thin UnityEngine shim over the above. |
+| `Editor/SidecarBuildPostprocessor.cs` | Copies sidecar `.py` source into `StreamingAssets/Sidecar/` at build time. |
+| `Tests/EditMode/SidecarPathsTests.cs` | 11 tests guarding the packaging paths. |
+| `python-sidecar~/setup_sidecar.ps1` | One-time target setup; verifies `DmlExecutionProvider`. |
+| `python-sidecar~/requirements.lock.txt` | Exact `pip freeze`. **`requirements.txt` had `onnxruntime-directml` commented out** — setting up from it produced a sidecar with no inference. |
+| `AppBootstrap.cs` | `autoStartSidecar` + options; `StartSidecar()` in `StartTracking()`; disposal first in `TeardownServices()`. |
+| `README.md` (repo root) | Product README. The previous root copy was a byte-identical duplicate of `docs/README.md` with links that only resolve from `docs/`. |
+
+### Verified
+
+```text
+supervisor accepts the launcher's exact CLI      SIDECAR READY in 14.5 s
+second supervisor while the first holds the lock SUPERVISOR ABORT (lock_port=8897)
+TcpListener probe on 8897 while held             SocketException -> AttachedExternal, no spawn
+taskkill /F /T on the supervisor                 3 processes killed, 8897 + 8899 released, no orphan
+3x start/stop cycle                              3/3 passed
+SidecarPathsTests                                11/11 passed
+new C# compiles against Unity 6000.3.9f1         clean
+```
+
+### NOT verified — do not claim these
+
+* **The in-editor Play → exit → Play cycle has not been run.** The launch and teardown mechanism was
+  exercised directly (exact CLI, exact `taskkill /F /T`), not through Unity's Play mode.
+* **No build has been produced or run.** `SidecarBuildPostprocessor` has never executed.
+* **The full EditMode suite (170 tests) has not been re-run.** The editor was open and running it in
+  batch mode requires closing it. Only the 11 new packaging tests were executed, via a standalone
+  Mono runner.
+* Everything in README.md's "Known limitations" remains open, unchanged by this work.
+
+### Next recommended task
+
+1. Press Play with `useOakUdpTracking` on and confirm the HUD reports the sidecar; exit and confirm
+   no orphan holds 8899. Repeat three times.
+2. Produce a Windows build, run `setup_sidecar.ps1` inside `StreamingAssets/Sidecar/`, and confirm
+   tracking works outside the editor.
+3. Re-run the full EditMode suite in batch mode with the editor closed.
+4. Surface `SidecarProcessLauncher.StatusLine` in `DiagnosticsHudPanel` — the launcher exposes it,
+   but nothing displays it yet.
+
+---
+
+## 📍 PROGRAM STATUS
+
+| Stage | Status | Evidence |
+|---|---|---|
+| **P0** — LimbGate + limb caps | **COMPLETE** (accepted after the live human run) | [`P0_ACCEPTANCE_2026-09-07.md`](P0_ACCEPTANCE_2026-09-07.md) |
+| **P1-1** — per-joint temporal tracking + plausibility | **COMPLETE** | [`P1_1_TRACKER_2026-09-08.md`](P1_1_TRACKER_2026-09-08.md) |
+| **P1-2** — real-time frame freshness / throughput | **COMPLETE** (incl. human A/B) | [`P1_2_FRESHNESS_2026-09-08.md`](P1_2_FRESHNESS_2026-09-08.md) |
+| **P1-3** — Unity timestamped pose buffer + interpolation | **COMPLETE** | [`P1_3_POSE_BUFFER_2026-09-08.md`](P1_3_POSE_BUFFER_2026-09-08.md) |
+| **Next** | recovery / palm / foot work — NOT STARTED | — |
+
+**Cumulative latency:** camera→avatar was ~162 ms → **~102 ms** (P1-2 removed ~100 ms of queue
+staleness; P1-3 spends 40 ms of that on interpolation, halving stutter).
+**Tests: 47/47 Unity EditMode + 37/37 Python green.**
+
+---
+
+## 🎞️ P1-3 Unity pose buffer = PASS (2026-09-08, `P1_3_POSE_BUFFER_2026-09-08.md`)
+
+`Runtime/Core/PoseBuffer.cs` — bounded ring of 16 timestamped poses; Unity renders at
+`now − poseInterpolationDelayMs` and interpolates between the bracketing pair instead of re-applying
+latest-wins (measured **17.8 applies per packet**, **41.5% of render frames frozen**).
+
+- Stutter (delta CoV) **2.286 → 1.070 (−53%)**; frozen render frames **41.5% → 23.6%**.
+- Measured with `stream_motion.py` — identical deterministic input in both runs; a human cannot repeat
+  a performance closely enough to measure interpolation quality.
+- **40 ms chosen over 55 ms**: 55 ms bought only 3 more points of smoothness for 15 ms more latency.
+- `poseInterpolationDelayMs = 0` restores the original path exactly (the buffer is not even populated).
+- **Safety rule preserving P0-1:** a landmark is NEVER position-interpolated across an invalid endpoint.
+  The sidecar sends a dropped joint as `[0,0,0,0]`, so lerping valid→zero would put it half-way to the
+  ORIGIN — the exact F-01 collapse. The valid position is carried and confidence becomes `min` = 0, so
+  the LimbGate still holds. Tested.
+- No extrapolation; duplicate / out-of-order / backwards-timestamp packets rejected.
+- **Known gap:** hands/palm quats still use the old rate-limited slerp path (not buffered), so body and
+  hands sit on timelines ~40 ms apart.
+
+---
+
+## ⚡ P1-2 frame freshness = PASS (2026-09-08, `P1_2_FRESHNESS_2026-09-08.md`) — CURRENT STATE
+
+**Root cause of the 131 ms camera→host latency, found and fixed.** `DataOutputQueue.get()` returns the
+**OLDEST** packet. With inference (~21 ms) slower than the 30 fps sensor, the host queue sat full at
+`maxSize=4` → **4 × 33.3 = 133 ms** of pure staleness (measured live: 131.4 ms). Nothing was slow; the
+system was working on old frames.
+
+**Fix (host-side only, ~20 lines in `wholebody_udp_sender.py`):** one blocking `get()` for liveness,
+then `tryGetAll()` and keep only the NEWEST; depth chosen by **closest timestamp** to the selected RGB
+frame. Queue size unchanged. Toggle `--latest-frame` (default ON) / `--no-latest-frame`.
+
+| metric (loaded ~18.8 fps) | FIFO | latest-frame |
+|---|---|---|
+| frame age median | 130.95 ms | **30.71 ms** |
+| camera→UDP median | 183.45 ms | **85.44 ms** |
+| RGB/depth sync max | 54.53 ms | **12.09 ms** |
+| fps | 18.8 | 18.7 |
+
+- **RGB/depth pairing got BETTER, not riskier** — the old ordinal pairing was mis-associating depth by
+  **54.56 ms** (~1.6 frames). That is audit **F-09**, quantified for the first time.
+- Compute unchanged (43.29 vs 43.88 ms) → the win was queue wait, not processing.
+- 180 s soak: **no accumulation** (median 31.11 → 31.52 ms).
+- New permanent diagnostics in `sender_log.jsonl`: `frameAgeMs`, `queueDepth`, `staleDropped`,
+  `rgbDepthSyncMs`. Console prints `age=NNms stale=N`.
+- `--inject-load-ms` is **TEST-ONLY** (reproduces the subject-present condition without a human);
+  never set it in production.
+
+**Still needs a human subject:** real-motion A/B and the per-joint jitter regression (Phases 5–6).
+Run `run_p12_ab.bat`. **Methodological warning:** latest-frame skips frames, so *per-frame* displacement
+rises without any jitter increase — that comparison must be **velocity-normalised**, not per-frame.
+
+**Do NOT implement the Unity pose buffer yet** — P1-2 only guarantees Unity now receives fresh data.
+
+---
+
+## 🧩 P1-1 per-joint temporal tracking = PASS (2026-09-08, `P1_1_TRACKER_2026-09-08.md`) — CURRENT STATE
+
+Solves the verified P0 finding **CONFIDENT-BUT-WRONG LANDMARKS** (a hidden wrist held a wrong position
+for 840 frames at conf ~0.63). New `python-sidecar~/joint_tracker.py`: ONE reusable `JointTracker` per
+joint (TRACKED/WEAK/PREDICTED/LOST) + `SkeletonTracker`. Sits AFTER the P0 smoother, BEFORE PoseFrame.
+**P0 LimbGate is untouched and remains the final safety layer** — a LOST joint has its emit confidence
+zeroed, which looks exactly like a real occlusion to Unity. No Unity C# changed for P1-1.
+
+- **37/37 unit assertions** (`test_joint_tracker.py`), **6/6 adversarial cases detected**
+  (`evaluate_p1.py`), incl. the frozen-wrist case → 0.0000 m residual error.
+- **Latency 0.085 ms** median / 0.121 ms p99 for 12 joints — 8× under the 1 ms budget.
+- Legitimate dancing: **median/p95 unchanged**, peak displacement −18…−27% on 4 joints, worst
+  regression +6.1% (5.5 mm). PREDICTED 0.3%, LOST 0.0% → no false rejection.
+- Toggle: `--tracker` (default ON) / `--no-tracker` for A/B.
+
+**The check that actually matters is FROZEN detection** — a stuck joint has near-zero residual, speed
+and acceleration, so no conventional plausibility test can see it. That was the real observed failure.
+
+**Two bugs the tests caught (both would have shipped silently):** reacquisition was *teleporting* via
+the coherence path (aggregate stats looked fine); and the neighbour/segment check was acting as a veto,
+rejecting 4.6–13.5% of legitimate motion. Both fixed and re-measured.
+
+**Known weak spot:** a sustained high-confidence teleport longer than the 6-frame prediction window ends
+in LOST with slow recovery during fast motion → needs **P1-3/P1-5**.
+
+*(Superseded: P1-2 turned out to be frame freshness, not velocity refinement — see the status table.)*
+
+---
+
+## 🚦 P0 acceptance = CONDITIONAL PASS — 14 criteria still NOT TESTED (2026-09-07, `P0_ACCEPTANCE_2026-09-07.md`) — READ THIS FIRST
+
+P0-1 (`LimbGate` confidence hold) and P0-2 (0.35 m limb cap + legs into the hold set) are implemented.
+Full acceptance report: [`P0_ACCEPTANCE_2026-09-07.md`](P0_ACCEPTANCE_2026-09-07.md).
+
+**Machine-verifiable half PASSES:** compile clean (0 `error CS`); **33/33 EditMode tests** incl. all 6
+`LimbGateTests`; shipping config confirmed; `LimbGate` traced on the live path (7 hops, source-cited);
+OAK-D RGB+depth+intrinsics operating @30 fps; **packet loss 0.00 %** (0/1046 and 0/54 285, 0 out-of-order);
+**end-to-end latency MEASURED ≈ 44.9 ms** median camera→avatar (audit had estimated 80–150 ms);
+**bone lengths CONSTANT to 0.000000 m** over 12 194 applied frames → *squashing does not occur; the
+correct label is LIMB ROTATION INSTABILITY.*
+
+**P0-1 UNITY GATE IS NOW PROVEN (2026-09-08).** Scripted occlusion injection
+([`inject_occlusion.py`](../python-sidecar~/inject_occlusion.py) → [`verify_gate.py`](../python-sidecar~/verify_gate.py))
+streams the real UDP contract with occluded joints emitted as `[0,0,0,0]` — **with the sidecar not running
+at all**, so nothing is inferred from a Python-side hold. Result over 3/5/8/12/20-frame occlusions × 4 limbs:
+**20/20 PASS**, gate held for the full duration, **0 zero-rotations across 2765 held frames (no origin
+collapse)**, 0 spurious holds on non-occluded limbs, re-acquired every time, bone lengths constant.
+
+**Still NOT TESTED (9 criteria): human motion quality.** Every camera capture recorded `measured_body = 0/33`
+(presence probe 2026-09-08: **0/359 frames, max 0/33 joints**) — no human has ever been in frame. Real
+confidence-*decay* profiles, spike magnitudes under fast motion, the 0.35 m cap's responsiveness, palm
+behaviour, trunk/root post-P0 comparison and avatar visual behaviour all need a person.
+→ Run [`python-sidecar~/guided_capture.py`](../python-sidecar~/guided_capture.py) — prompts through blocks
+A–J on a countdown and reports every metric **per block**.
+
+**Gotchas found:**
+- **Do NOT run the unfiltered EditMode suite** — it aborts the Editor via a MediaPipe native
+  `CHECK failed: 1 == ChannelSize()` (`image_frame.cc:362`) on the prebuild domain reload. Scope runs to
+  the `VirtualMirror.Tests` assembly. Not a P0 defect.
+- ~~`limbConfidenceThreshold` absent from the scene~~ **FIXED** — now serialized at
+  `Scenes/Bootstrap.unity:173` (`limbConfidenceThreshold: 0.3`).
+- **`model_log` does not start until the VRM avatar binds (~7 s after Play).** Any test injecting data
+  before that gets *no observations* — which is NOT a failure. A first gate run scored a misleading
+  "16/20" for exactly this reason; warm-up is now 12 s. **Absence of observation ≠ evidence of failure.**
+- **L-palm rotation is pinned at the 15°/frame rate limiter** (median == p95 == 14.98°) in the baseline —
+  it is slewing at max rate continuously, not tracking. Pre-existing, unexplained, re-check live.
+- Diagnostic-only instrumentation added (`DIAG-ONLY` comments, +85 Unity / +20 sidecar lines, additive
+  logging only). Baseline logs preserved in `python-sidecar~/pipeline_logs_baseline_audit/`.
+
+**Do NOT start P1** until the capture above is done. Then P1-1 (per-joint temporal state) first —
+rationale in §14 of the report.
+
+---
+
+## 🧭 Retarget regression DIAGNOSED + torso-yaw damped (2026-08-11, ADR-027 + `RETARGET_AUDIT_2026-08-11.md`)
+
+The user's screen recording showed the **debug skeleton correct but the avatar arms/legs/torso wrong** (twisted waist, wrong facing, arms dragged/asymmetric, "inhuman" fingers). Full diagnosis in [`RETARGET_AUDIT_2026-08-11.md`](RETARGET_AUDIT_2026-08-11.md). **Root cause:** Kalidokit derives torso facing from the shoulder/hip-line DEPTH separation (2-pt `rollPitchYaw`), which is hypersensitive to OAK depth noise at range (measured: rest yaw −10°, excursions −119°, ±180° flips). **ADR-025's un-flatten exposed it** → the chest over-twists and drags the arms (M1 was stable only because the trunk was flattened = frontal-locked). An interim "×π over-rotation" claim was **WRONG** — Kalidokit's `rigHips` ×π too; the port is faithful there.
+
+**User chose "keep 360° turning but damp it."** Implemented (ADR-027): a **torso-yaw conditioner** (rate-limit 140°/s rejects the ±180° flips + follows real turns; soft dead-zone 8–22° → frontal when small; low-pass) on hips+spine yaw, live-scaled by **`kalidokitTorsoYawScale`** (0 = frontal-lock fallback, 1 = full); plus **restored Kalidokit per-bone dampeners** (Hips 0.7 / Spine 0.45 / Chest 0.25, was 1.0 + 0.5/0.5). Verified offline on the real logs: rest yaw −10°→−1°, flips 2→0, jitter −39%. Compile 0/0.
+
+**FRONTAL-LOCK is now the DEFAULT (2026-08-11, ADR-027 amendment).** The user's post-fix capture confirmed the conditioner worked (hips-yaw max 90°→2.27°, STABLE; arms/bend/position track at ~1.5–1.8 m; both-arms-up now symmetric). The residual "hands go backwards" = the avatar turning to face away, which correlates with **distance** (median torso-yaw 22° at <1.8 m vs 64° at 2.1–2.4 m; raw skeleton folds at 2.66 m). User walks to 2.5 m+ in the M2 room → chose **frontal-lock**. `kalidokitTorsoYawScale` default = **0** (applied live). Arms/bend/walk/fingers unaffected. Re-enable turn = raise the knob while **standing <~1.8 m**; the proper walk-around fix is a **distance-gated yaw** (deferred, see ADR-027 amendment). **R4 RESOLVED — NO arm bug (live injection 2026-08-11):** asymmetric-pose injection on the live driver showed both arms raise correctly when both raised and each side responds independently — the arm solver + `flipQuat` are sound (minor ~25% side magnitude asym only). The "one arm up" was the **torso twist dragging the arms** (R1, fixed by ADR-027). **DO NOT touch `kalidokitBodyFlipQuat`.** Still open: fingers (curl axis/sign + noisy source). **Live re-verify (user):** re-run `run_capture.bat`, stand ~2 m; if the torso still swings on a noisy/far setup, lower `kalidokitTorsoYawScale` (0 = frontal-lock).
+
+---
+
+## 🩹 Milestone-2 waist-bend FIXED — adaptive baseline (2026-08-11, ADR-026)
+
+The user's live M2 OAK run reported: **avatar doesn't bend at the waist (skeleton does), still jitters, and leans forward when standing upright.** Diagnosed from that run's OWN pipeline logs (`python-sidecar~/pipeline_logs/`, 5337 frames) — **the bend signal is in the data** (upright p50 ≈ +5.5° / bend p95 ≈ +19° at <2 m), but the ADR-025 spine-bend used a **single fixed neutral captured on the first frame** — which was the 4.24 m all-zero-Z startup garbage → neutral `0°` → a **constant ~5.5° rest lean**, and the neutral **couldn't track the distance drift** (upright reads +5.5° @2 m, −0.6° @3 m) as the user walks. Noise std ~6° + 35°/frame spikes buried the ~14° bend → "no bend".
+
+**Fix (ADR-026):** replaced the fixed neutral with a **slow ADAPTIVE baseline (high-pass, `tau≈8 s`, median-seeded)** + **rate-limit (250°/s)** + **light low-pass** on the derived pitch. Upright → ~0 at any distance; real bends pass; jitter down. **Verified offline on the user's actual logs:** jitter 0.56→0.36 °/frame (−36 %), per-distance rest median ≈0 (was +5.5° @2 m), bends ±11–12° preserved. Compile 0/0. **Also:** `run_capture.bat` was forcing `--min-cutoff 0.7`, overriding ADR-025's 0.5 still-jitter default → restored to 0.5.
+
+**NEEDS THE USER'S LIVE RE-VERIFY (OAK):** re-run `run_capture.bat`, **stand ~2 m** (last capture was median 2.65 m, 58 % > 2.5 m, ~21 % depth coverage — too far; that alone hurt the bend/turn + jitter). Confirm: upright avatar is straight (no rest lean), waist bends when you bend, less jitter. Live knobs: **`kalidokitSpineBendScale`** (raise for a more visible bend; flip sign if it bends backward), **`kalidokitSpineBendBaselineTau`** (raise to hold a sustained bend longer). Press **C** standing upright to re-seed. Then send the new `compare_logs.py` output + a short clip.
 
 ---
 

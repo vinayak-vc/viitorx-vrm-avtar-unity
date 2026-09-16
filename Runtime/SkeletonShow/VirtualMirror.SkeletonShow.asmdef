@@ -1,0 +1,19 @@
+{
+    "name": "VirtualMirror.SkeletonShow",
+    "rootNamespace": "VirtualMirror.SkeletonShow",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.Tracking",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

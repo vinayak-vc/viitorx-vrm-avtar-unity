@@ -1,69 +1,253 @@
-# Virtual Mirror — Documentation Index
+# Virtual Mirror
 
-Agent-oriented documentation for the Unity + MediaPipe + VRM virtual mirror platform.
+A real-time virtual mirror. An OAK-D depth camera tracks a person standing in front of a display,
+and a VRM avatar mirrors their movement on screen.
 
-Read in order when onboarding. Update the matching document when a subsystem changes.
+Tracking runs in a **Python sidecar** (whole-body 3D pose via RTMW3D on the GPU) that streams poses
+over UDP to Unity, which retargets them onto the avatar's humanoid rig. Keeping inference out of
+Unity's process is deliberate: a native inference crash cannot take the editor or the app down with
+it (ADR-016).
 
----
+> **Status: `0.1.0` — pre-release, not production-ready.** Several acceptance tests have never been
+> run against a live camera, and there is a known visual defect. The version is `0.x` deliberately:
+> the API may change in a minor release. Read [Known limitations](#known-limitations) before shipping
+> this to anyone.
 
-## Start Here (Agent Handoff)
-
-| Doc | Purpose |
-|-----|---------|
-| [project-overview.md](project-overview.md) | What the product is and what V1 ships |
-| [architecture.md](architecture.md) | Layered architecture and module map |
-| [roadmap.md](roadmap.md) | Phased delivery plan |
-| [tasks.md](tasks.md) | Current task board (update during work) |
-| [decisions.md](decisions.md) | Architecture Decision Records |
-| [ai_handoff.md](ai_handoff.md) | Last session state for the next agent |
-
----
-
-## Design Specs (SDS)
-
-| # | Document | Covers |
-|---|----------|--------|
-| 00 | [Project Vision](00_ProjectVision.md) | Goals, non-goals, success metrics |
-| 01 | [Product Requirements](01_ProductRequirements.md) | Functional / non-functional requirements |
-| 02 | [Project Structure](02_ProjectStructure.md) | Folder scaffold and assembly layout |
-| 03 | [Tech Stack](03_TechStack.md) | Engines, packages, versions |
-| 04 | [System Architecture](04_SystemArchitecture.md) | High-level system diagram |
-| 05 | [Runtime Architecture](05_RuntimeArchitecture.md) | App lifecycle, hot-swap, states |
-| 06 | [Unity Architecture](06_UnityArchitecture.md) | Scenes, prefabs, MonoBehaviour roles |
-| 07 | [Data Flow](07_DataFlow.md) | Camera → track → retarget → render |
-| 08 | [VRM System](08_VRMSystem.md) | Runtime load, blendshapes, spring bones |
-| 09 | [MediaPipe System](09_MediaPipeSystem.md) | Pose, face, hands providers |
-| 10 | [Retargeting](10_Retargeting.md) | Joint map, rotation from vectors |
-| 11 | [IK Pipeline](11_IKPipeline.md) | Animation Rigging / FinalIK |
-| 12 | [Render Pipeline](12_RenderPipeline.md) | URP, mirror camera, background |
-| 13 | [UI System](13_UISystem.md) | Mirror UI, settings, calibration |
-| 14 | [File Management](14_FileManagement.md) | Avatar paths, logs, prefs |
-| 15 | [Settings](15_Settings.md) | Persistence, defaults, schema |
-| 16 | [Threading](16_Threading.md) | Capture / inference / main thread |
-| 17 | [Performance](17_Performance.md) | Budgets, profiling, GC rules |
-| 18 | [Extensibility](18_Extensibility.md) | Interfaces, plugins, providers |
-| 19 | [Third Party](19_ThirdParty.md) | Packages, licenses, pin versions |
-| 20 | [Test Plan](20_TestPlan.md) | Unit, integration, playmode, soak |
-| 21 | [Roadmap](21_Roadmap.md) | Product phases |
-| 22 | [Milestones](22_Milestones.md) | Ship criteria per milestone |
-| 23 | [Coding Standards](23_CodingStandards.md) | C# / Unity rules (see also AGENTS.md) |
-| 24 | [Risks](24_Risks.md) | Technical and product risks |
-| 25 | [Pose Pipeline](25_PosePipeline.md) | Coordinates, filter, confidence, calib |
+[![CI](https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/actions/workflows/ci.yml/badge.svg)](https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Unity 6000.3](https://img.shields.io/badge/Unity-6000.3-black.svg)](https://unity.com/releases/editor/archive)
 
 ---
 
-## Priority for Agents
+## Prerequisites
 
-1. `AGENTS.md` (repo root / parent project) — coding law
-2. `ai_handoff.md` — current state
-3. `architecture.md` + relevant SDS for the task
-4. `tasks.md` — pick / update work items
-5. `decisions.md` — do not contradict accepted ADRs
+| Requirement | Version / notes |
+|---|---|
+| Windows | 10 or 11. **Windows-only** — the GPU path uses DirectML and process teardown uses Win32 job objects. |
+| GPU | DirectML-capable. Developed on an RTX 3060. |
+| [Unity](https://unity.com/releases/editor/archive) | **6000.3.9f1** with URP 17.3.0 (editor only; not needed to run a build). |
+| OAK-D camera | Luxonis OAK-D. Mounted in **portrait**, rotated counter-clockwise. |
+| [Python](https://www.python.org/downloads/release/python-3100/) | **3.10 exactly.** `depthai` ships `cp310` wheels only; 3.11+ cannot resolve it. |
+| `rtmw3d-x.onnx` | ~369 MB pose model. Not in git — see [Install](#install) step 2. |
 
 ---
 
-## Document Status Legend
+## Install
 
-- **Draft** — direction agreed, details may change
-- **Active** — implement against this version
-- **Frozen** — change only via ADR
+### 0. Add the Unity package
+
+This is a UPM package (`cloud.viitor.virtual-mirror`). Two of its dependencies do **not** resolve
+from Unity's default registry, so add them first or the import will fail.
+
+**a. Register the OpenUPM scope** for UniVRM, in your project's `Packages/manifest.json`:
+
+```json
+{
+  "scopedRegistries": [
+    {
+      "name": "package.openupm.com",
+      "url": "https://package.openupm.com",
+      "scopes": ["com.vrmc"]
+    }
+  ]
+}
+```
+
+**b. Install the MediaPipe Unity plugin.** `com.github.homuler.mediapipe` is not on any registry;
+follow [homuler/MediaPipeUnityPlugin](https://github.com/homuler/MediaPipeUnityPlugin) and place it
+under your project's `Packages/`.
+
+**c. Add this package**, via *Window → Package Manager → + → Add package from git URL*:
+
+```
+https://github.com/vinayak-vc/viitorx-vrm-avtar-unity.git
+```
+
+or by adding it to `manifest.json` directly:
+
+```json
+"cloud.viitor.virtual-mirror": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity.git"
+```
+
+Pin a release rather than tracking the default branch — append `#v0.1.0`.
+
+> The Python sidecar is a **git submodule** at `python-sidecar~`. Unity's Package Manager does not
+> fetch submodules, so if you installed by git URL you must clone the repository yourself and use a
+> local path (`file:` URL) to get a working tracking pipeline. Steps 1 and 2 below are required
+> either way.
+
+Remaining dependencies (`com.unity.render-pipelines.universal`, `com.unity.animation.rigging`,
+`com.unity.nuget.newtonsoft-json`, `com.unity.ai.inference`) resolve automatically.
+
+### 1. Set up the Python sidecar
+
+From `Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/` (or, in a build,
+`<App>_Data/StreamingAssets/Sidecar/`):
+
+```powershell
+.\setup_sidecar.ps1
+```
+
+This creates the virtualenv, installs the pinned dependencies from `requirements.lock.txt`, and —
+importantly — **verifies that the DirectML GPU provider actually loaded**. If it did not, the script
+fails with instructions rather than letting you discover it later as unexplained slowness. See
+[Troubleshooting](#troubleshooting).
+
+Re-run with `-Force` to rebuild the venv from scratch. Pass `-PythonExe` if Python 3.10 is installed
+somewhere unusual.
+
+### 2. Install the pose model
+
+`rtmw3d-x.onnx` is not committed (369 MB). Obtain it from the project's model store — ask the team
+if you do not have it — then either pass it to the setup script:
+
+```powershell
+.\setup_sidecar.ps1 -ModelPath "D:\path\to\rtmw3d-x.onnx"
+```
+
+or copy it by hand:
+
+* **Editor:** `Assets/SentisModel/rtmw3d-x.onnx`
+* **Build:** `<App>_Data/StreamingAssets/Sidecar/models/rtmw3d-x.onnx`
+
+### 3. Plug in the OAK-D
+
+Mount it in portrait, rotated counter-clockwise. If yours is mounted clockwise, set
+`sidecarPortraitDirection` to `cw` on the `AppBootstrap` component.
+
+---
+
+## Running it
+
+### In the editor
+
+1. Open `Scenes/Bootstrap.unity`.
+2. On the `AppBootstrap` component, tick **Use Oak Udp Tracking**.
+3. Press Play.
+
+The sidecar starts automatically — you do not need a terminal. Unity spawns
+`sidecar_supervisor.py`, streams its output into the Unity console prefixed `[SidecarLauncher]`, and
+stops it when you exit Play mode. Expect roughly 15 seconds before poses arrive while the model
+loads.
+
+### From a build
+
+Launch the executable. The sidecar starts the same way, resolved from `StreamingAssets/Sidecar/`.
+The venv and the model must already be installed there (step 1 and 2 above).
+
+### Running the sidecar by hand instead
+
+Turn off **Auto Start Sidecar** on `AppBootstrap`, or simply start the supervisor yourself before
+pressing Play — Unity detects an existing supervisor via its lock port (TCP 8897) and attaches to it
+rather than spawning a second one. Two producers on one UDP port is a real failure mode and this
+guard exists to prevent it.
+
+```powershell
+.venv\Scripts\python.exe sidecar_supervisor.py --model models\rtmw3d-x.onnx --portrait --portrait-dir ccw --subpixel-bits 3 --allow-port-listener
+```
+
+`--allow-port-listener` is required whenever Unity is in Play mode. The supervisor's port check binds
+the destination port to detect a stale producer, which means it reads Unity's healthy listener as
+"port in use" and refuses to start. This flag tells it that a listener is expected.
+
+### Ports
+
+| Port | Protocol | Purpose |
+|---|---|---|
+| 8899 | UDP | Pose stream, sidecar → Unity |
+| 8897 | TCP | Supervisor single-instance lock |
+
+---
+
+## How it is packaged (ADR-064)
+
+The sidecar **source** ships inside the build; its **runtime** does not.
+
+A post-build step copies the sidecar's root `.py` files, `requirements.lock.txt` and
+`setup_sidecar.ps1` into `StreamingAssets/Sidecar/`. Since ADR-065 that root holds exactly the
+production path — the two entry points plus the nine modules `wholebody_udp_sender.py` imports — so
+the build ships what a player needs and none of the 70-odd development harnesses under `tools/` and
+`tests/`. `python-sidecar~` stays the single source of truth; the trailing `~` keeps Unity from
+importing those files and generating `.meta` churn for them.
+
+Three things are deliberately excluded:
+
+| Excluded | Size | Why |
+|---|---|---|
+| `.venv/` | 342 MB | **A Windows venv is not relocatable.** `pyvenv.cfg` pins an absolute `home` to the base interpreter and `Lib/` holds only `site-packages` — no stdlib. A copied venv breaks on any machine that lacks that exact Python at that exact path, and it breaks confusingly. `setup_sidecar.ps1` builds it on the target instead. |
+| `rtmw3d-x.onnx` | 369 MB | Copying it into every build costs minutes for a file that changes roughly never. |
+| `depthai_blazepose/` | 86 MB | The superseded Phase-1 BlazePose path. Named only in a docstring; never imported. |
+
+**The trade-off:** the build stays small and every build is guaranteed to carry the same sidecar
+revision the editor just ran, but the target machine needs a one-time setup pass and Python 3.10. It
+is not a double-click install. Freezing the sidecar with PyInstaller would remove the Python
+dependency entirely and is the natural v2 step; it was not attempted for v1 because
+`onnxruntime-directml`, `depthai` and `opencv` are all awkward to freeze.
+
+---
+
+## Troubleshooting
+
+**Everything is slow — roughly 5 fps.**
+The sidecar is running on CPU. `onnxruntime` asks for DirectML and falls back silently when the
+provider cannot load, so nothing reports an error; inference goes from ~31 ms/frame to ~183 ms.
+Check it:
+
+```powershell
+.venv\Scripts\python.exe -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+
+`DmlExecutionProvider` must be listed. If it is not, plain `onnxruntime` has usually been installed
+over `onnxruntime-directml`:
+
+```powershell
+.venv\Scripts\python.exe -m pip uninstall -y onnxruntime onnxruntime-directml
+.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
+```
+
+Never work around a missing venv by running the sidecar with `python` on PATH. That is a different
+environment and it is the cause of this exact symptom, which is why the launcher refuses to fall
+back to it.
+
+**"Sidecar: FAILED" on the HUD.**
+The message names the missing file. Usually the venv (run `setup_sidecar.ps1`) or the model.
+
+**Port 8899 is in use / a stranded python process.**
+Should not happen — the child is assigned to a Win32 job object, so Windows kills the whole tree
+whenever Unity exits, including on a crash. If you do find one, kill that PID specifically. Do not
+run `taskkill /IM python.exe`; it will take down unrelated Python processes.
+
+**The avatar freezes after editing a script while playing.**
+A script recompile leaves Play mode looking alive while the C# services are gone — `AppBootstrap`'s
+providers come back null and `manage_editor play` reports "Already in play mode" in that half-dead
+state. Exit Play and re-enter.
+
+---
+
+## Known limitations
+
+These are open. Do not describe them as done.
+
+* **Open visual defect:** the forearm and hand clip into the hip when the arm hangs. The avatar's
+  shoulders are only 6.4 cm wider than its hips, the clavicles are never driven, and VRM 1.0's
+  normalised control rig is a T-pose, so there is no authored A-pose clearance. Nothing in the
+  pipeline does body-volume avoidance. **Not fixed.**
+* **The avatar is not proven faithful.** F-26 established that F-19's "avatar quality proven good"
+  rested on four internal-consistency metrics, all of which a stably-wrong pose also satisfies.
+* **F-21 live two-person acceptance has never been run.** ADR-061's drift budget is unmeasured, and
+  single-person ownership is not a safety property on current evidence.
+* **F-22 L2 hands-near-face** has not been run live.
+* **F-27 (humanized skeleton) has never run on stereo.** Both measurements used the video path,
+  which synthesises every joint's depth, so every protective stage was idle.
+* **F-28 (skeleton show scene) has never run with a live camera.**
+* **The Unity EditMode suite has not been re-run** since `kalidokitBodyTorsoRoll` changed 0 → 1.
+
+---
+
+## Documentation
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers the development workflow and the coding rules.
+[`CHANGELOG.md`](CHANGELOG.md) records what changed per release.
+Start at [`docs/README.md`](docs/README.md) for the full index. For agents picking up this project,
+`AGENTS.md` at the parent project root is the rulebook, and
+[`docs/ai_handoff.md`](docs/ai_handoff.md) holds the current state.

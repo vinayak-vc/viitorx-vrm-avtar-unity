@@ -82,3 +82,62 @@ copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+=====================================================
+PYTHON TRACKING SIDECAR (python-sidecar~)
+=====================================================
+
+The components below are used by the Python sidecar. Items 7 and 8 are REDISTRIBUTED as source or
+weights; items 9-12 are installed from PyPI at setup time and are not redistributed here.
+
+-----------------------------------------------------
+7. depthai_blazepose (geaxgx)  -- VENDORED SOURCE
+License: MIT License
+Copyright (c) 2021 geaxgx
+Upstream: https://github.com/geaxgx/depthai_blazepose
+
+A copy of this project is included at python-sidecar~/depthai_blazepose/, with local modifications
+for the OAK-D-PRO-W's OV9782 colour sensor. The upstream licence text ships alongside it at
+python-sidecar~/depthai_blazepose/LICENSE.txt and must not be removed. It is the superseded Phase-1
+tracking path and is not imported by the production pipeline.
+
+-----------------------------------------------------
+8. RTMW3D / RTMPose (MMPose, OpenMMLab)  -- MODEL WEIGHTS, NOT BUNDLED
+License: Apache License, Version 2.0
+Copyright (c) OpenMMLab
+Upstream: https://github.com/open-mmlab/mmpose
+
+The whole-body 3D pose model (rtmw3d-x.onnx, ~369 MB) is NOT distributed with this repository. It
+must be obtained separately and placed as described in README.md. Verify the licence terms attached
+to the specific weights you obtain before redistributing them or using them commercially: the MMPose
+CODE is Apache-2.0, but released weights may carry additional terms depending on the datasets they
+were trained on.
+
+-----------------------------------------------------
+9. DepthAI (Luxonis)
+License: MIT License
+Copyright (c) Luxonis Holding Corporation
+Upstream: https://github.com/luxonis/depthai-python
+
+-----------------------------------------------------
+10. ONNX Runtime / onnxruntime-directml (Microsoft)
+License: MIT License
+Copyright (c) Microsoft Corporation
+Upstream: https://github.com/microsoft/onnxruntime
+
+-----------------------------------------------------
+11. OpenCV (opencv-python)
+License: Apache License, Version 2.0
+Copyright (c) OpenCV team / Olli-Pekka Heinisuo and contributors
+Upstream: https://github.com/opencv/opencv-python
+
+-----------------------------------------------------
+12. NumPy
+License: BSD 3-Clause License
+Copyright (c) 2005-2024, NumPy Developers
+Upstream: https://github.com/numpy/numpy
+
+-----------------------------------------------------
+Transitive dependencies of the above (coloredlogs, flatbuffers, humanfriendly, mpmath, packaging,
+protobuf, pyreadline3, sympy) are installed from PyPI under their own licences - MIT, BSD-3-Clause
+and Apache-2.0. See python-sidecar~/requirements.lock.txt for the exact pinned set.

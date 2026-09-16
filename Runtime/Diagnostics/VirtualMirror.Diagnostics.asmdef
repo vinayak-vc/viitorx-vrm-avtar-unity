@@ -2,7 +2,8 @@
     "name": "VirtualMirror.Diagnostics",
     "rootNamespace": "VirtualMirror.Diagnostics",
     "references": [
-        "VirtualMirror.Core"
+        "VirtualMirror.Core",
+        "VirtualMirror.Retargeting"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

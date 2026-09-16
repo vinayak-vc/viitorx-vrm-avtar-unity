@@ -47,6 +47,16 @@ namespace VirtualMirror.Tracking.OakD {
         private Thread receiveThread;
         private volatile bool running;
         private readonly System.Diagnostics.Stopwatch clock = new System.Diagnostics.Stopwatch();
+
+        // P1-3: timestamped pose buffer + interpolation. Replaces latest-wins with temporal
+        // reconstruction at (now - interpolationDelay). Delay 0 => original behaviour, exactly.
+        private readonly PoseBuffer poseBuffer = new PoseBuffer(16);
+        private readonly PoseFrame interpolatedFrame = new PoseFrame();
+        private bool interpolationEnabled;
+        private double interpolationDelaySeconds;
+        private long interpAggregateCounter;
+        private const int InterpLogEvery = 600;   // periodic aggregate only, never per render frame
+        private double lastPacketAgeMs;
         // M9: volatile so the worker's ParseInto writes and the consumer's lock-guarded reference swap of
         // these buffers have consistent cross-thread visibility (no torn read of the in-flight frame).
         private volatile PoseFrame workerFrame;
@@ -72,6 +82,32 @@ namespace VirtualMirror.Tracking.OakD {
         private string pipelineLogDir;
         private System.IO.StreamWriter pipelineLog;
         private long lastSeq = -1;
+
+        // ---- F-20A SESSION + STALE WATCHDOG -----------------------------------------------------
+        // Thresholds are DERIVED FROM MEASURED TIMING (F-19 headless portrait log, 22,678 frames),
+        // not chosen for roundness:
+        //     send rate                 29.9 fps  -> one pose every 33.4 ms
+        //     capture->send             p50 31.8 ms, p95 34.9 ms, MAX 84.1 ms
+        //     camera->host frame age    p50 17.3 ms, p95 33.7 ms, max 50.5 ms
+        //     P1-3 presentation delay   40 ms (poseInterpolationDelayMs)
+        //
+        // WARN 150 ms  = ~4.5 inter-pose intervals, and comfortably above the worst single-frame
+        //                pipeline cost actually observed (84.1 ms) plus the 40 ms presentation delay.
+        //                Below this nothing is wrong and nothing is reported.
+        // HOLD 500 ms  = ~15 intervals. Deliberately EQUAL to AppBootstrap.poseStaleSeconds so the
+        //                system keeps ONE definition of "stale enough to stop applying" instead of
+        //                acquiring a second, conflicting one.
+        // FAILSAFE 2 s = ~60 intervals. Long enough that a USB re-enumeration or a GC pause does not
+        //                flip a visitor to the neutral pose, short enough that nobody watches a frozen
+        //                human pose for longer than that. F-19 observed 208.4 SECONDS.
+        private const double StaleWarnSeconds = 0.150;
+        private const double StaleHoldSeconds = 0.500;
+        private const double StaleFailsafeSeconds = 2.000;
+        private readonly TrackingStreamHealth health =
+            new TrackingStreamHealth(StaleWarnSeconds, StaleHoldSeconds, StaleFailsafeSeconds);
+        private TrackingState lastLoggedState = TrackingState.NoStream;
+        private long reconnectCount;
+        private string pendingSessionLog;
 
         public OakDUdpPoseProvider(ILogService logService, PoseSpaceConverter converter, int port) {
             if (logService == null) {
@@ -162,7 +198,72 @@ namespace VirtualMirror.Tracking.OakD {
         }
 
         public void Tick(float deltaSeconds) {
-            // No-op: UDP receive runs on the background thread; TryGetLatestFrame publishes results.
+            // UDP receive runs on the background thread; this only advances the F-20A watchdog and
+            // logs state transitions. Evaluating here (rather than inside TryGetLatestFrame) means the
+            // stream is judged even on frames where nothing consumes a pose.
+            string sessionLog = null;
+            TrackingState state;
+            double now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+            lock (gate) {
+                state = health.Evaluate(now);
+                sessionLog = pendingSessionLog;
+                pendingSessionLog = null;
+                if (state != lastLoggedState) {
+                    if (state == TrackingState.Reconnecting || state == TrackingState.Recovering) {
+                        reconnectCount = reconnectCount + 1;
+                    }
+                }
+            }
+            if (sessionLog != null) {
+                logService.Log(LogLevel.Warning, sessionLog);
+            }
+            if (state != lastLoggedState) {
+                // Every transition is logged: F-19's failure was invisible precisely because nothing
+                // ever changed in the log while the avatar was minutes stale.
+                logService.Log(state == TrackingState.Live || state == TrackingState.Recovering
+                                   ? LogLevel.Info : LogLevel.Warning,
+                               "TrackingState " + lastLoggedState + " -> " + state
+                               + "  (sid=" + (health.SessionId ?? "-")
+                               + " acceptedSeq=" + health.LastAcceptedSeq
+                               + " receivedSeq=" + health.LastReceivedSeq
+                               + " sinceAccepted=" + (health.SecondsSinceAccepted(now) * 1000.0).ToString("F0")
+                               + "ms transitions=" + health.SessionTransitions + ")");
+                lastLoggedState = state;
+            }
+        }
+
+        /// <summary>F-20A: current transport/session health. This — not ReceivedCount — is the
+        /// question "are fresh, ordered, current-session poses actually reaching the avatar?".</summary>
+        public TrackingState State {
+            get {
+                lock (gate) {
+                    return health.Evaluate(System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0);
+                }
+            }
+        }
+
+        /// <summary>F-20A operator diagnostics (§15). One call, so a HUD cannot show a torn mix.</summary>
+        public void GetStreamHealth(out TrackingState state, out string sessionId,
+                                    out long lastAcceptedSeq, out long lastReceivedSeq,
+                                    out double secondsSinceAccepted, out long sessionTransitions,
+                                    out long acceptedNewSession, out long rejectedOldSession,
+                                    out long rejectedOutOfOrder, out long rejectedDuplicate,
+                                    out int poseBufferDepth, out long reconnects) {
+            double now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+            lock (gate) {
+                state = health.Evaluate(now);
+                sessionId = health.SessionId;
+                lastAcceptedSeq = health.LastAcceptedSeq;
+                lastReceivedSeq = health.LastReceivedSeq;
+                secondsSinceAccepted = health.SecondsSinceAccepted(now);
+                sessionTransitions = health.SessionTransitions;
+                acceptedNewSession = health.AcceptedNewSession;
+                rejectedOldSession = health.RejectedOldSession;
+                rejectedOutOfOrder = poseBuffer.RejectedOutOfOrder;
+                rejectedDuplicate = poseBuffer.RejectedDuplicate;
+                poseBufferDepth = poseBuffer.Depth;
+                reconnects = reconnectCount;
+            }
         }
 
         private void ReceiveLoop() {
@@ -202,7 +303,69 @@ namespace VirtualMirror.Tracking.OakD {
             }
         }
 
+        /// <summary>P1-3: enable temporal interpolation and set the presentation delay. A delay of 0
+        /// (or negative) restores the original latest-wins behaviour exactly.</summary>
+        public void SetPoseInterpolation(float delayMilliseconds) {
+            bool enable = delayMilliseconds > 0.01f;
+            lock (gate) {
+                interpolationDelaySeconds = delayMilliseconds / 1000.0;
+                if (enable != interpolationEnabled) {
+                    poseBuffer.Clear();
+                }
+                interpolationEnabled = enable;
+            }
+        }
+
+        /// <summary>P1-3 diagnostics snapshot (depth, seq pair, alpha, packet age ms).</summary>
+        public void GetBufferDiagnostics(out int depth, out long seqA, out long seqB,
+                                         out float alpha, out double packetAgeMs) {
+            lock (gate) {
+                depth = poseBuffer.Depth;
+                seqA = poseBuffer.LastSeqA;
+                seqB = poseBuffer.LastSeqB;
+                alpha = poseBuffer.LastAlpha;
+                packetAgeMs = lastPacketAgeMs;
+            }
+        }
+
         public bool TryGetLatestFrame(out PoseFrame latest) {
+            if (interpolationEnabled) {
+                bool sampled;
+                int dDepth = 0; long dA = -1; long dB = -1; float dAlpha = 0f; double dAge = -1.0;
+                lock (gate) {
+                    double now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+                    double renderTime = now - interpolationDelaySeconds;
+                    sampled = poseBuffer.Sample(renderTime, interpolatedFrame);
+                    if (sampled) {
+                        double newest = poseBuffer.NewestTime();
+                        lastPacketAgeMs = newest > 0.0 ? (now - newest) * 1000.0 : -1.0;
+                        dDepth = poseBuffer.Depth;
+                        dA = poseBuffer.LastSeqA;
+                        dB = poseBuffer.LastSeqB;
+                        dAlpha = poseBuffer.LastAlpha;
+                        dAge = lastPacketAgeMs;
+                    }
+                    hasNewFrame = false;   // the buffer is the source of truth while interpolating
+                }
+                latest = interpolatedFrame;
+                if (sampled) {
+                    interpAggregateCounter = interpAggregateCounter + 1;
+                    if (logService != null && interpAggregateCounter % InterpLogEvery == 0) {
+                        logService.Log(LogLevel.Info,
+                            "[P1-3] poseBufferDepth=" + dDepth
+                            + " interpDelayMs=" + (interpolationDelaySeconds * 1000.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture)
+                            + " sourceSeqA=" + dA + " sourceSeqB=" + dB
+                            + " alpha=" + dAlpha.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                            + " packetAgeMs=" + dAge.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)
+                            + " interp=" + poseBuffer.SamplesInterpolated
+                            + " clampNewest=" + poseBuffer.SamplesClampedNewest
+                            + " dupRej=" + poseBuffer.RejectedDuplicate
+                            + " oooRej=" + poseBuffer.RejectedOutOfOrder);
+                    }
+                }
+                return sampled;
+            }
+
             bool available;
             lock (gate) {
                 if (hasNewFrame) {
@@ -271,6 +434,14 @@ namespace VirtualMirror.Tracking.OakD {
             JObject root = JObject.Parse(json);
             long seq = root["seq"] != null ? root["seq"].Value<long>() : -1;
             Interlocked.Exchange(ref lastSeq, seq);
+            // F-20A: the producer's session identifier, generated once per sidecar process. Absent on
+            // senders that predate it (the deprecated body-only BlazePose sender), which is why
+            // TrackingStreamHealth carries a bounded legacy fallback rather than requiring this field.
+            string sid = root["sid"] != null ? root["sid"].Value<string>() : null;
+            // DIAG-ONLY (P0 acceptance §16): the sidecar's SEND epoch seconds, echoed so latency can be
+            // computed against a comparable clock. `clock.Elapsed` is a Stopwatch since provider start and
+            // is NOT comparable to the sidecar's time.time(). Read-only; drives no behavior.
+            double sendEpoch = root["t"] != null ? root["t"].Value<double>() : 0.0;
             JArray landmarks = root["lm"] as JArray;
             if (landmarks == null || landmarks.Count == 0) {
                 target.MarkInvalid(timestampSeconds);
@@ -321,9 +492,54 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             ParseHands(root, timestampSeconds);
-            if (pipelineLog != null) {
-                WriteRecvLog(target, workerHandFrame, seq, timestampSeconds);
+            // P1-3: buffer this pose on the RECEIVE clock (Unity's own epoch, so no sender-skew
+            // assumption). Duplicate / out-of-order / backwards-timestamp packets are rejected inside.
+            // ---- F-20A SESSION BOUNDARY ------------------------------------------------------------
+            // Classified BEFORE the push, so a new session's first pose can never be interpolated
+            // against the previous session's poses. Within a session the ordering rules below are
+            // untouched — this does not weaken out-of-order protection, it only recognises that the
+            // numbers now arriving belong to a different producer run.
+            {
+                double recvEpoch = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+                lock (gate) {
+                    SessionVerdict verdict = health.ClassifyDatagram(sid, seq, recvEpoch);
+                    if (verdict == SessionVerdict.OldSession) {
+                        // A datagram from a producer run we have already left — still in flight when
+                        // that process died. Dropping it is the whole point: adopting it would flush a
+                        // healthy buffer and drag the avatar back to a dead stream.
+                        return;
+                    }
+                    if (verdict == SessionVerdict.NewSession) {
+                        // Flush ordering state, the buffer and the stale timers together. Clear() resets
+                        // newestSeq, so the new session's seq 1 is accepted on its own merits.
+                        poseBuffer.Clear();
+                        health.OnSessionReset(recvEpoch);
+                        pendingSessionLog = "OAK-D UDP: NEW PRODUCER SESSION (sid=" + (sid ?? "legacy")
+                                            + ", seq restarts at " + seq
+                                            + ") - pose buffer flushed, no interpolation across the boundary.";
+                    }
+                    if (target.IsValid) {
+                        if (interpolationEnabled) {
+                            if (poseBuffer.Push(target, seq, recvEpoch)) {
+                                health.OnPoseAccepted(seq, recvEpoch);
+                            }
+                        } else {
+                            // Interpolation disabled (delay 0) bypasses the buffer entirely, but the
+                            // watchdog must still see that a pose was accepted or it would report a
+                            // healthy stream as permanently stale.
+                            health.OnPoseAccepted(seq, recvEpoch);
+                        }
+                    }
+                }
             }
+            if (pipelineLog != null) {
+                WriteRecvLog(target, workerHandFrame, seq, timestampSeconds, sendEpoch);
+            }
+        }
+
+        // DIAG-ONLY: mirrors KalidokitControlRigDriver.Min3 so the logged confidence matches the gate's input.
+        private static float Min3(float a, float b, float c) {
+            return Mathf.Min(a, Mathf.Min(b, c));
         }
 
         private static string F(float v) {
@@ -333,12 +549,24 @@ namespace VirtualMirror.Tracking.OakD {
         // One recv_log.jsonl line: seq + key CONVERTED landmarks (shoulders/hips/wrists, Unity space) + the
         // derived palm quaternions. Diff against sender_log.jsonl (should match modulo the axis convention)
         // and model_log.jsonl (to localize where jitter/spin enters). Receive-thread only.
-        private void WriteRecvLog(PoseFrame t, HandFrame h, long seq, double ts) {
+        private void WriteRecvLog(PoseFrame t, HandFrame h, long seq, double ts, double sendEpoch) {
             try {
                 Vector3 sL = t.GetLandmark((JointId)11).Position, sR = t.GetLandmark((JointId)12).Position;
                 Vector3 hL = t.GetLandmark((JointId)23).Position, hR = t.GetLandmark((JointId)24).Position;
                 Vector3 wL = t.GetLandmark((JointId)15).Position, wR = t.GetLandmark((JointId)16).Position;
                 Vector3 eL = t.GetLandmark((JointId)13).Position, eR = t.GetLandmark((JointId)14).Position;
+                // DIAG-ONLY (P0 acceptance §9): knees/ankles were never logged, so leg frame-to-frame
+                // displacement could not be measured. Read-only.
+                Vector3 kL = t.GetLandmark((JointId)25).Position, kR = t.GetLandmark((JointId)26).Position;
+                Vector3 aL = t.GetLandmark((JointId)27).Position, aR = t.GetLandmark((JointId)28).Position;
+                // DIAG-ONLY (P0 acceptance §6/§10): the EXACT four per-limb confidences LimbGate consumes,
+                // using the same Kalidokit cross-map as KalidokitControlRigDriver.Apply. Logging these makes
+                // the Unity gate's HOLD/VALID decision reproducible offline from the log alone.
+                float cLArm = Min3(t.GetLandmark((JointId)12).Confidence, t.GetLandmark((JointId)14).Confidence, t.GetLandmark((JointId)16).Confidence);
+                float cRArm = Min3(t.GetLandmark((JointId)11).Confidence, t.GetLandmark((JointId)13).Confidence, t.GetLandmark((JointId)15).Confidence);
+                float cLLeg = Min3(t.GetLandmark((JointId)24).Confidence, t.GetLandmark((JointId)26).Confidence, t.GetLandmark((JointId)28).Confidence);
+                float cRLeg = Min3(t.GetLandmark((JointId)23).Confidence, t.GetLandmark((JointId)25).Confidence, t.GetLandmark((JointId)27).Confidence);
+                double recvEpoch = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
                 Quaternion lp = h.LeftWristRotation, rp = h.RightWristRotation;
                 string line = "{\"seq\":" + seq + ",\"t\":" + ts.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
                     + ",\"sh\":[[" + F(sL.x) + "," + F(sL.y) + "," + F(sL.z) + "],[" + F(sR.x) + "," + F(sR.y) + "," + F(sR.z) + "]]"
@@ -347,6 +575,12 @@ namespace VirtualMirror.Tracking.OakD {
                     + ",\"wr\":[[" + F(wL.x) + "," + F(wL.y) + "," + F(wL.z) + "],[" + F(wR.x) + "," + F(wR.y) + "," + F(wR.z) + "]]"
                     + ",\"lpalm\":[" + F(lp.x) + "," + F(lp.y) + "," + F(lp.z) + "," + F(lp.w) + "],\"ltrk\":" + (h.LeftWristTracked ? "true" : "false")
                     + ",\"rpalm\":[" + F(rp.x) + "," + F(rp.y) + "," + F(rp.z) + "," + F(rp.w) + "],\"rtrk\":" + (h.RightWristTracked ? "true" : "false")
+                    // DIAG-ONLY (P0 acceptance): legs + per-limb gate confidence + comparable epoch clocks.
+                    + ",\"kn\":[[" + F(kL.x) + "," + F(kL.y) + "," + F(kL.z) + "],[" + F(kR.x) + "," + F(kR.y) + "," + F(kR.z) + "]]"
+                    + ",\"an\":[[" + F(aL.x) + "," + F(aL.y) + "," + F(aL.z) + "],[" + F(aR.x) + "," + F(aR.y) + "," + F(aR.z) + "]]"
+                    + ",\"cf\":{\"lArm\":" + F(cLArm) + ",\"rArm\":" + F(cRArm) + ",\"lLeg\":" + F(cLLeg) + ",\"rLeg\":" + F(cRLeg) + "}"
+                    + ",\"tSend\":" + sendEpoch.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"tRecv\":" + recvEpoch.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
                     + "}";
                 pipelineLog.WriteLine(line);
             } catch (Exception) {

@@ -2,6 +2,8 @@
     "name": "VirtualMirror.Editor",
     "rootNamespace": "VirtualMirror.Editor",
     "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.Tracking",
         "Newtonsoft.Json"
     ],
     "includePlatforms": [

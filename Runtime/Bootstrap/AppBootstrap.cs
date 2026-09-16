@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 
 using UnityEngine;
@@ -41,6 +41,15 @@ namespace VirtualMirror.App {
         [Tooltip("OAK-D depth camera via the Python sidecar over UDP — the production path. Takes priority over the other providers when it starts.")]
         [SerializeField] private bool useOakUdpTracking = false; // B2 (Python sidecar over UDP) — ADR-016
         [SerializeField] private int oakUdpPort = 8899;
+        [Tooltip("Start the Python tracking sidecar automatically (ADR-064). Turn OFF to run sidecar_supervisor.py by hand. Either way, an already-running supervisor is detected via its lock port and never double-started.")]
+        [SerializeField] private bool autoStartSidecar = true;
+        [Tooltip("Must match sidecar_supervisor.py --lock-port. Used to detect an existing supervisor rather than spawning a second producer onto the same UDP port.")]
+        [SerializeField] private int sidecarLockPort = 8897;
+        [Tooltip("Leave empty to use the packaged model path. In the editor that resolves to Assets/SentisModel/rtmw3d-x.onnx.")]
+        [SerializeField] private string sidecarModelPathOverride = "";
+        [Tooltip("Portrait rotation passed to the sidecar; must match how the OAK-D is physically mounted.")]
+        [SerializeField] private string sidecarPortraitDirection = "ccw";
+        [SerializeField] private int sidecarSubpixelBits = 3;
         [Tooltip("Use the sample video file instead of a live webcam (ignored on the OAK-D path).")]
         [SerializeField] private bool useVideoSource = false;
         [Tooltip("MediaPipe pose on the webcam/video (CPU). Fallback when OAK/Sentis are off.")]
@@ -58,11 +67,66 @@ namespace VirtualMirror.App {
         [SerializeField] private bool kalidokitBodyMirror = false;
         [Tooltip("Torso side-lean amount (0 = upright; 1 = full side-lean tracking).")]
         [SerializeField] private float kalidokitBodyTorsoRoll = 0f;
+        [Tooltip("Waist forward-bend from OAK depth (0 = off/upright, 1 = full; raise for a more pronounced bend). Flip the sign if it bends the wrong way. Press C standing upright to re-seed. Live-tunable.")]
+        [SerializeField] private float kalidokitSpineBendScale = 1f;
+        [Tooltip("Waist-bend baseline time-constant (s). Larger holds a sustained bend longer but corrects the distance/systematic lean slower; very large ~= a fixed neutral (ADR-026). Live-tunable.")]
+        [SerializeField] private float kalidokitSpineBendBaselineTau = 8f;
+        [Tooltip("Body-turn amount (ADR-027): 0 = frontal-lock (default — a mirror is frontal, and turning is unreliable past ~2 m where depth degrades → false 'facing away'). Raise toward 1 ONLY when standing close (<~1.8 m) if you want body-turn. Live-tunable.")]
+        [Range(0f, 1f)]
+        [SerializeField] private float kalidokitTorsoYawScale = 0f;
         [SerializeField] private bool kalidokitBodyLegs = true;
         [Tooltip("Normalized-bone flexion axis for the curl-driven fingers.")]
         [SerializeField] private Vector3 kalidokitFingerCurlAxis = new Vector3(0f, 0f, -1f);
         [Tooltip("Finger curl weight (0 disables fingers).")]
         [SerializeField] private float kalidokitFingerWeight = 1f;
+        [Tooltip("P1-3: presentation delay (ms) for the timestamped pose buffer. Unity renders the pose " +
+                 "interpolated at (now - this), so render frames between two datagrams show real " +
+                 "in-between motion instead of the same pose re-applied ~11.7x. This is the ONLY " +
+                 "latency P1-3 adds. 0 = disabled (original latest-wins behaviour). Start small: one " +
+                 "packet interval at ~21 fps is ~48 ms, so 35-50 ms usually always has a future sample.")]
+        [SerializeField] private float poseInterpolationDelayMs = 40f;
+
+        [Tooltip("ARM RETARGET V1: solve the arms with the quaternion aim solver (elbow-plane roll) instead of " +
+                 "the Kalidokit Euler branch. The audit measured the Euler branch at 28.2 deg mean / 47.5 deg " +
+                 "max direction error with 20.2 deg L/R asymmetry on symmetric input; the aim solver measures " +
+                 "0.0 deg on the same fixtures. Untick to A/B against the old path or to roll back. " +
+                 "Live-tunable.")]
+        [SerializeField] private bool kalidokitAimArms = true;
+
+        [Tooltip("DIAG-ONLY (retargeting audit §12): log, per traced bone, the WANTED bone direction (from the " +
+                 "landmarks the solver consumed) next to the ACHIEVED normalized-bone direction plus the error " +
+                 "angle. Turns 'the skeleton looks right but the avatar looks wrong' into a number. Drives no " +
+                 "behaviour. Leave OFF except while auditing — it is chatty.")]
+        [SerializeField] private bool kalidokitDirectionTrace = false;
+        [Tooltip("Throttle for the direction trace: log every Nth applied pose frame (~21 fps, so 60 is ~3 s).")]
+        [SerializeField] private int kalidokitDirectionTraceEveryFrames = 60;
+
+        [Tooltip("P0-1: a limb (arm/leg) accepts a fresh Kalidokit solve only when its weakest driving joint's " +
+                 "confidence is at least this; below it, the limb HOLDS its last valid rotation instead of " +
+                 "collapsing toward the origin on an invalid/occluded joint. 0 disables the gate.")]
+        [SerializeField] private float limbConfidenceThreshold = 0.3f;
+
+        [Header("Humanized Skeleton (F-27)")]
+        [Tooltip("F-27: run the tracked pose through the humanized skeleton before the retarget sees it - " +
+                 "fixed bone lengths, anatomical joint limits, teleport rejection, per-joint hold and a " +
+                 "smooth re-acquire. Tracking data is treated as a SUGGESTION. Off = the raw filtered " +
+                 "pose goes straight to the retarget, which is the pre-F-27 behaviour and the A/B baseline.")]
+        [SerializeField] private bool useHumanizedSkeleton = true;
+        [Tooltip("F-27: 'was this joint emitted at all', NOT 'is it good enough to drive a limb'. The " +
+                 "sidecar zero-fills a dropped joint to confidence 0. The quality question belongs to " +
+                 "P0-1's limbConfidenceThreshold downstream; setting this to the same value would preempt " +
+                 "a gate that already works.")]
+        [SerializeField] private float humanizedConfidenceFloor = 0.05f;
+        [Tooltip("F-27: seconds to ease a returning joint back in. Exists so a re-acquire does not SNAP, " +
+                 "not to smooth - longer reads as the avatar lagging its own tracking on every recovery.")]
+        [SerializeField] private float humanizedRecoverSeconds = 0.15f;
+        [Tooltip("F-27 A/B: reject/clamp joints that move faster than their class can.")]
+        [SerializeField] private bool humanizeVelocity = true;
+        [Tooltip("F-27 A/B: hold every bone at its calibrated length (the learned skeleton).")]
+        [SerializeField] private bool humanizeBoneLengths = true;
+        [Tooltip("F-27 A/B: enforce anatomical joint limits (elbow/knee hinge, hip cone, neck cone, " +
+                 "torso twist, knees not bending forwards).")]
+        [SerializeField] private bool humanizeAngles = true;
 
         [Header("Pose Mapping")]
         [SerializeField] private bool poseFlipX = true;
@@ -128,10 +192,35 @@ namespace VirtualMirror.App {
         private AvatarSessionController avatarSession;
         private ICameraCapture cameraCapture;
         private IBodyTrackingProvider bodyProvider;
+        private SidecarProcessLauncher sidecarLauncher; // ADR-064: owns the Python sidecar process
+        // ---- F-20A stale-stream failsafe --------------------------------------------------------
+        // How long the release to the neutral pose takes. Chosen so the move reads as deliberate
+        // rather than as a glitch; it is a per-frame slerp factor of deltaTime / this.
+        private const float StreamRestReleaseSeconds = 0.5f;
+        private bool streamFailsafeActive;
         private PoseSpaceConverter converter;
         private JointFilterPipeline jointFilter;
         private HumanoidPoseRetargeter retargeter;
         private KalidokitControlRigDriver kalidokitControlRig;
+        private VirtualMirror.Core.Humanize.HumanizedSkeleton humanizedSkeleton;
+        private PoseFrame lastHumanizedFrame;
+        private double lastHumanizeTimestamp;
+
+        /// <summary>
+        /// DIAG-ONLY (F-27): called once per applied frame with (raw filtered pose, humanized pose, dt).
+        /// Null unless a recorder is attached, and invoked only when non-null, so the production path
+        /// pays one null check. It exists so BEFORE and AFTER can be measured from the SAME input in
+        /// ONE pass — running the session twice would compare two different takes and call the
+        /// difference an improvement.
+        /// </summary>
+        public System.Action<PoseFrame, PoseFrame, float> HumanizeTap;
+
+        /// <summary>DIAG-ONLY (F-27): the live layer, for its stats and calibration readout.</summary>
+        public VirtualMirror.Core.Humanize.HumanizedSkeleton HumanizedLayer {
+            get {
+                return humanizedSkeleton;
+            }
+        }
         private PoseDebugSkeleton debugSkeleton;
         private System.IO.StreamWriter modelLog;
         private bool modelLogFailed;
@@ -231,6 +320,41 @@ namespace VirtualMirror.App {
                 sentisProvider.SetTuning(sentisMetreScale, sentisDepthScale);
             }
             bodyProvider.Tick(deltaSeconds);
+            // ---- F-20A: is the stream actually LIVE, not merely receiving? ------------------------
+            // F-19 measured ReceivedCount climbing and ParseErrors at 0 while the avatar rendered a
+            // 208-second-old pose. The old response to staleness was to stop calling Apply, which IS
+            // the freeze. When the stream is dead beyond the failsafe threshold the avatar is eased to
+            // its neutral pose instead, and no tracking pose is consumed this frame.
+            bool streamFailsafe = false;
+            if (bodyProvider is OakDUdpPoseProvider) {
+                streamFailsafe = ((OakDUdpPoseProvider)bodyProvider).State == TrackingState.StaleFailsafe;
+            }
+            if (streamFailsafe) {
+                if (!streamFailsafeActive) {
+                    streamFailsafeActive = true;
+                    if (kalidokitControlRig != null) {
+                        kalidokitControlRig.ResetHoldState();
+                    }
+                    if (humanizedSkeleton != null) {
+                        // F-27: the stream died, so the learned skeleton and every held direction belong
+                        // to a session that is over. Carrying them into the next one would dress the next
+                        // person in the last person's bone lengths.
+                        humanizedSkeleton.Reset();
+                        lastHumanizedFrame = null;
+                    }
+                    logService.Log(LogLevel.Warning,
+                        "F-20A: tracking stream stale beyond the failsafe threshold - releasing the avatar "
+                        + "to its neutral pose (the last tracked pose is NOT held indefinitely).");
+                }
+                if (kalidokitControlRig != null && kalidokitControlRig.IsBound) {
+                    kalidokitControlRig.ReleaseToRest(deltaSeconds / StreamRestReleaseSeconds);
+                    kalidokitControlRig.ProcessRuntime();
+                }
+            } else if (streamFailsafeActive) {
+                streamFailsafeActive = false;
+                logService.Log(LogLevel.Info,
+                    "F-20A: tracking stream recovered - resuming pose application from the neutral pose.");
+            }
             if (Input.GetKeyDown(KeyCode.C)) {
                 retargeter.Recalibrate();
                 hasPositionNeutral = false;
@@ -283,7 +407,7 @@ namespace VirtualMirror.App {
             // set before Play).
             bool kalidokitBodyActive = useKalidokitBody && kalidokitControlRig != null && kalidokitControlRig.IsBound;
             PoseFrame frame;
-            if (bodyProvider.TryGetLatestFrame(out frame)) {
+            if (!streamFailsafe && bodyProvider.TryGetLatestFrame(out frame)) {
                 // M3/M18: the OAK sidecar already smooths (One-Euro + outlier gate) at the source, so
                 // running Unity's One-Euro again would double-filter and add lag. Smoothing is single-owned
                 // by the sidecar for the OAK path; pass the frame through unfiltered here.
@@ -307,7 +431,52 @@ namespace VirtualMirror.App {
                     }
                     filtered = lastFilteredFrame;
                 }
+                // The debug skeleton is drawn from the RAW filtered pose, deliberately and permanently.
+                // Its whole diagnostic value is that it shows what the TRACKER said, so that "the
+                // skeleton is right and the avatar is not" stays a meaningful sentence (F-26). Drawing
+                // the humanized pose here would make the skeleton agree with the avatar by construction
+                // and destroy the only independent reference this project has.
                 RenderDebugSkeleton(filtered);
+
+                // ---- F-27 HUMANIZED SKELETON -------------------------------------------------------
+                // tracking -> filtering -> [HERE] -> retarget. Fixed bone lengths, anatomical joint
+                // limits, teleport rejection, per-joint hold in LOCAL space and a smooth re-acquire.
+                // Confidence passes through untouched, so P0-1's LimbGate downstream still sees an
+                // unobserved limb as unobserved and holds its rotation exactly as before; what changes
+                // is that the consumers which read landmarks WITHOUT a gate - the Kalidokit torso solve
+                // reads 11/12/23/24 with no validation at all - now get a possible body instead of a
+                // zero-filled one.
+                //
+                // RUN ONCE PER POSE, NOT ONCE PER RENDER FRAME. TryGetLatestFrame returns the SAME
+                // cached pose on every render tick, and the editor renders at ~100 fps over a ~30 Hz
+                // stream — so processing per tick would run this layer ~3x per pose with dt = the
+                // RENDER delta. Its temporal stages would then advance three times per observation: a
+                // velocity-clamped joint would creep toward its target between poses, which MEASURED as
+                // the humanized stream jumping MORE between frames than the raw one (0.046 m vs
+                // 0.014 m) — the exact opposite of the layer's purpose. This is the same trap the
+                // One-Euro filter above documents in its M10 note, and it is fixed the same way: key
+                // off the timestamp and use the INTER-POSE delta.
+                PoseFrame humanized = filtered;
+                if (useHumanizedSkeleton && humanizedSkeleton != null) {
+                    double poseTimestamp = filtered.TimestampSeconds;
+                    if (lastHumanizedFrame == null || poseTimestamp != lastHumanizeTimestamp) {
+                        float poseDelta = deltaSeconds;
+                        if (lastHumanizedFrame != null && poseTimestamp > lastHumanizeTimestamp) {
+                            poseDelta = (float)(poseTimestamp - lastHumanizeTimestamp);
+                        }
+                        humanizedSkeleton.SetTuning(humanizedConfidenceFloor, humanizedRecoverSeconds);
+                        humanizedSkeleton.SetStages(humanizeVelocity, humanizeBoneLengths, humanizeAngles);
+                        lastHumanizedFrame = humanizedSkeleton.Process(filtered, poseDelta);
+                        lastHumanizeTimestamp = poseTimestamp;
+                        if (HumanizeTap != null) {
+                            // Tapped inside the new-pose branch on purpose: a recording keyed to render
+                            // frames would count the same pose several times and report a jump rate
+                            // that belongs to the display, not the tracker.
+                            HumanizeTap(filtered, lastHumanizedFrame, poseDelta);
+                        }
+                    }
+                    humanized = lastHumanizedFrame;
+                }
                 if (kalidokitBodyActive) {
                     // ADR-022 whole-body: the normalized control rig owns the entire skeleton, so release
                     // FK + IK (they must not write raw bones the control rig would overwrite each Process).
@@ -316,9 +485,21 @@ namespace VirtualMirror.App {
                     if (ikSolver != null && ikSolver.IsBound) {
                         ikSolver.SetActive(false);
                     }
-                    if (!IsPoseStale(filtered)) {
+                    if (!IsPoseStale(humanized)) {
                         kalidokitControlRig.SetTuning(kalidokitBodyEulerSigns, kalidokitBodyFlipQuat, kalidokitBodyLerp, kalidokitBodyLegs, kalidokitBodyMirror, kalidokitBodyTorsoRoll);
-                        kalidokitControlRig.Apply(filtered);
+                        kalidokitControlRig.SetSpineBend(kalidokitSpineBendScale);
+                        kalidokitControlRig.SetSpineBendDynamics(kalidokitSpineBendBaselineTau);
+                        kalidokitControlRig.SetTorsoYawScale(kalidokitTorsoYawScale);
+                        kalidokitControlRig.SetLimbConfidence(limbConfidenceThreshold); // P0-1 live-tunable gate
+                        kalidokitControlRig.SetUseAimArms(kalidokitAimArms);            // ARM RETARGET V1 (live A/B)
+                        kalidokitControlRig.SetDirectionTrace(kalidokitDirectionTrace, kalidokitDirectionTraceEveryFrames);
+                        // F-26 + F-27: the fidelity metric measures against the RAW tracked pose, not
+                        // against whatever drove the avatar. With the humanized layer on, those differ -
+                        // and scoring the avatar against its own input would flatter that layer by
+                        // construction. Set before Apply so a sample taken this frame sees this frame's
+                        // reference.
+                        kalidokitControlRig.SetFidelityReference(filtered);
+                        kalidokitControlRig.Apply(humanized);
                     }
                 } else {
                     // FK and IK are mutually exclusive on the arm/leg bones: when the IK solver is active and
@@ -332,26 +513,17 @@ namespace VirtualMirror.App {
                     if (ikSolver != null && ikSolver.IsBound) {
                         ikSolver.SetActive(useIkDriver);
                     }
-                    if (!IsPoseStale(filtered)) {
-                        retargeter.Apply(filtered, retargetMinConfidence, retargetExitConfidence);
+                    if (!IsPoseStale(humanized)) {
+                        retargeter.Apply(humanized, retargetMinConfidence, retargetExitConfidence);
                         if (ikActive) {
-                            ikSolver.Apply(filtered, retargetMinConfidence);
-                        }
-                        // World translation from the measured hip anchor (unfiltered `frame` carries it; the joint
-                        // filter only smooths landmarks). Neutral-relative + scaled + exponentially smoothed so the
-                        // avatar walks/jumps with the user without inheriting depth jitter.
-                        if (trackPosition && avatarRootTransform != null && frame.HasRootPosition) {
-                            if (!hasPositionNeutral) {
-                                positionNeutralHip = frame.RootPositionMetres;
-                                hasPositionNeutral = true;
-                            }
-                            Vector3 targetOffset = (frame.RootPositionMetres - positionNeutralHip) * positionScale;
-                            float lerpT = 1f - Mathf.Exp(-positionSmoothing * deltaSeconds);
-                            positionCurrentOffset = Vector3.Lerp(positionCurrentOffset, targetOffset, lerpT);
-                            avatarRootTransform.position = avatarRootInitialPosition + positionCurrentOffset;
+                            ikSolver.Apply(humanized, retargetMinConfidence);
                         }
                     }
                 }
+                // Physical movement (walk/jump): drive the avatar ROOT from the OAK measured hip xyz on BOTH
+                // retarget paths. This used to live only in the FK else-branch, so the Kalidokit body path
+                // never translated (Milestone-2 fix). Runs whenever a frame carries a measured root position.
+                ApplyRootPosition(frame, deltaSeconds);
             }
 
             if (useFaceTracking && faceProvider != null && expressionRetargeter != null) {
@@ -446,6 +618,23 @@ namespace VirtualMirror.App {
             debugSkeleton.Render(frame);
         }
 
+        // Physical movement: translate the avatar root by the OAK-measured mid-hip position (neutral-relative,
+        // scaled, exponentially smoothed) so the avatar walks/jumps with the user. Shared by both retarget
+        // paths (Milestone-2). No-op when the frame carries no measured root (RGB paths) or trackPosition off.
+        private void ApplyRootPosition(PoseFrame frame, float deltaSeconds) {
+            if (!trackPosition || avatarRootTransform == null || frame == null || !frame.HasRootPosition) {
+                return;
+            }
+            if (!hasPositionNeutral) {
+                positionNeutralHip = frame.RootPositionMetres;
+                hasPositionNeutral = true;
+            }
+            Vector3 targetOffset = (frame.RootPositionMetres - positionNeutralHip) * positionScale;
+            float lerpT = 1f - Mathf.Exp(-positionSmoothing * deltaSeconds);
+            positionCurrentOffset = Vector3.Lerp(positionCurrentOffset, targetOffset, lerpT);
+            avatarRootTransform.position = avatarRootInitialPosition + positionCurrentOffset;
+        }
+
         // Pipeline logging (diagnostics): one model_log.jsonl line per applied Kalidokit-body frame — seq +
         // the resulting avatar bone orientations (hips facing, hands, forearms) — to diff against
         // recv_log.jsonl and localize where the retarget introduces jitter/spin (compare_logs.py).
@@ -465,6 +654,34 @@ namespace VirtualMirror.App {
                 Transform rh = boundAnimator.GetBoneTransform(HumanBodyBones.RightHand);
                 Transform ll = boundAnimator.GetBoneTransform(HumanBodyBones.LeftLowerArm);
                 Transform rl = boundAnimator.GetBoneTransform(HumanBodyBones.RightLowerArm);
+                // DIAG-ONLY (P0 acceptance §12/§13): leg bones were never logged, so leg rotation behavior
+                // (and the rotation-vs-squash question) could not be evidenced. Read-only.
+                Transform lul = boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperLeg);
+                Transform rul = boundAnimator.GetBoneTransform(HumanBodyBones.RightUpperLeg);
+                Transform lll = boundAnimator.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
+                Transform rll = boundAnimator.GetBoneTransform(HumanBodyBones.RightLowerLeg);
+                // DIAG-ONLY (P0 acceptance §13): live bone LENGTHS. A rotation retarget must keep these
+                // CONSTANT; logging them turns "does the avatar squash?" into a measurement, not an opinion.
+                float femurL = (lul != null && lll != null) ? Vector3.Distance(lul.position, lll.position) : 0f;
+                float shinL = (lll != null && boundAnimator.GetBoneTransform(HumanBodyBones.LeftFoot) != null)
+                    ? Vector3.Distance(lll.position, boundAnimator.GetBoneTransform(HumanBodyBones.LeftFoot).position) : 0f;
+                float upArmL = (boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm) != null && ll != null)
+                    ? Vector3.Distance(boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm).position, ll.position) : 0f;
+                float foreArmL = (ll != null && lh != null) ? Vector3.Distance(ll.position, lh.position) : 0f;
+                // DIAG-ONLY (P1-4 visual validation): interior knee/elbow angles + leg forward vectors.
+                // Euler angles wrap at 0/360, so frame-to-frame deltas off them are unreliable; these are
+                // wrap-free and turn "did the avatar's knee invert?" into a measurement. Read-only.
+                float lKneeAng = JointAngle(lul, lll, boundAnimator.GetBoneTransform(HumanBodyBones.LeftFoot));
+                float rKneeAng = JointAngle(rul, rll, boundAnimator.GetBoneTransform(HumanBodyBones.RightFoot));
+                float lElbowAng = JointAngle(boundAnimator.GetBoneTransform(HumanBodyBones.LeftUpperArm), ll, lh);
+                float rElbowAng = JointAngle(boundAnimator.GetBoneTransform(HumanBodyBones.RightUpperArm), rl, rh);
+                // DIAG-ONLY (P0 acceptance §6): the live LimbGate states, so the log PROVES the Unity gate
+                // held (1 = HELD, 0 = VALID) rather than inferring it from the Python-side hold.
+                int gLA = 0, gRA = 0, gLL = 0, gRL = 0, hLA = 0, hRA = 0, hLL = 0, hRL = 0;
+                if (kalidokitControlRig != null) {
+                    kalidokitControlRig.GetGateStates(out gLA, out gRA, out gLL, out gRL,
+                                                      out hLA, out hRA, out hLL, out hRL);
+                }
                 string line = "{\"seq\":" + seq
                     + ",\"hipsY\":" + LogF(hips != null ? hips.eulerAngles.y : 0f)
                     + ",\"hipsFwd\":" + LogV(hips != null ? hips.forward : Vector3.zero)
@@ -474,8 +691,23 @@ namespace VirtualMirror.App {
                     + ",\"rlow\":" + LogV(rl != null ? rl.eulerAngles : Vector3.zero)
                     + ",\"lhandF\":" + LogV(lh != null ? lh.forward : Vector3.zero)
                     + ",\"rhandF\":" + LogV(rh != null ? rh.forward : Vector3.zero)
+                    + ",\"lupleg\":" + LogV(lul != null ? lul.eulerAngles : Vector3.zero)
+                    + ",\"rupleg\":" + LogV(rul != null ? rul.eulerAngles : Vector3.zero)
+                    + ",\"llowleg\":" + LogV(lll != null ? lll.eulerAngles : Vector3.zero)
+                    + ",\"rlowleg\":" + LogV(rll != null ? rll.eulerAngles : Vector3.zero)
+                    + ",\"gate\":{\"lArm\":" + gLA + ",\"rArm\":" + gRA + ",\"lLeg\":" + gLL + ",\"rLeg\":" + gRL
+                    + ",\"hLArm\":" + hLA + ",\"hRArm\":" + hRA + ",\"hLLeg\":" + hLL + ",\"hRLeg\":" + hRL + "}"
+                    + ",\"boneLen\":{\"femur\":" + LogF(femurL) + ",\"shin\":" + LogF(shinL)
+                    + ",\"upArm\":" + LogF(upArmL) + ",\"foreArm\":" + LogF(foreArmL) + "}"
+                    + ",\"tApply\":" + (System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)
                     + ",\"llowF\":" + LogV(ll != null ? ll.forward : Vector3.zero)
                     + ",\"rlowF\":" + LogV(rl != null ? rl.forward : Vector3.zero)
+                    + ",\"kneeAng\":{\"l\":" + LogF(lKneeAng) + ",\"r\":" + LogF(rKneeAng) + "}"
+                    + ",\"elbowAng\":{\"l\":" + LogF(lElbowAng) + ",\"r\":" + LogF(rElbowAng) + "}"
+                    + ",\"luplegF\":" + LogV(lul != null ? lul.forward : Vector3.zero)
+                    + ",\"ruplegF\":" + LogV(rul != null ? rul.forward : Vector3.zero)
+                    + ",\"llowlegF\":" + LogV(lll != null ? lll.forward : Vector3.zero)
+                    + ",\"rlowlegF\":" + LogV(rll != null ? rll.forward : Vector3.zero)
                     + "}";
                 modelLog.WriteLine(line);
             } catch (Exception) {
@@ -488,6 +720,14 @@ namespace VirtualMirror.App {
                     modelLog = null;
                 }
             }
+        }
+
+        // DIAG-ONLY (P1-4 visual validation): interior angle a-b-c in degrees; 0 when a bone is absent.
+        private static float JointAngle(Transform a, Transform b, Transform c) {
+            if (a == null || b == null || c == null) {
+                return 0f;
+            }
+            return Vector3.Angle(a.position - b.position, c.position - b.position);
         }
 
         private static string LogF(float v) {
@@ -516,6 +756,13 @@ namespace VirtualMirror.App {
                 return;
             }
             servicesTornDown = true;
+            // ADR-064: stop the producer first, so it is not still streaming into a socket we are
+            // about to close. Disposing is safe when the sidecar was never started, and it never
+            // touches a supervisor that this launcher did not spawn.
+            if (sidecarLauncher != null) {
+                sidecarLauncher.Dispose();
+                sidecarLauncher = null;
+            }
             if (modelLog != null) {
                 try {
                     modelLog.Flush();
@@ -591,10 +838,34 @@ namespace VirtualMirror.App {
             }
         }
 
+        /// <summary>
+        /// ADR-064: brings up the Python tracking sidecar so the user does not have to run it in a
+        /// terminal. Failure here is deliberately non-fatal — the OAK-D provider still starts and
+        /// the HUD reports why nothing is streaming, which is more useful than refusing to boot.
+        /// </summary>
+        private void StartSidecar() {
+            SidecarLaunchOptions launchOptions = new SidecarLaunchOptions {
+                AutoStart = autoStartSidecar,
+                Host = "127.0.0.1",
+                UdpPort = oakUdpPort,
+                LockPort = sidecarLockPort,
+                Portrait = true,
+                PortraitDirection = sidecarPortraitDirection,
+                SubpixelBits = sidecarSubpixelBits,
+                ModelPathOverride = sidecarModelPathOverride
+            };
+            sidecarLauncher = new SidecarProcessLauncher(logService, launchOptions);
+            sidecarLauncher.Start(SidecarLocator.Resolve(sidecarModelPathOverride));
+        }
+
         private void StartTracking() {
             jointFilter = new JointFilterPipeline(filterMinCutoff, filterBeta, filterDerivativeCutoff);
             retargeter = new HumanoidPoseRetargeter();
             kalidokitControlRig = new KalidokitControlRigDriver(); // ADR-022: whole-body via normalized control rig
+            kalidokitControlRig.SetLogger(logService); // P0-1: sparse limb hold/reacquire diagnostics
+            // F-27: the humanized skeleton sits between filtering and retargeting. It owns no smoothing
+            // and no confidence - it makes the POSE anatomically possible before anything solves from it.
+            humanizedSkeleton = new VirtualMirror.Core.Humanize.HumanizedSkeleton();
             if (useIkDriver) {
                 EnsureIkSolver();
             }
@@ -603,10 +874,16 @@ namespace VirtualMirror.App {
             // → cannot crash Unity. Binds a UDP socket; if the port is free it "starts" and waits for the
             // sidecar's datagrams (avatar rests until the sidecar streams). Run udp_pose_sender.py separately.
             if (useOakUdpTracking) {
+                // ADR-064: start the sidecar before the provider binds, so its ~45 s model load
+                // overlaps the rest of bootstrap. The provider does not depend on it being up — it
+                // simply waits for datagrams, and TrackingStreamHealth + the F-20A stale/failsafe
+                // machinery already handle a producer that never arrives or dies mid-session.
+                StartSidecar();
                 OakDUdpPoseProvider oakUdp = new OakDUdpPoseProvider(logService, converter, oakUdpPort);
                 if (pipelineLogging) {
                     oakUdp.SetPipelineLog(pipelineLogDir); // recv_log.jsonl — must be set before StartTracking
                 }
+                oakUdp.SetPoseInterpolation(poseInterpolationDelayMs); // P1-3 timestamped pose buffer
                 oakUdp.StartTracking();
                 if (oakUdp.IsRunning) {
                     bodyProvider = oakUdp;

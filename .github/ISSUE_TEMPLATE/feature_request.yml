@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a capability or a change
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that this project makes hard today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting measurement (if this changes tracking behaviour)
+      description: >
+        This project does not change a tuned constant or a pipeline stage without a measurement.
+        If your request touches tracking quality, describe how the improvement could be measured -
+        the existing fidelity harnesses are in python-sidecar~/tools/diagnostics/.

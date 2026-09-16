@@ -1,0 +1,149 @@
+ARM RETARGET V1 — editor measurement bodies
+===========================================
+
+These reproduce the tables in docs/UNITY_ARM_RETARGET_V1_2026-09-08.md from the SHIPPING C#.
+
+Each block is a *method body* (no `using` directives — fully qualified names), suitable for:
+  * MCP for Unity `execute_code`, or
+  * the body of a `[MenuItem]` method in a throwaway Editor script.
+
+The authoritative pass/fail gate is the EditMode suite, not these:
+    Tests/EditMode/ArmAimSolverTests.cs      (23 tests; Unity Test Runner -> EditMode)
+
+--------------------------------------------------------------------------------------------------
+BLOCK 1 — §14 performance + allocation, old vs new
+--------------------------------------------------------------------------------------------------
+var sw = new System.Diagnostics.Stopwatch();
+int iterations = 200000;
+var lm = new Vector3[33];
+lm[11] = new Vector3( 0.18f, -0.50f, 0f);     lm[12] = new Vector3(-0.18f, -0.50f, 0f);
+lm[13] = new Vector3( 0.42f, -0.36f, -0.10f); lm[14] = new Vector3(-0.42f, -0.36f, -0.10f);
+lm[15] = new Vector3( 0.55f, -0.18f, -0.22f); lm[16] = new Vector3(-0.55f, -0.18f, -0.22f);
+long allocBefore = System.GC.GetTotalMemory(true);
+sw.Restart();
+float sink = 0f;
+for (int i = 0; i < iterations; i++) {
+    var arms = VirtualMirror.Retargeting.Kalidokit.KalidokitArmSolver.Solve(lm);
+    var qa = VirtualMirror.Retargeting.Kalidokit.KMath.ThreeEulerToUnity(arms.UpperArmLeft,  Vector3.one, 2);
+    var qb = VirtualMirror.Retargeting.Kalidokit.KMath.ThreeEulerToUnity(arms.LowerArmLeft,  Vector3.one, 2);
+    var qc = VirtualMirror.Retargeting.Kalidokit.KMath.ThreeEulerToUnity(arms.UpperArmRight, Vector3.one, 2);
+    var qd = VirtualMirror.Retargeting.Kalidokit.KMath.ThreeEulerToUnity(arms.LowerArmRight, Vector3.one, 2);
+    sink += qa.w + qb.w + qc.w + qd.w;
+}
+sw.Stop();
+double oldMs = sw.Elapsed.TotalMilliseconds;
+long oldAlloc = System.GC.GetTotalMemory(false) - allocBefore;
+
+var restL = VirtualMirror.Retargeting.ArmAimSolver.BuildRestBasis(Vector3.right, Vector3.right, Vector3.right, Vector3.up);
+var restR = VirtualMirror.Retargeting.ArmAimSolver.BuildRestBasis(Vector3.left,  Vector3.left,  Vector3.right, Vector3.up);
+var stL = new VirtualMirror.Retargeting.ArmRollState();
+var stR = new VirtualMirror.Retargeting.ArmRollState();
+allocBefore = System.GC.GetTotalMemory(true);
+sw.Restart();
+for (int i = 0; i < iterations; i++) {
+    var a = VirtualMirror.Retargeting.ArmAimSolver.Solve(
+        new Vector3(lm[12].x, -lm[12].y, lm[12].z), new Vector3(lm[14].x, -lm[14].y, lm[14].z),
+        new Vector3(lm[16].x, -lm[16].y, lm[16].z), restL, ref stL, true);
+    var b = VirtualMirror.Retargeting.ArmAimSolver.Solve(
+        new Vector3(lm[11].x, -lm[11].y, lm[11].z), new Vector3(lm[13].x, -lm[13].y, lm[13].z),
+        new Vector3(lm[15].x, -lm[15].y, lm[15].z), restR, ref stR, true);
+    sink += a.UpperRig.w + b.UpperRig.w;
+}
+sw.Stop();
+double newMs = sw.Elapsed.TotalMilliseconds;
+long newAlloc = System.GC.GetTotalMemory(false) - allocBefore;
+return new {
+    iterations,
+    old_us_per_frame = System.Math.Round(oldMs * 1000.0 / iterations, 3),
+    new_us_per_frame = System.Math.Round(newMs * 1000.0 / iterations, 3),
+    delta_us_per_frame = System.Math.Round((newMs - oldMs) * 1000.0 / iterations, 3),
+    old_alloc_bytes = oldAlloc, new_alloc_bytes = newAlloc, sink
+};
+
+Recorded result (2026-09-08):
+    old 3.435 us/frame, new 2.215 us/frame, delta -1.219 us/frame, 0 B allocated by either.
+
+--------------------------------------------------------------------------------------------------
+BLOCK 2 — §9 A1-A11 direction table + §10 symmetry + §11 noise sweep, old vs new
+--------------------------------------------------------------------------------------------------
+Shared setup used by blocks 2-4 (rig-frame fixtures; X = LEFT, Y = up, Z = BACK; hip-relative metres):
+
+const float UPL = 0.28f, FOL = 0.26f;
+Vector3 shL = new Vector3( 0.18f, 0.50f, 0f);   // subject LEFT  shoulder (JointId 11)
+Vector3 shR = new Vector3(-0.18f, 0.50f, 0f);   // subject RIGHT shoulder (JointId 12)
+System.Func<Vector3,Vector3> mir = v => new Vector3(-v.x, v.y, v.z);
+System.Func<Vector3,Vector3,Vector3,Vector3[]> arm = (sh,u,f) => {
+    Vector3 e = sh + u.normalized*UPL; return new Vector3[]{ sh, e, e + f.normalized*FOL }; };
+
+Poses (subjectLeftUpper, subjectLeftFore, subjectRightUpper, subjectRightFore):
+    A1  DOWN DOWN DOWN DOWN            A7  BACK BACK BACK BACK
+    A2  DOWN DOWN UP   UP              A8  OUTL FWD  OUTR FWD
+    A3  UP   UP   DOWN DOWN            A9  UP (FWD+DOWN) OUTR (OUTR+DOWN)
+    A4  UP   UP   UP   UP              A10 yaw 45 of A1
+    A5  OUTL OUTL OUTR OUTR            A11 yaw 90 of A1
+    A6  FWD  FWD  FWD  FWD             A10b/A11b  arms out + elbow fwd, whole body yawed 0/45/90/-45
+
+Avatar LEFT arm is solved from the subject's RIGHT arm (Kalidokit cross-map, preserved), and the wanted
+avatar direction is the source direction mirrored in X:
+
+    var st = new VirtualMirror.Retargeting.ArmRollState();
+    var s  = VirtualMirror.Retargeting.ArmAimSolver.Solve(aR[0], aR[1], aR[2], restL, ref st, true);
+    Vector3 gotUpper = s.UpperRig * restL.UpperDir;
+    Vector3 gotFore  = s.LowerRig * restL.LowerDir;
+    float upperErr = Vector3.Angle(mir(subjectRightUpper), gotUpper);
+    float foreErr  = Vector3.Angle(mir(subjectRightFore),  gotFore);
+
+Old-path comparison, torso at rest so world == local:
+
+    var ka = VirtualMirror.Retargeting.Kalidokit.KalidokitArmSolver.Solve(lm);   // lm = (x, -y, z) of the points
+    Quaternion oU = VirtualMirror.Retargeting.Kalidokit.KMath.ThreeEulerToUnity(ka.UpperArmLeft, Vector3.one, 2);
+    Quaternion oF = oU * VirtualMirror.Retargeting.Kalidokit.KMath.ThreeEulerToUnity(ka.LowerArmLeft, Vector3.one, 2);
+
+Noise sweep: jitter every landmark by N(0, sigma) for sigma in {0, 0.01, 0.02, 0.04} m, 40 reps per pose,
+score against the CLEAN pose, reuse one ArmRollState per pose so the roll hold is exercised.
+
+Recorded result (2026-09-08):
+    OLD mean 39.63 deg, max 162.81 deg (A7 arms-backward)  |  NEW mean 0.0000, max 0.0000
+    worst NEW L/R asymmetry 0.0000 deg
+    noise: OLD 39.6 / 41.1 / 41.2 / 43.9      NEW 0.0 / 3.7 / 7.4 / 14.8
+
+--------------------------------------------------------------------------------------------------
+BLOCK 3 — §11 roll: 360 deg elbow-plane sweep + straighten/re-bend hysteresis
+--------------------------------------------------------------------------------------------------
+var st = new VirtualMirror.Retargeting.ArmRollState();
+Vector3 axis = Vector3.right, pA = Vector3.up, pB = Vector3.Cross(Vector3.right, Vector3.up);
+float prev = 0f, worstJump = 0f, worstDir = 0f; int flips = 0;
+for (int d = 0; d < 360; d += 10) {
+    float a = d*Mathf.Deg2Rad;
+    Vector3 radial = pA*Mathf.Cos(a) + pB*Mathf.Sin(a);
+    Vector3 fore = (axis*Mathf.Cos(60f*Mathf.Deg2Rad) + radial*Mathf.Sin(60f*Mathf.Deg2Rad)).normalized;
+    Vector3[] aL = arm(shL, axis, fore);
+    var r = VirtualMirror.Retargeting.ArmAimSolver.Solve(aL[0], aL[1], aL[2], restR, ref st, true);
+    worstDir = Mathf.Max(worstDir, Mathf.Max(Vector3.Angle(mir(axis), r.UpperRig*restR.UpperDir),
+                                             Vector3.Angle(mir(fore), r.LowerRig*restR.LowerDir)));
+    if (d > 0) { float j = Mathf.Abs(Mathf.DeltaAngle(prev, r.RollDeg));
+                 worstJump = Mathf.Max(worstJump, j); if (j > 90f) flips++; }
+    prev = r.RollDeg;
+}
+// hysteresis: sweep the bend down through BendSinMin and back up
+float[] bends = new float[]{ 60f, 30f, 10f, 3f, 0f, 3f, 10f, 30f, 60f };   // watch r.NormalSource
+
+Recorded result (2026-09-08):
+    max roll step per 10 deg sample = 10.00 deg | >90 deg flips = 0 | worst direction error = 0.0000 deg
+    hysteresis: ElbowPlane -> Held (at ~10 deg bend) -> ElbowPlane, roll continuous, 0.000 deg error
+
+--------------------------------------------------------------------------------------------------
+BLOCK 4 — §5 rest-basis independence (no per-avatar calibration)
+--------------------------------------------------------------------------------------------------
+Feed BuildRestBasis the MEASURED rest directions of real rigs plus synthetic A-poses, then run the pose
+set through each. Rest dirs (Unity model space, from docs/audit/retarget_trace/vrmrest.py):
+
+    VirtualMirrorRigTemplate.vrm  left ( 1.000,  0.000,  0.000)  right (-1.000,  0.000,  0.000)
+    Anime+Boy+V-tuber.vrm         left ( 0.999, -0.049, -0.004)  right (-0.999, -0.049, -0.004)
+    synthetic A-pose 45 deg       left ( 0.707, -0.707,  0.000)  right (-0.707, -0.707,  0.000)
+    synthetic A-pose + 10 deg fwd left ( 0.696, -0.696, -0.174)  right (-0.696, -0.696, -0.174)
+
+Recorded result (2026-09-08): mean 0.00000, max 0.00000, L/R asym 0.00000 for all four rigs.
+Hinges came out opposed on every rig, from geometry alone:
+    exact T   -> (0, +1, 0) / (0, -1, 0)
+    A-pose    -> (0.71, +0.71, 0) / (0.71, -0.71, 0)

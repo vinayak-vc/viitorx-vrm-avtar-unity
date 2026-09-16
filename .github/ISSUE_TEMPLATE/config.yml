@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup and troubleshooting
+    url: https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/README.md#troubleshooting
+    about: Slow tracking, a stranded process on port 8899, or a failed sidecar launch are covered here.
+  - name: Known limitations
+    url: https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/README.md#known-limitations
+    about: Arm/hip clipping and the untested acceptance items are documented, not bugs to re-report.

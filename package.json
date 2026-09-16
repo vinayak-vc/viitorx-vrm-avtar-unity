@@ -1,0 +1,31 @@
+{
+  "name": "cloud.viitor.virtual-mirror",
+  "version": "0.1.0",
+  "displayName": "Virtual Mirror",
+  "description": "Real-time virtual mirror for Unity. An OAK-D depth camera drives a VRM avatar that mirrors a person standing in front of a display. Whole-body 3D pose runs in an out-of-process Python sidecar and streams over UDP, so an inference crash cannot take the player down with it.\n\nWindows-only. Requires an OAK-D camera, Python 3.10 and a ~369 MB RTMW3D ONNX model that is not bundled - see the README for setup.\n\nPre-1.0: several acceptance tests have not been run against a live camera and there is a known arm/hip clipping defect. Read 'Known limitations' in the README before shipping this to end users.",
+  "unity": "6000.3",
+  "documentationUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/README.md",
+  "changelogUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/LICENSE",
+  "keywords": [
+    "vrm",
+    "avatar",
+    "motion-capture",
+    "pose-estimation",
+    "oak-d",
+    "depthai",
+    "virtual-mirror",
+    "urp"
+  ],
+  "author": {
+    "name": "ViitorCloud",
+    "url": "https://viitor.cloud"
+  },
+  "dependencies": {
+    "com.unity.render-pipelines.universal": "17.3.0",
+    "com.unity.animation.rigging": "1.4.1",
+    "com.unity.nuget.newtonsoft-json": "3.2.2",
+    "com.unity.ai.inference": "2.6.1",
+    "com.vrmc.vrm": "0.126.0"
+  }
+}

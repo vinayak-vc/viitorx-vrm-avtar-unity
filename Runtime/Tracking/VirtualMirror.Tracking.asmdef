@@ -5,7 +5,8 @@
         "VirtualMirror.Core",
         "Mediapipe.Runtime",
         "Unity.InferenceEngine",
-        "Newtonsoft.Json"
+        "Newtonsoft.Json",
+        "Utility"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
