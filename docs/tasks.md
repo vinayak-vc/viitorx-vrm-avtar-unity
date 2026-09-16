@@ -745,3 +745,18 @@ production chain         all 10 modules import clean; compileall exit 0
 supervisor end-to-end    3/3 start/stop cycles, READY ~13 s, no orphan, ports released
 duplicate scan after     0 pairs, 0 duplicated functions
 ```
+
+### DONE — root tidy-up (follow-up to ADR-065)
+- [x] The first pass sorted only `.py` and left **13 loose non-.py files** at the sidecar root, plus
+      **9 .py scripts buried inside `arm_v*_evidence/`** that a root-only scan never saw.
+      Root: 96 -> 18 files.
+- [x] `scripts/` ← 4 `.bat` + `oak_guided_v4.ps1`. Every `.bat` did `cd /d "%~dp0"` to reach the
+      repo root; from `scripts/` that is one level short, so all are re-based to `%~dp0..`.
+      Verified the venv interpreter, the model, the supervisor and compare_logs all resolve.
+- [x] `docs/` ← `p0_human_report.txt`;  `tools/armaim/` ← the 9 arm-aiming analysis scripts.
+- [x] **Three broken launchers found.** `run_p0_acceptance.bat` and `run_p12_ab.bat` have been dead
+      since `29ec57e` (they invoke deleted scripts); `run_capture.bat` was broken by the ADR-065
+      move itself and is now repointed. The two dead ones are KEPT — P0_ACCEPTANCE and
+      P1_2_FRESHNESS cite them by name — but carry a DOES NOT RUN banner and exit 1.
+- [x] `oak_v4_evidence/` deliberately left at the root: script defaults hardcode that path.
+- [x] Removed `pose_stage_marks.json` (orphan; one unfinished mark, `tEnd 0.0`).
