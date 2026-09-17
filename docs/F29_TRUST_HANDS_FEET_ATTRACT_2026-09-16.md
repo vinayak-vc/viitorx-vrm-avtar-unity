@@ -15,6 +15,23 @@ NOT RUN: never on a live OAK-D, and never rendered on screen by a human. See §8
 > value of another live run was judged lower than the cost. Everything here is therefore verified
 > against recorded video through the production wire, and §8 says plainly what that does not cover.
 
+
+> ### ⚠ CORRECTED 2026-09-16 by F-32 — read this before quoting any "2.9 m" figure below
+>
+> **`456.webm` contains SEVEN dancers.** It was treated throughout this report as a single subject at
+> 2.9 m. It is not; there is no single subject in it at all, and the "2.9 m" hip depth is an artifact
+> of the crop landing on dancers of differing apparent size.
+>
+> Every number in this report drawn from `456.webm` therefore measures **identity contamination**,
+> not range. The tracked body's shoulder width varies 0.068–0.455 m (CV 22.8%, a 30× pixel swing)
+> — it is a chimera assembled from whichever dancers fall inside the migrating crop.
+>
+> A genuine single subject at 1.96 m (`123.webm`) gives **93.7% plausible hands** and a 90 mm mean
+> palm, close to the 1.4 m figures. **Hand tracking does not collapse at 2 m.** The real
+> single-subject limit beyond ~2 m is UNTESTED.
+>
+> Evidence: `docs/evidence/f32/identity_contamination.txt`.
+
 ---
 
 ## 1. What was actually missing, and what was only hidden

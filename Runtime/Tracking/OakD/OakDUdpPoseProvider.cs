@@ -92,6 +92,11 @@ namespace VirtualMirror.Tracking.OakD {
         private readonly RawHandFrame mainRawHands = new RawHandFrame();
         private bool hasAnyTelemetry;
         private bool trustChannelWarned;
+        // F-32 crowd channel. Snapshot-copied under `gate` for the same reason as the telemetry: a
+        // consumer holds it across several render frames while one datagram is current.
+        private readonly CrowdFrame workerCrowd = new CrowdFrame();
+        private readonly CrowdFrame mainCrowd = new CrowdFrame();
+        private bool hasAnyCrowd;
         private long framesReceived;
         private long parseErrors;
         private bool handsSeen;      // M17: warn once if the stream never carries lh/rh (old body-only sender?)
@@ -466,6 +471,31 @@ namespace VirtualMirror.Tracking.OakD {
         /// <summary>F-29 — the 21 landmarks per hand, in pose space. Copied for the same reason as
         /// <see cref="TryGetTelemetry"/>. Check the frame's per-hand tracked flags: an absent hand is
         /// reported as untracked rather than as a hand at the origin.</summary>
+        /// <summary>
+        /// F-32 — every person the sidecar is tracking, or false when this sender is single-person.
+        ///
+        /// Copied rather than aliased, like the telemetry: the receive thread overwrites its own
+        /// instance on the next datagram, and a consumer holds a crowd across several render frames.
+        ///
+        /// NOT interpolated by P1-3. That buffer reconstructs ONE body at a presentation time and
+        /// has no concept of identity; interpolating a crowd would mean matching people across two
+        /// buffered frames, which is the tracker's job and is already done on the sidecar. The crowd
+        /// is therefore latest-wins and can be up to one datagram older than the primary body.
+        /// </summary>
+        public bool TryGetCrowd(CrowdFrame target) {
+            if (target == null) {
+                return false;
+            }
+            bool available;
+            lock (gate) {
+                available = hasAnyCrowd;
+                if (available) {
+                    mainCrowd.CopyTo(target);
+                }
+            }
+            return available && target.IsValid;
+        }
+
         public bool TryGetRawHands(RawHandFrame target) {
             if (target == null) {
                 return false;
@@ -569,6 +599,7 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             ParseTelemetry(root, landmarks, seq, timestampSeconds, sendEpoch);
+            ParseCrowd(root, timestampSeconds);
             ParseHands(root, timestampSeconds);
             // P1-3: buffer this pose on the RECEIVE clock (Unity's own epoch, so no sender-skew
             // assumption). Duplicate / out-of-order / backwards-timestamp packets are rejected inside.
@@ -779,6 +810,88 @@ namespace VirtualMirror.Tracking.OakD {
                 return JointTrackState.Recovering;
             }
             return JointTrackState.NoTracker;
+        }
+
+        // ---- F-32 CROWD CHANNEL ------------------------------------------------------------------
+        // The optional `persons` array: every person the sidecar tracked AND could afford to pose.
+        //
+        // WHY THE ROOT-LEVEL SINGLE PERSON STILL EXISTS. The multi-person sender also publishes its
+        // most-established person at the payload ROOT in the exact single-person shape, so the VRM
+        // mirror app, the P1-3 buffer and all nine experience scenes keep working with no change and
+        // no knowledge that anyone else is in the room. This method reads the ADDITIONAL people. A
+        // sender that does not send `persons` simply leaves the crowd empty, which is not an error -
+        // it is the single-person sender behaving exactly as it always has.
+        private void ParseCrowd(JObject root, double timestampSeconds) {
+            JArray persons = root["persons"] as JArray;
+            if (persons == null) {
+                workerCrowd.MarkInvalid(timestampSeconds);
+                lock (gate) {
+                    workerCrowd.CopyTo(mainCrowd);
+                }
+                return;
+            }
+
+            workerCrowd.Begin();
+            workerCrowd.DetectedCount = root["ndet"] != null ? root["ndet"].Value<int>() : 0;
+            workerCrowd.TrackedCount = root["ntrack"] != null ? root["ntrack"].Value<int>() : persons.Count;
+
+            int i = 0;
+            while (i < persons.Count) {
+                JObject person = persons[i] as JObject;
+                if (person == null) {
+                    i = i + 1;
+                    continue;
+                }
+                JArray lm = person["lm"] as JArray;
+                if (lm == null || lm.Count == 0) {
+                    i = i + 1;
+                    continue;
+                }
+                int id = person["id"] != null ? person["id"].Value<int>() : -1;
+                string state = person["state"] != null ? person["state"].Value<string>() : null;
+                PersonPose slot = workerCrowd.Add(id, state);
+                if (slot == null) {
+                    break;   // CrowdFrame.MaxPeople reached; a misbehaving sender cannot grow us
+                }
+
+                int j = 0;
+                while (j < PoseFrame.LandmarkCount) {
+                    slot.Pose.SetLandmark(j, new PoseLandmark(Vector3.zero, 0f));
+                    j = j + 1;
+                }
+                int n = lm.Count < NumKeypoints ? lm.Count : NumKeypoints;
+                int mapped = 0;
+                j = 0;
+                while (j < n) {
+                    JArray point = lm[j] as JArray;
+                    if (point != null && point.Count >= 4) {
+                        Vector3 unity = converter.ToUnity(point[0].Value<float>(),
+                                                          point[1].Value<float>(),
+                                                          point[2].Value<float>());
+                        slot.Pose.SetLandmark(j, new PoseLandmark(unity,
+                                              Mathf.Clamp01(point[3].Value<float>())));
+                        mapped = mapped + 1;
+                    }
+                    j = j + 1;
+                }
+
+                JArray xyz = person["xyz"] as JArray;
+                if (xyz != null && xyz.Count >= 3) {
+                    slot.Pose.SetRootPosition(converter.ToUnityPosition(xyz[0].Value<float>() / 1000f,
+                                                                       xyz[1].Value<float>() / 1000f,
+                                                                       xyz[2].Value<float>() / 1000f));
+                } else {
+                    slot.Pose.ClearRootPosition();
+                }
+                slot.Pose.SetMeta(timestampSeconds, mapped > 0);
+                i = i + 1;
+            }
+
+            workerCrowd.SetMeta(timestampSeconds, workerCrowd.Count > 0);
+            lock (gate) {
+                workerCrowd.CopyTo(mainCrowd);
+                hasAnyCrowd = true;
+            }
         }
 
         private void ParseHands(JObject root, double timestampSeconds) {

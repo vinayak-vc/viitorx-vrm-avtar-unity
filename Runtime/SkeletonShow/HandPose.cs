@@ -10,17 +10,24 @@ namespace VirtualMirror.SkeletonShow {
     ///
     /// EVERY GESTURE MEASURE IS SCALE-INVARIANT, and that is not a stylistic choice. Hand landmark
     /// depth is derived from the same monocular/stereo estimate as the body, so the hand's apparent
-    /// SIZE varies with how well that estimate is doing. Measured across the two F-29 regression
-    /// clips: at 1.4 m the palm (wrist to middle knuckle) reads 84 mm mean, which is a real hand; at
-    /// 2.9 m it reads 165 mm mean with a p95 of 362 mm, which is not a hand at all. A pinch threshold
-    /// in absolute millimetres would therefore fire on distance rather than on intent. Dividing by
-    /// the hand's own palm length cancels the error that matters.
+    /// SIZE varies with how well that estimate is doing. A pinch threshold in absolute millimetres
+    /// would therefore fire on the quality of that estimate rather than on intent. Dividing by the
+    /// hand's own palm length cancels the error that matters.
     ///
     /// THE PLAUSIBILITY GATE IS THE HONEST QUALITY SIGNAL. A palm outside 50-160 mm is not a hand
-    /// shape whatever the model reported, and the fraction of frames passing that gate is the cleanest
-    /// available statement of whether hand tracking is working: 99.1% of observations at 1.4 m, 59.9%
-    /// at 2.9 m. <see cref="Plausible"/> is that gate, and a mode should draw nothing when it is false
-    /// rather than render a 36 cm hand.
+    /// shape whatever the model reported, and the fraction of frames passing it is the cleanest
+    /// available statement of whether hand tracking is working:
+    ///
+    ///     single subject, 1.40 m     palm  84 mm mean     99.1% plausible
+    ///     single subject, 1.96 m     palm  90 mm mean     93.7% plausible
+    ///     SEVEN-person clip          palm 165 mm mean     59.9% plausible   (p95 362 mm)
+    ///
+    /// READ THAT THIRD ROW CORRECTLY - F-29 originally recorded it as a 2.9 m DISTANCE effect and
+    /// that was wrong. The clip contains seven dancers, and the single-person crop migrates between
+    /// them, so the "hand" is several different people's hands averaged together (F-32). Hand
+    /// tracking does NOT collapse at 2 m; the genuine single-subject limit beyond ~2 m is untested.
+    /// <see cref="Implausible"/> is that gate, and a mode should draw nothing when it trips rather
+    /// than render a 36 cm hand.
     ///
     /// CALIBRATION CAVEAT, stated because the numbers below look more settled than they are: the
     /// thresholds come from the DISTRIBUTION of ordinary hand poses in two dance clips, not from a

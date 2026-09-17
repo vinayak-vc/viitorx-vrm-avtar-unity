@@ -4,6 +4,121 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## PER-PERSON FILTERS (F-33, 2026-09-17) — multi-person gets the measured single-person chain
+
+```text
+BUILT AND MEASURED. Every tracked person carries a full P0 + P1-1 + F-22 chain keyed to their
+track id. At 30 fps the multi-person chain IS the single-person chain; below 30 fps it is better,
+because it knows its own rate. 46/46 new tests, 270/270 across the sidecar suite.
+Report: F33_PER_PERSON_FILTERS_2026-09-17.md   ADR-071   Evidence: docs/evidence/f33/
+```
+
+### BUILT
+- [x] **`person_filters.py`** — `PersonFilters` (one chain) + `PersonFilterPool` (keyed on TRACK ID,
+      never on list position: the tracker re-sorts every frame, so an index-keyed bank hands one
+      person's One-Euro history to another). Lifecycle is idle-based so a caller cannot leak it.
+- [x] **Each person measures their OWN sample rate.** One-Euro derives velocity as `delta * freq`,
+      so a filter told 30 while sampled at 16 over-estimates speed by 1.9x and OPENS UP when it
+      should damp. Median of the last 15 gaps; `smoothing.py` gained an additive `set_freq()`.
+- [x] **ADR-071: the feet and the head joined the filter group.** They were in none — not trunk, arm,
+      leg or hand — and produced the worst artefacts left in the filtered run, for opposite reasons
+      (feet fail with `src=0` and need the HOLD; the head fails with `src=1` and needs the CAP).
+- [x] **`tools/diagnostics/f33_filter_bench.py`** — ground truth, so LAG is measured next to jitter.
+      Without it "the output moved less" cannot be told from over-smoothing.
+- [x] **`tests/test_person_filters.py`** — 46/46, covering AGENTS.md §8's required list plus the
+      re-ordering trap, the per-person M11 hold, and a config-drift guard that reads the
+      single-person sender's SOURCE and fails if any shared default stops matching.
+- [x] Harness defect fixed: `f32_multiperson_video.py` drove the tracker from the WALL CLOCK, so a
+      replay was not reproducible. Both it and the filters now run on the video's own timeline.
+
+### MEASURED
+- [x] **Implausible single-frame steps (>300 mm) over 2060 person-frames of identical input:**
+      no filters **2158** → single-person grouping **630** → +feet +head **77**. Worst step
+      2091 mm → 960 mm.
+- [x] **Against known ground truth at 16 fps** (three people): jitter median 32.4 → 19.3 mm, lag
+      250 ms. At 10 fps the NAIVE port (rate pinned at 30) is **worse than no filter at all** on the
+      median frame — 35.6 mm vs 33.5 mm — while costing 400 ms of lag.
+- [x] **Cost 0.88 ms per person-frame**, against 20.7 ms for the pose solve it follows (~4%).
+- [x] Joints emitted 60.2% → 59.1%: the chain refusing what it does not believe, as `[0,0,0,0]`.
+- [x] `wholebody_udp_sender.py` byte-identical; `smoothing.py` diff has zero deleted lines.
+
+### ⚠ BEFORE DEMOING F-33
+- [ ] **Never run with real people.** All evidence is recorded video and synthetic trajectories.
+- [ ] **The video A/B's depth is SYNTHETIC.** A clip has no stereo, and with no depth the smoother
+      has nothing to smooth and P1-1 starves every joint to LOST. `src=1` in that run means
+      "sampled the synthetic depth frame", never "measured by stereo".
+- [ ] **Lag is 233 ms at 30 fps.** Not new — it is the accepted single-person tuning. Say so with
+      any jitter figure; a jitter number without a lag number means nothing.
+- [ ] **A slow confident drift is still not caught** (847 mm of an injected 850 mm). P1-4 catches it
+      and P1-4 is rejected for production. Inherited blind spot, pinned by a test.
+- [ ] F-32's "11 ids for 7 people" video figure was machine-dependent and is superseded: the
+      deterministic harness gives **9 ids across two passes**.
+
+### NEXT
+- [ ] **Per-person `st` in Unity.** The wire now carries real per-joint states per person (all `-1`
+      before F-33). The root person's already reach the existing Trust HUD; a crowd HUD needs
+      `PersonPose` to carry them.
+- [ ] The 77 residual implausible steps are dominated by whole-body ORIGIN shifts (~230 mm), where
+      the hip moved and every hip-relative landmark moved with it. Hips sit on the global 1.5 m cap
+      in both senders; three events is not enough to retune a constant tuned on live data.
+
+---
+
+## MULTI-PERSON (F-32, 2026-09-17) — detection, tracking, and the first two-person experience
+
+```text
+BUILT AND WORKING END TO END on recorded video through the real OAK-D.
+19/19 tracker unit tests. 7/7 Unity acceptance checks. Nothing regressed.
+Report: F32_MULTIPERSON_2026-09-17.md   ADR-070   Evidence: docs/evidence/f32/
+```
+
+### CORRECTION FIRST - this invalidated part of F-29
+- [x] **`456.webm` contains SEVEN dancers.** F-29 treated it as one subject at 2.9 m and drew range
+      conclusions from it. The tracked body there has a shoulder width ranging 0.068-0.455 m (CV
+      22.8%, a 30x pixel swing) - a chimera assembled from whichever dancers fell in the migrating
+      crop. Every degradation figure from that clip measures IDENTITY CONTAMINATION, not distance.
+- [x] A genuine single subject at 1.96 m gives **93.7% plausible hands**, close to the 1.4 m figures.
+      Hand tracking does NOT collapse at 2 m.
+- [ ] **The real single-subject limit beyond ~2 m is still UNTESTED.** Do not assume it holds or
+      that it fails. This needs one clean clip of one person at 3 m.
+- [x] Corrected in the F-29 report, README, CHANGELOG and every code comment citing those numbers.
+
+### BUILT
+- [x] **`assignment.py`** - pure-numpy optimal assignment. Greedy is suboptimal on **54.6% of random
+      4x4 matrices** (measured) and its failure mode is exactly an ID swap between crossing people.
+      Verified optimal against brute force on 200 random rectangular matrices.
+- [x] **`person_tracker.py`** - detections to persistent ids. Associates in **3-D**, which no
+      off-the-shelf tracker can: two people overlapping on screen at different depths have perfect
+      IoU and are trivially separable in Z. 19/19 unit tests, including the crossing case.
+- [x] **`multiperson_udp_sender.py`** - detector on the VPU, tracker on the host, RTMW3D per person.
+      A NEW file: the production sender carries the whole measured single-person stack and was left
+      byte-identical.
+- [x] **`tools/video/f32_multiperson_video.py`** - the testable path while nobody is in the room.
+- [x] **Unity:** `CrowdFrame`, `TrackedBody`, provider `ParseCrowd`/`TryGetCrowd`,
+      `TrackedStage.Bodies`.
+- [x] **`Scenes/Bonds.unity`** - experience 9, the first that needs two people.
+- [x] **Backward compatibility verified:** `root lm == persons[0].lm` on every packet; `Pose` and
+      `Bodies[0]` are the same person across 752 Unity frames. The mirror app and all nine existing
+      scenes consume the multi-person sender unchanged.
+
+### MEASURED
+- [x] Detector `retail-0013` beats the vendored BlazePose blob: median **7 of 7** people vs 1-5.
+- [x] Detector is **free** on the VPU: rgb 29.8 -> 29.7 fps, depth 29.6 -> 29.4, detector 11.4 fps.
+- [x] RTMW3D **20.7 ms p50, fixed batch of 1** -> 2 people 24 fps, 3 people 16 fps, 4 people 12 fps.
+- [x] Tracking the 7-dancer clip with NO depth: median 7 tracked, 6 ids alive >50% of the clip.
+
+### ⚠ BEFORE DEMOING MULTI-PERSON
+- [ ] **Never run with two real people in front of the camera.** Everything is recorded video.
+- [x] ~~**Multi-person output is RAWER than single-person**: no P0 smoother, no P1-1 joint tracker,
+      no P1-4 recovery, no F-22 validation per person.~~ **DONE in F-33** — see the section above.
+- [ ] Nothing has been rendered on screen - no visual claim about Bonds has been checked.
+- [ ] Long occlusions still cost an identity. Metric depth should fix it; video cannot test that.
+      (The "11 ids for 7 people" figure was machine-dependent — the harness read the wall clock. The
+      deterministic harness gives **9 ids across two passes**. F-33 §7.)
+- [ ] The detector blob is NOT committed (2.3 MB). `setup_sidecar.ps1` does not yet fetch it.
+- [ ] Latent bug left alone: `mediapipe_utils.non_max_suppression` raises IndexError on OpenCV 4.x.
+      Dead vendored code that production never calls; fix it if anything ever does.
+
 ## ✅ F-31 TIME ECHO + SOUND (2026-09-16)
 
 ```text

@@ -17,7 +17,7 @@ namespace VirtualMirror.Experiences {
     /// AND IT CANNOT BE WRONG IN A NEW WAY. Everything on screen is a replay of pose data that has
     /// already been validated — no new sensing, no new thresholds, no new failure mode. It uses body
     /// joints only, so it works at the distance where the hands are already known to be unreliable
-    /// (59.9% plausible at 2.9 m) and needs no floor precision.
+    /// (59.9% plausible on the crowded clip) and needs no floor precision.
     ///
     /// WORLD POSITIONS ARE STORED, NOT HIP-RELATIVE ONES. An echo is a record of where the body
     /// actually WAS, so it must stay there while the person moves away from it. Storing hip-relative

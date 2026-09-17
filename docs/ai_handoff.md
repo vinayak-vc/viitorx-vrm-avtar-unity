@@ -1,6 +1,6 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-16 (F-29 trust channel + F-30 experiences)
+Last updated: 2026-09-17 (F-33 per-person filters)
 Purpose: next agent can continue without re-deriving context.
 
 **This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
@@ -11,7 +11,136 @@ for anything after 2026-08-11; the sections below are historical context for M0�
 
 ---
 
-## 🔷 CURRENT — F-29 trust channel + F-30 experiences + F-31 time echo & sound (2026-09-16)
+## 🔷 CURRENT — F-33 per-person filters (2026-09-17)
+
+**Read this and the F-32 section below it, in that order.**
+
+F-32 shipped multi-person with the entire signal chain switched off and said so. F-33 turns it on:
+one complete P0 + P1-1 + F-22 chain per tracked person, keyed on their track id.
+Full report: `F33_PER_PERSON_FILTERS_2026-09-17.md`. Decision: **ADR-071**.
+
+```text
+python-sidecar~/person_filters.py                     NEW  PersonFilters + PersonFilterPool
+python-sidecar~/tests/test_person_filters.py          NEW  46/46
+python-sidecar~/tools/diagnostics/f33_filter_bench.py NEW  ground truth, so LAG is measured too
+python-sidecar~/smoothing.py                          +    set_freq(), additive, 0 deleted lines
+python-sidecar~/multiperson_udp_sender.py             +    the pool, and the A/B flags
+python-sidecar~/tools/video/f32_multiperson_video.py  +    --filters, --synth-depth, video clock
+Runtime/**                                            unchanged - the wire shape did not move
+```
+
+### The three things to carry forward
+
+1. **A temporal filter belongs to an IDENTITY, not to a list position.** `PersonTracker` re-sorts
+   most-established-first every frame, so an index-keyed bank hands person A's One-Euro history to
+   person B. Unity's `TrackedStage.UpdateCrowd` had already reached the same conclusion for
+   `SkeletonPose`; F-33 is the sidecar half of it.
+
+2. **`freq` is not cosmetic.** One-Euro derives velocity as `delta * freq`. Told 30 while actually
+   sampled at 16 it over-estimates speed by 1.9x, inflates its adaptive cutoff and OPENS UP when it
+   should damp — so the naive port is worse on BOTH jitter and lag at once. At 10 fps the pinned
+   version is *worse than no filter at all* on the median frame (35.6 mm vs 33.5) while costing
+   400 ms of lag. Each person now measures their own rate.
+
+3. **The feet and the head were in NO filter group** — not trunk, arm, leg or hand (ADR-071). They
+   produced the worst residual artefacts, for OPPOSITE reasons: feet fail with `src=0` and need the
+   bounded HOLD; the head fails with `src=1` and needs the displacement CAP. Adding both took
+   implausible steps (>300 mm in a 33 ms frame) from 630 to 77 while changing the distal, trunk and
+   hip figures by 0.0% and emitting exactly the same 40 200 joints.
+
+### The numbers
+
+```text
+implausible steps  no filters 2158 -> single-person grouping 630 -> +feet +head 77
+                   worst single step 2091 mm -> 960 mm       (2060 person-frames, identical input)
+ground truth 16fps jitter median 32.4 -> 19.3 mm, lag 250 ms     (three people, the real case)
+cost               0.88 ms per person-frame vs 20.7 ms for the pose solve  (~4%)
+joints emitted     60.2% -> 59.1%   the chain refusing what it does not believe, as [0,0,0,0]
+lag at 30 fps      233 ms - NOT new, it is the accepted single-person tuning. Always quote it.
+```
+
+### What is NOT true
+
+* Never run with real people. Video and synthesis only.
+* **The video A/B's stereo depth is SYNTHETIC.** With no depth the smoother has nothing to smooth
+  and P1-1 starves every joint to LOST, so the harness paints each person's box with their
+  apparent-height distance plus a noise model and reads it back through the REAL backproject.
+  `src=1` there means "sampled the synthetic depth frame", never "measured by stereo".
+* A slow confident drift is still followed (847 mm of an injected 850 mm). P1-4 catches it and P1-4
+  is rejected for production. Inherited blind spot, pinned by a test that asserts the LIMITATION.
+* **F-32's "11 ids for 7 people" is superseded.** That harness read the wall clock, so a replay was
+  not reproducible. On the video clock it is 9 ids across two passes.
+
+---
+
+## F-32 multi-person (2026-09-17)
+
+**Read this section first. It also CORRECTS an earlier report.**
+
+### The correction, which matters more than the feature
+
+`456.webm` contains **SEVEN dancers**. F-29 treated it as a single subject at 2.9 m and drew
+range conclusions from it ("hands 59.9% plausible at 2.9 m", "floor 81 mm"). Those figures
+measure IDENTITY CONTAMINATION, not distance: the single-person crop migrates between dancers,
+and the tracked body's shoulder width ranges 0.068-0.455 m. A genuine single subject at 1.96 m
+gives 93.7% plausible hands. **The real single-subject limit beyond ~2 m is untested.**
+Corrected everywhere it was cited. Evidence: `docs/evidence/f32/identity_contamination.txt`.
+
+The deeper lesson: the single-person pipeline does not fail loudly on multi-person input. It
+emits a plausible skeleton belonging to nobody, and those numbers reached a report.
+
+### What was built
+
+Detect N people on the OAK-D VPU -> track them with stable ids on the host -> pose the top N on
+the GPU -> one backward-compatible datagram -> N bodies in Unity -> `Scenes/Bonds.unity`.
+Full report: `F32_MULTIPERSON_2026-09-17.md`. Decision: **ADR-070**.
+
+```text
+python-sidecar~/assignment.py                 NEW  pure-numpy optimal assignment
+python-sidecar~/person_tracker.py             NEW  detections -> persistent ids (19/19 tests)
+python-sidecar~/multiperson_udp_sender.py     NEW  the multi-person sidecar
+python-sidecar~/tools/video/f32_multiperson_video.py  NEW  the testable path
+Runtime/Core/Models/CrowdFrame.cs             NEW  PersonPose + CrowdFrame
+Runtime/SkeletonShow/TrackedBody.cs           NEW  id + pose + state
+Runtime/Tracking/OakD/OakDUdpPoseProvider.cs  +    ParseCrowd, TryGetCrowd
+Runtime/SkeletonShow/TrackedStage.cs          +    Bodies, HasCrowd, per-person placement
+Runtime/Experiences/CrowdBondsExperience.cs   NEW  experience 9
+Scenes/Bonds.unity                            NEW
+```
+
+### The numbers that constrain everything
+
+```text
+RTMW3D          20.7 ms p50, FIXED batch of 1  -> 2 people 24 fps, 3 -> 16, 4 -> 12
+detector        free on the VPU: rgb 29.8->29.7, depth 29.6->29.4, detector 11.4 fps
+detector choice retail-0013 median 7 of 7 people; vendored BlazePose managed 1-5
+tracking        7-dancer clip, NO depth: median 7 tracked, 6 ids alive >50% of the clip
+```
+
+### Three traps worth carrying forward
+
+* **Letterbox, never squash.** Squashing a portrait frame into the detector's landscape input
+  measured 0.95 people on a clip containing seven. Letterboxing took the SAME detector to 7.06.
+* **The NN input must be non-blocking, queue size 1.** A blocking input back-pressures
+  `ColorCamera.preview`, which the production RGB output also consumes, and RGB collapses to
+  12.3 fps.
+* **Landmarks are hip-relative.** Staging every person at the same origin draws the whole crowd
+  on top of itself - measured as a 0.00 m mean pair gap across 850 frames before it was fixed.
+
+### Next recommended task, in order
+
+1. ~~**Per-person P0/P1-1/P1-4/F-22.**~~ **DONE in F-33** — see the section above, and ADR-071.
+2. **Two real people in front of the camera.** Everything so far is recorded video.
+3. **Open the scenes and look at them** - still true for F-30/F-31/F-32, nothing rendered yet.
+4. **One clean clip of one person at 3 m**, to finally answer the range question F-29 got wrong.
+5. **Per-person `st` in Unity.** The wire now carries real per-joint tracking states PER PERSON
+   (all `-1` before F-33). The root person's already reach the existing Trust HUD unchanged; a
+   crowd HUD would need `PersonPose` to carry them.
+6. Refactor `SkeletonShowBootstrap` onto `TrackedStage` (outstanding since F-30).
+
+---
+
+## F-29 trust channel + F-30 experiences + F-31 time echo & sound (2026-09-16)
 
 **This section is the live handoff. Read it before anything below.**
 

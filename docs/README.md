@@ -26,6 +26,8 @@ the debug skeleton is being built into the product. These are the current report
 
 | Doc | Covers |
 |-----|--------|
+| [F33_PER_PERSON_FILTERS_2026-09-17.md](F33_PER_PERSON_FILTERS_2026-09-17.md) | Per-person P0/P1-1/F-22 filter chains keyed on the track id, and a self-measured sample rate |
+| [F32_MULTIPERSON_2026-09-17.md](F32_MULTIPERSON_2026-09-17.md) | Multi-person detection, tracking with stable ids, and the first two-person experience |
 | [F30_EXPERIENCES_2026-09-16.md](F30_EXPERIENCES_2026-09-16.md) | Seven interactive experience scenes on one shared tracking core (`TrackedStage`) |
 | [F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md](F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md) | The trust channel, hands and feet drawn, the attract loop, and the measured range limits |
 | [F28_SKELETON_SHOW_MODES_2026-09-16.md](F28_SKELETON_SHOW_MODES_2026-09-16.md) | The show scene and its first three modes |

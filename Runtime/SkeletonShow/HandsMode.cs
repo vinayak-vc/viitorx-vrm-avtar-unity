@@ -17,7 +17,9 @@ namespace VirtualMirror.SkeletonShow {
     ///
     /// WHAT THE MODE DELIBERATELY REFUSES TO DRAW. When a hand's shape fails
     /// <see cref="HandPose"/>'s plausibility gate the skeleton is NOT drawn — a marker is shown
-    /// instead. At 2.9 m subject distance 40% of hand observations fail that gate, and a 36 cm hand
+    /// instead. On the seven-person regression clip 40% of hand observations fail that gate - not
+    /// because of distance but because the single-person crop is migrating between dancers (F-32),
+    /// which is the same thing a genuinely out-of-range hand looks like from here. A 36 cm hand
     /// rendered confidently is worse than no hand at all: it invites a viewer to conclude the
     /// tracking is broken in some interesting way rather than that it is out of range.
     ///

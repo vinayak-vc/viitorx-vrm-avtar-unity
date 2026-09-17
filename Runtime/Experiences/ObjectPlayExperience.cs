@@ -22,8 +22,9 @@ namespace VirtualMirror.Experiences {
     /// project settings, so the scene stays a camera and one GameObject. Explicit integration with a
     /// capped timestep is both simpler and better behaved here.
     ///
-    /// GRABBING USES PINCH, so it degrades honestly: hand tracking is only reliable close in (99.1%
-    /// plausible at 1.4 m, 59.9% at 2.9 m), and if the hands are not readable the objects are still
+    /// GRABBING USES PINCH, so it degrades honestly: hand tracking degrades with BOTH distance and crowding (99.1%
+    /// plausible on a single subject at 1.4 m, 93.7% at 1.96 m, 59.9% on a SEVEN-PERSON clip - see
+    /// F-32: that last figure measures identity contamination, not range), and if the hands are not readable the objects are still
     /// completely playable by batting them with wrists, feet and head. The rich interaction is a
     /// bonus at close range, not a dependency.
     /// </summary>

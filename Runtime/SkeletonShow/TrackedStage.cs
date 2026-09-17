@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 using UnityEngine;
 
 using VirtualMirror.Core;
@@ -41,8 +43,39 @@ namespace VirtualMirror.SkeletonShow {
         private readonly PresenceGate presence = new PresenceGate();
         private AttractSkeleton attract;
 
-        /// <summary>The tracked body in world space, with speed, floor and telemetry attached.</summary>
+        /// <summary>The tracked body in world space, with speed, floor and telemetry attached.
+        /// With a multi-person sender this is the MOST-ESTABLISHED person, which is exactly what the
+        /// sender publishes at the payload root - so every single-person consumer keeps working.</summary>
         public readonly SkeletonPose Pose = new SkeletonPose();
+
+        // ---- F-32 CROWD --------------------------------------------------------------------------
+        // Everyone else. Bodies[0] is the same person as Pose; the rest only exist when a
+        // multi-person sender is running. A single-person sender leaves Bodies with exactly one
+        // entry, so an experience written against Bodies works with BOTH senders and does not need
+        // to know which one is upstream - which is the whole point of the additive wire design.
+        private readonly List<TrackedBody> bodies = new List<TrackedBody>();
+        private readonly CrowdFrame crowd = new CrowdFrame();
+        private readonly Dictionary<int, SkeletonPose> posesById = new Dictionary<int, SkeletonPose>();
+
+        /// <summary>Every tracked person this frame, most-established first.</summary>
+        public IReadOnlyList<TrackedBody> Bodies {
+            get {
+                return bodies;
+            }
+        }
+
+        /// <summary>True when the upstream sender is publishing a crowd at all. False for the
+        /// single-person sender - which is NOT an error, and an experience should say "one person"
+        /// rather than "multi-person unavailable".</summary>
+        public bool HasCrowd { get; private set; }
+
+        /// <summary>How many people the DETECTOR saw, which can exceed Bodies.Count: the sidecar
+        /// poses only as many as the GPU budget allows (measured 20.7 ms each). Surfacing both is
+        /// what lets a HUD say "5 seen, 3 tracked" instead of pretending nobody else is there.</summary>
+        public int DetectedCount { get; private set; }
+
+        /// <summary>How many people the sidecar's tracker is holding, posed or not.</summary>
+        public int TrackedCount { get; private set; }
 
         public readonly HandPose Left = new HandPose();
         public readonly HandPose Right = new HandPose();
@@ -193,8 +226,98 @@ namespace VirtualMirror.SkeletonShow {
                 Right.Fill(null, false, StagingOrigin(), BodyScale);
             }
 
+            UpdateCrowd(deltaSeconds);
             UpdateGrounding(deltaSeconds);
         }
+
+        // Turn the provider's crowd into world-space bodies, reusing one SkeletonPose per track id.
+        //
+        // WHY POSES ARE KEYED ON TRACK ID rather than list position: SkeletonPose carries TEMPORAL
+        // state - per-joint speed, velocity, the floor estimate - derived by differencing against
+        // the previous frame. If the list order changed and pose[0] were reused for a different
+        // person, every one of those would be differenced across two different bodies and report a
+        // spike. Keying on the id means a person's own history follows them, and a genuinely new
+        // person starts with a clean one.
+        private void UpdateCrowd(float deltaSeconds) {
+            bodies.Clear();
+            HasCrowd = provider != null && provider.TryGetCrowd(crowd);
+            if (!HasCrowd) {
+                DetectedCount = IsLive ? 1 : 0;
+                TrackedCount = DetectedCount;
+                // Single-person sender: present the one body we have under the same API, so an
+                // experience written for a crowd degrades to a crowd of one rather than to nothing.
+                if (Pose.Valid) {
+                    bodies.Add(new TrackedBody(0, Pose, IsAttract ? "ATTRACT" : "CONFIRMED"));
+                }
+                return;
+            }
+
+            DetectedCount = crowd.DetectedCount;
+            TrackedCount = crowd.TrackedCount;
+
+            // WHERE EACH PERSON STANDS. Landmarks are HIP-RELATIVE - every body is authored around
+            // its own hip at the origin - so staging them all at the same point draws the whole
+            // crowd exactly on top of each other. (It did: the first F-32 acceptance run measured a
+            // mean pair gap of 0.00 m across 850 frames with three people on screen.)
+            //
+            // Each person is therefore offset by their OWN measured mid-hip relative to the primary
+            // person's. The primary lands on BodyOrigin exactly as in the single-person case, so
+            // nothing about the existing framing changes, and everyone else is placed at their real
+            // distance and direction from them. Relative geometry is what every multi-person
+            // experience actually reads - who is near whom - and a common-mode depth error cancels
+            // out of a difference, so this is more robust than absolute placement would be.
+            Vector3 reference = Vector3.zero;
+            bool hasReference = false;
+            PersonPose primaryPerson = crowd.Get(0);
+            if (primaryPerson != null && primaryPerson.Pose.HasRootPosition) {
+                reference = primaryPerson.Pose.RootPositionMetres;
+                hasReference = true;
+            }
+
+            int i = 0;
+            while (i < crowd.Count) {
+                PersonPose person = crowd.Get(i);
+                SkeletonPose pose;
+                if (!posesById.TryGetValue(person.Id, out pose)) {
+                    pose = new SkeletonPose();
+                    posesById[person.Id] = pose;
+                }
+                Vector3 origin = StagingOrigin();
+                if (hasReference && person.Pose.HasRootPosition) {
+                    Vector3 offset = (person.Pose.RootPositionMetres - reference) * BodyScale;
+                    // Y is deliberately NOT offset. Vertical placement is owned by the grounding
+                    // loop, which stands the figure on its own measured floor; letting a noisy hip
+                    // height through here would make people bob relative to each other.
+                    origin = new Vector3(origin.x + offset.x, origin.y, origin.z + offset.z);
+                }
+                pose.Fill(person.Pose, origin, BodyScale, deltaSeconds);
+                // The crowd carries no per-person trust channel yet - the sidecar's per-joint
+                // trackers are single-person only (see multiperson_udp_sender's header). Leaving
+                // this null is the honest answer; a HUD then reports UNREPORTED rather than
+                // inventing a state for a person nobody measured.
+                pose.Telemetry = null;
+                bodies.Add(new TrackedBody(person.Id, pose, person.State));
+                i = i + 1;
+            }
+
+            // Retire the poses of people who have gone, so a long session does not accumulate one
+            // SkeletonPose per visitor who ever stood in front of the camera.
+            if (posesById.Count > crowd.Count + 8) {
+                retired.Clear();
+                foreach (KeyValuePair<int, SkeletonPose> kv in posesById) {
+                    if (crowd.ById(kv.Key) == null) {
+                        retired.Add(kv.Key);
+                    }
+                }
+                int r = 0;
+                while (r < retired.Count) {
+                    posesById.Remove(retired[r]);
+                    r = r + 1;
+                }
+            }
+        }
+
+        private readonly List<int> retired = new List<int>();
 
         /// <summary>Where the mid-hip sits this frame: authored origin plus grounding. One accessor,
         /// so the body and the hands can never be staged differently.</summary>

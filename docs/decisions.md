@@ -2820,3 +2820,228 @@ distance where hands are known to be unreliable and needs no floor precision.
 * `EchoBuffer` is a top-level, clock-injected class rather than a private detail, because a
   mis-indexed ring shows a plausible body at slightly the wrong time and no viewer can tell. Eight
   unit tests pin it, including the post-wrap case.
+
+---
+
+## ADR-070 — Multi-person: detector on the VPU, optimal assignment on the host, additive wire
+
+**Date:** 2026-09-17
+**Status:** Accepted
+**Supersedes:** ADR-061 (F-21 single-person ownership) **for the multi-person path only** — the
+single-person sender keeps it unchanged. **Related:** ADR-016, ADR-018, ADR-066, ADR-067.
+
+### Context
+
+RTMW3D-x is a single-person top-down model: one crop in, one skeleton out, no detector, no track id.
+F-21 held ONE person and refused silent hand-off; its live two-person acceptance failed.
+
+F-32 measured what actually happens on multi-person input, and it is worse than "only tracks one
+person": on a seven-dancer clip the pipeline emits a body whose shoulder width ranges 0.068–0.455 m
+with no frame-to-frame jump above 172 mm. It is a chimera assembled from whichever dancers fall
+inside the migrating crop, and it does not fail loudly — those numbers reached an earlier report as
+though they measured one person. You cannot fix that with a better gate on one target.
+
+### Decision 1 — a real person detector, on the OAK-D VPU
+
+`person-detection-retail-0013`, fed letterboxed at 544×320. Measured against the BlazePose detector
+already vendored on disk: median 7 of 7 people versus 1–5, with tight separated boxes versus sloppy
+overlapping ones. BlazePose is a single-prominent-subject detector and its 224×224 input leaves each
+dancer ~18 px wide.
+
+It runs on the VPU, which was doing nothing but stereo. Measured: RGB 29.8 → **29.7** fps, depth
+29.6 → 29.4, detector 11.4 fps. It is free to the existing streams. 11.4 Hz is ample because
+detection is an **enrolment** source — tracks carry identity between detections.
+
+**Non-negotiable config:** the NN input must be non-blocking with queue size 1. A blocking input
+back-pressures `ColorCamera.preview`, which the production RGB output also consumes, and RGB
+collapses to 12.3 fps.
+
+### Decision 2 — optimal assignment, not greedy
+
+Greedy nearest-neighbour is suboptimal on **54.6% of random 4×4 cost matrices** (measured), and its
+failure mode is exactly an ID swap between crossing people — the case multi-person tracking is judged
+on. `assignment.py` is a pure-numpy O(n³) shortest-augmenting-path solver, verified optimal against
+brute force on 200 random rectangular matrices. scipy is not in the venv and is not worth ~30 MB of
+transitive dependency for one function.
+
+### Decision 3 — associate in 3-D, because this rig can
+
+Every published tracker associates on image-plane IoU because a webcam gives nothing else. This rig
+has metric depth per detection. Two people overlapping on screen at different distances have
+near-perfect IoU and are trivially separable in Z. Depth is a first-class association term here, with
+IoU-style image distance as the fallback when depth sampling fails.
+
+### Decision 4 — the wire is ADDITIVE, so nothing breaks
+
+The multi-person sender publishes a `persons` array **and** republishes the most-established person
+at the payload root in the exact single-person shape. The VRM mirror app, `OakDUdpPoseProvider`, the
+P1-3 buffer and all nine experience scenes therefore consume it unchanged and unaware. Verified:
+`root lm == persons[0].lm` on every packet, and the Unity acceptance run confirms `Pose` and
+`Bodies[0]` are the same person across 752 frames.
+
+Cost: one duplicated person, ~6 KB of a ~9.3 KB payload. `--no-legacy-primary` drops it.
+
+### Decision 5 — a NEW sender file, not a rewrite of the production one
+
+`wholebody_udp_sender.py` carries the whole measured single-person stack — P0, P1-1, P1-4, F-21,
+F-22, F-08 — all accepted on live evidence. Rewriting it in place for an unproven feature would put
+every one of those results at risk. `multiperson_udp_sender.py` imports its building blocks
+(`build_body_landmarks`, `build_hand`, `build_joint_states`) so there is one definition of the
+landmark contract, and leaves the production path byte-identical.
+
+### Consequences
+
+* **Budget, measured:** RTMW3D is 20.7 ms p50 with a FIXED batch of 1 — no dynamic batch axis — so N
+  people cost N sequential inferences. 2 → 24 fps, 3 → 16 fps, 4 → 12 fps. `--max-poses` defaults to
+  3. The tracker emits most-established-first so the cap drops the least-established people.
+* **Multi-person output is RAWER than single-person.** No P0 smoother, no P1-1, no P1-4, no F-22 per
+  person. Those need one filter instance per track id with a lifecycle tied to it. This is the
+  obvious next step and is NOT done. **[Superseded by ADR-071 — it is done.]**
+* **The crowd is not P1-3 interpolated.** That buffer reconstructs one body at a presentation time
+  and has no concept of identity; interpolating a crowd means matching people across two buffered
+  frames, which is the tracker's job and already done upstream.
+* **Placement:** landmarks are hip-relative, so each person must be offset by their own measured
+  mid-hip relative to the primary's. Staging them all at one origin draws the crowd on top of itself
+  — measured as a 0.00 m mean pair gap across 850 frames before this was fixed. Y is not offset;
+  vertical placement belongs to the grounding loop.
+* **An experience keyed on a track id is safe**: ids are stable while held and never reused.
+
+### Alternatives rejected
+
+* **Generalise F-21 ownership to N targets.** Rejected: it is a single-target state machine whose
+  signals (one hip, one scale) and whose whole purpose (refuse hand-off) do not generalise. The
+  multi-person problem is an assignment problem, not a gating problem.
+* **A ReID / appearance model.** Rejected for now: it is a third network on an already-contended
+  budget, and 3-D position association is a stronger signal here than appearance would be at this
+  resolution. Revisit if long occlusions prove to be the dominant failure.
+* **Batch N crops into one RTMW3D inference.** Not possible without re-exporting the ONNX: the input
+  is fixed at [1,3,384,288] with no batch axis.
+
+---
+
+## ADR-071 — Per-person filter chains, keyed on the track id, with a self-measured sample rate
+
+**Feature:** F-33. **Report:** [`F33_PER_PERSON_FILTERS_2026-09-17.md`](F33_PER_PERSON_FILTERS_2026-09-17.md).
+**Date:** 2026-09-17
+**Status:** Accepted
+**Completes:** ADR-070's stated gap ("multi-person output is RAWER than single-person… this is the
+obvious next step and is NOT done"). **Related:** ADR-016 (P0 smoothing), ADR-018 (bounded hold),
+ADR-020 (single-owner smoothing), ADR-063, ADR-067.
+
+### Context
+
+Every stage of the measured single-person chain — P0's One-Euro, its displacement cap and bounded
+hold, P1-1's per-joint state machine, F-22's bend history — is a **temporal** filter. All of that
+state belongs to a person, and none of it is in the frame. F-32 therefore shipped multi-person with
+the entire chain switched off, and said so.
+
+Turning it on is not a matter of instantiating the modules. Two things make it a design decision.
+
+### Decision 1 — a POOL keyed on track id, not a list keyed on position
+
+`PersonTracker.update()` returns people most-established-first, so a person's **index changes**
+whenever somebody else gains a hit. A bank addressed by index hands person A's One-Euro history to
+person B on that frame: every joint appears to teleport, and the displacement cap then spends
+several frames slewing the two bodies into each other. Track ids are stable and never reused, which
+is exactly the property a temporal filter needs. Unity's `TrackedStage.UpdateCrowd` had already
+reached the same conclusion for `SkeletonPose`; this is the sidecar half of it.
+
+Lifecycle is **idle-based, not event-based**: a chain is dropped 3.0 s after its person stops being
+seen. Forwarding the tracker's RELEASED events would work until a caller forgot to drain them, and
+the failure mode of that is a slow leak over an evening's run.
+
+The pool keeps **two clocks**, and conflating them was a real defect caught by its own test.
+`last_seen_at` is lifecycle — a person whose pose failed this frame is still in the room.
+`last_update_at` is the rate estimate — a frame that produced no sample is not a sample interval.
+One clock released the chain of anyone whose hips went unconfident for three seconds, mid-session,
+while they stood there.
+
+### Decision 2 — each person MEASURES their own sample rate
+
+`KeypointSmoother` takes `freq` once at construction; the single-person sender leaves it at 30.0,
+which is true there. It is not true here: three people cost three sequential 20.7 ms pose solves, so
+the loop runs at ~16 fps, and a person below `--max-poses` is updated rarer still.
+
+One-Euro derives velocity as `delta * freq`. Told 30 while sampled at 16, it over-estimates speed by
+1.9×, inflates its adaptive cutoff and **opens up** exactly when it should damp — so the naive port
+is worse on *both* axes at once. Measured against known ground truth
+(`docs/evidence/f33/filter_bench.txt`):
+
+| 10 fps | jitter median | lag |
+|---|---|---|
+| no filters at all | 33.5 mm | 0 ms |
+| told `freq=30` (naive port) | **35.6 mm** | 400 ms |
+| self-measured rate | 29.9 mm | 200 ms |
+
+The naive port is **worse than not filtering** on the median frame while costing 400 ms of lag.
+Each person therefore takes the median of their last 15 update gaps — median, not mean, so one
+skipped frame cannot move it — and retunes their own filters. `smoothing.py` gained `set_freq()` to
+allow it; the change is purely additive and the single-person sender never calls it.
+
+### Decision 3 — the FEET and the HEAD join the filter group
+
+This is the one place the chain deliberately differs from the single-person sender, and it was found
+by looking at what the first filtered run still got wrong.
+
+The single-person limb set is `{5..16} ∪ {91..132}`. It contains neither the feet (WholeBody 17–22)
+nor the head (0–4), so both got the light image-plane One-Euro and nothing else — no heavy depth
+cutoff, no bounded hold, no tightened displacement cap. Both then produced the worst artefacts in
+the filtered run, **for opposite reasons**: the feet fail with `src=0` (no depth, so the point is
+rebuilt from the model's raw monocular z every frame — the **hold** is the fix), the head fails with
+`src=1` (depth *was* sampled, from a window straddling the edge of the head and catching the wall
+behind it — the **displacement cap** is the fix).
+
+Single-frame steps over 300 mm — 9 m/s, not a person — over 2060 person-frames of identical input:
+
+| | steps > 300 mm | worst step |
+|---|---|---|
+| no filters (raw F-32) | 2158 | 2091 mm |
+| filters, single-person grouping | 630 | 2018 mm |
+| **filters + feet + head** | **77** | **960 mm** |
+
+The change moved the distal, trunk and hip figures by 0.0% to the decimal and emitted exactly the
+same 40 200 joints — it touched only the joints it targets, which is why it is a grouping fix rather
+than a tuning accident. `--no-filter-feet` / `--no-filter-head` restore the single-person grouping
+exactly, which is how that table was produced.
+
+It is not cosmetic: F-29 put the feet on the wire and `FootprintsExperience` reads heel and toe
+directly, so an unfiltered heel is a footprint appearing two metres from the person who made it.
+
+### Consequences
+
+* **At 30 fps the multi-person chain IS the single-person chain** — same modules, same constants,
+  same measured result. Below 30 fps it is better, because it knows its own rate.
+* **Cost 0.88 ms per person-frame**, against 20.7 ms for the pose solve it follows — about 4%.
+* **1.1 points fewer joints emitted** (60.2% → 59.1%). That is the chain refusing a joint it does
+  not believe; a refused joint arrives as `[0,0,0,0]`, byte-identical to a real occlusion, and
+  Unity's P0 LimbGate still makes the final call. Safety does not move into this repo (AGENTS.md §2).
+* **Lag is 233 ms at 30 fps and is not new** — it is the accepted single-person tuning
+  (`--min-cutoff 0.5`, `--beta 0.4`). Stated because a jitter figure without a lag figure means
+  nothing.
+* **`wholebody_udp_sender.py` stays byte-identical.** The constants are duplicated in
+  `FilterConfig`, and `tests/test_person_filters.py` reads the sender's source and fails if any of
+  them drifts apart.
+* **P1-4 is reachable and OFF**, exactly as in production. A slow confident drift is still followed
+  (847 mm of an injected 850 mm); P1-4 catches it (264 mm) and remains rejected. Multi-person
+  inherits the single-person blind spot deliberately, and a test pins that limitation rather than
+  hiding it.
+* **P1-1's horizons are still counted in FRAMES**, so a 6-frame prediction spans ~375 ms at 16 fps
+  against ~200 ms in the single-person loop. Only P0 adapts to the real rate.
+* **The wire is unchanged in shape**, so Unity needed no change. The `st` field now carries real
+  per-joint states per person instead of all `-1`.
+
+### Alternatives rejected
+
+* **One shared filter bank, reset when the crowd changes.** Rejected: it discards everyone's history
+  whenever anyone arrives or leaves, which is the moment the filters are needed most.
+* **Address banks by list index and re-sort them each frame.** Rejected: it needs a correct
+  permutation every frame to avoid the exact cross-contamination a track id gives for free.
+* **Add `dt` to `KeypointSmoother.filter()`.** Rejected: it changes a signature the production
+  single-person sender calls 133 times a frame, for a problem that only exists here. `set_freq()` is
+  additive and leaves that path byte-identical.
+* **Rewrite `wholebody_udp_sender.py` to be N-person and delete the duplication.** Rejected for the
+  same reason ADR-070 gave: it puts every accepted single-person measurement at risk for a feature
+  that is still new. The duplication is guarded by a drift test instead.
+* **Tighten the hip displacement cap.** Rejected for now: the 77 residual implausible steps are
+  dominated by whole-body origin shifts, but three events over 2060 person-frames is not enough
+  evidence to retune a constant that was tuned on live data (AGENTS.md §10).

@@ -192,9 +192,10 @@ namespace VirtualMirror.Experiences {
                 return label + "   no hand tracked";
             }
             if (hand.Implausible) {
-                // Named rather than hidden: at ~2.9 m roughly 40% of hand observations fail this
-                // gate, and "out of range" is a far more useful thing for a visitor to be told than
-                // a hand that simply never draws.
+                // Named rather than hidden. Roughly 40% of hand observations fail this gate on the
+                // crowded regression clip (F-32), and some fraction will at genuine distance too;
+                // either way "step closer" is a far more useful thing to tell a visitor than a hand
+                // that simply never draws.
                 return label + "   OUT OF RANGE - step closer to the camera";
             }
             return label + "   " + (hand.Pinching ? "DRAWING" : "ready - pinch to draw")

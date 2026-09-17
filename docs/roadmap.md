@@ -12,6 +12,8 @@ Detail: `21_Roadmap.md`, `22_Milestones.md`.
 | 2 | Gallery, depth spike, FinalIK optional, gestures | M6+ |
 
 **Rule:** Do not start marketplace / multi-person before M5.
+*(Superseded for the demonstration branch: multi-person tracking was built in F-32/F-33 — see
+below. The rule still stands for the **mirror app**, which drives one avatar from one user.)*
 
 ---
 
@@ -443,6 +445,62 @@ STATUS
                              human trigger source cannot produce a wrong note.
                              NEVER HEARD. AudioClip.Create is a native call, so none of the synthesis
                              runs headlessly. Retune the mix on first listen.
+   MULTI-PERSON              NEW (F-32, ADR-070). The single-person limit is gone for the
+                             demonstration branch. person-detection-retail-0013 on the OAK-D's
+                             otherwise-idle VPU finds a median 7 of 7 dancers (the vendored BlazePose
+                             blob managed 1-5) and costs NOTHING to the existing streams -- rgb
+                             29.8 -> 29.7 fps, depth 29.6 -> 29.4. PersonTracker assigns stable ids
+                             that are never reused, associating in 3-D using metric depth, which no
+                             IoU-based tracker can: two people overlapping on screen at different
+                             distances are trivially separable in Z. Assignment is OPTIMAL, not
+                             greedy -- greedy is suboptimal on 54.6% of random 4x4 cost matrices and
+                             its failure mode is exactly an ID swap between crossing people.
+                             BACKWARD COMPATIBLE BY CONSTRUCTION: persons[0] is republished at the
+                             payload root in the single-person shape, so the VRM mirror and all nine
+                             experience scenes consume this sender unchanged and unaware. Verified
+                             root lm == persons[0].lm on every packet and across 752 Unity frames.
+                             Scenes/Bonds.unity is the first experience that NEEDS two people, and
+                             was chosen first because it is robust to an ID switch -- nothing
+                             accumulates per person, so a swap costs two people trading colours.
+                             BUDGET IS REAL: RTMW3D is 20.7 ms with a FIXED batch of 1, so 2 people
+                             run at 24 fps, 3 at 16, 4 at 12. --max-poses defaults to 3.
+                             NEVER RUN WITH REAL PEOPLE. All evidence is recorded video.
+   THE F-29 CORRECTION       456.webm contains SEVEN DANCERS. F-29 treated it as one subject at
+                             2.9 m and drew range conclusions from it ("hands 59.9% plausible at
+                             2.9 m", "floor 81 mm"). Those figures measure IDENTITY CONTAMINATION,
+                             not distance: the crop migrates between dancers and the tracked body's
+                             shoulder width ranges 0.068-0.455 m, a 30x pixel swing, with no
+                             frame-to-frame jump above 172 mm. A genuine single subject at 1.96 m
+                             gives 93.7% plausible hands. The real limit beyond ~2 m is UNTESTED.
+                             Corrected in the F-29 report, both READMEs, both CHANGELOGs and every
+                             code comment that cited it. The lesson is bigger than the numbers: the
+                             single-person pipeline does not fail LOUDLY on multi-person input -- it
+                             emits a plausible skeleton belonging to nobody, and it reached a report.
+   PER-PERSON FILTERS        NEW (F-33, ADR-071). F-32 shipped multi-person with the entire signal
+                             chain switched off and said so; this closes it. Every tracked person now
+                             carries a full P0 + P1-1 + F-22 chain (P1-4 available and off, as in
+                             production), pooled on their TRACK ID -- not on list position, because
+                             the tracker re-sorts most-established-first every frame and an
+                             index-keyed bank hands one person's One-Euro history to another.
+                             THE ONE THING THAT IS NOT A STRAIGHT COPY IS SAMPLE RATE. One-Euro
+                             derives velocity as delta * freq; three people cost three sequential
+                             20.7 ms solves, so this loop runs at ~16 fps, and a filter told 30
+                             over-estimates speed by 1.9x and OPENS UP when it should damp. Measured
+                             at 10 fps the naive port is WORSE THAN NO FILTER AT ALL on the median
+                             frame (35.6 mm vs 33.5) while costing 400 ms of lag. Each person now
+                             measures their own cadence.
+                             ADR-071: the FEET (WholeBody 17-22) and HEAD (0-4) were in no filter
+                             group at all and produced the worst residual artefacts, for OPPOSITE
+                             reasons -- feet fail with src=0 and need the bounded HOLD, the head
+                             fails with src=1 and needs the displacement CAP. Implausible
+                             single-frame steps over 2060 person-frames: 2158 unfiltered -> 630 with
+                             the single-person grouping -> 77. That last step changed the distal,
+                             trunk and hip figures by 0.0% and emitted exactly the same 40,200
+                             joints, which is what a correct grouping fix looks like.
+                             COST 0.88 ms per person-frame against 20.7 ms for the pose solve.
+                             LAG IS 233 ms AT 30 fps and is NOT NEW -- it is the accepted
+                             single-person tuning. Quote it with any jitter figure.
+                             Unity needed NO change: the wire shape did not move.
    TRANSPORT ROBUSTNESS      FIXED (F-20A): sessions, stale watchdog, neutral failsafe. Reconnect
                              re-proven 2026-09-14 across the language boundary: three REAL producer
                              session ids -> the REAL C# TrackingStreamHealth (FirstSession once,
@@ -696,6 +754,18 @@ cost). Lower the noise floor and the deadzone can come down honestly. It is a de
 ### NEXT, in order
 
 ```text
+0. TWO REAL PEOPLE IN FRONT OF THE CAMERA <- the top item since F-32. Every multi-person number
+                                            comes from recorded video or synthetic trajectories;
+                                            nothing about identity through a REAL occlusion has
+                                            been observed. Note this is a DIFFERENT session from
+                                            item 1: that one tests whether single-person ownership
+                                            refuses a hand-off, this one tests whether the
+                                            multi-person tracker keeps two ids apart. Run them in
+                                            the same booking - the same two people, ~45 min.
+0b. OPEN THE SCENES AND LOOK AT THEM     <- still true for F-30/F-31/F-32/F-33. Nothing in the
+                                            demonstration branch has EVER been rendered on a
+                                            screen by a human. Every geometric and numeric claim
+                                            is tested; no VISUAL claim is.
 1. F-21 LIVE TWO-PERSON SESSION          <- blocks "target ownership: PASS". Instrument is ready.
                                             Needs TWO people, ~30 min. CLEAR CHAIRS FIRST: the
                                             tracker was seen locking an empty office chair at
@@ -710,9 +780,16 @@ cost). Lower the noise floor and the deadzone can come down honestly. It is a de
                                             unblocks item 2's follow-up.
 ```
 
-Unchanged and not to be re-litigated: operating distance 0.90 m portrait; single user only;
-multi-user UNSUPPORTED; reliable +/-90 deg torso not achievable with this sensor; do not procure
-wider-baseline hardware (F-17 - the LENS is the lever).
+Unchanged and not to be re-litigated: operating distance 0.90 m portrait; reliable +/-90 deg torso
+not achievable with this sensor; do not procure wider-baseline hardware (F-17 - the LENS is the
+lever).
+
+**"single user only; multi-user UNSUPPORTED" is no longer true and is struck.** F-32 built a real
+multi-person path (detector on the VPU, optimal 3-D assignment, stable ids) and F-33 gave each
+person the full signal chain; see the section below. What replaces it: the **mirror app** still
+drives one avatar from one user, the multi-person path has **never been run with real people**, and
+the SINGLE-person sender must not be used where more than one person can appear - it does not fail
+loudly there, it emits a plausible skeleton belonging to nobody.
 
 ---
 
@@ -741,3 +818,44 @@ removes that dependency and is the natural v2 step.
 ```
 
 Items 1-5 above are untouched by this work and remain open.
+
+---
+
+## MULTI-PERSON (2026-09-17, ADR-070 + ADR-071)
+
+Reports: [`F32_MULTIPERSON_2026-09-17.md`](F32_MULTIPERSON_2026-09-17.md),
+[`F33_PER_PERSON_FILTERS_2026-09-17.md`](F33_PER_PERSON_FILTERS_2026-09-17.md).
+Evidence: `docs/evidence/f32/`, `docs/evidence/f33/`.
+
+```text
+what exists now       detector on the VPU -> stable ids -> N poses -> one datagram -> N bodies in
+                      Unity -> Scenes/Bonds.unity, the first experience that needs two people
+cost of the detector  none: rgb 29.8 -> 29.7 fps, depth 29.6 -> 29.4 (the VPU was idle)
+the binding limit     RTMW3D 20.7 ms, FIXED batch of 1 -> 2 people 24 fps, 3 -> 16, 4 -> 12
+signal quality        full P0 + P1-1 + F-22 per person; implausible steps 2158 -> 77 for 0.88 ms
+compatibility         persons[0] republished at the root; the mirror app and all nine single-person
+                      scenes run on the multi-person sender UNCHANGED
+```
+
+**What would move this from "built" to "trusted", in order:**
+
+```text
+1. TWO REAL PEOPLE. Nothing else on this list is worth doing first. Identity through a real
+   occlusion is the one behaviour video cannot test, and metric depth is exactly what should make
+   it work - which is a hypothesis, not a result.
+2. RENDER IT. Bonds has never been seen.
+3. PER-PERSON st IN UNITY. The wire now carries real per-joint tracking states PER PERSON (all -1
+   before F-33). The root person's already reach the existing trust HUD; a crowd HUD needs
+   PersonPose to carry them. Small, and it makes the HUD honest about people 2 and 3.
+4. INFERENCE HEADROOM is now worth more than it was. It is no longer only about latency: it is the
+   single number that decides how many people can be in the room at once.
+5. A ReID / appearance model, IF AND ONLY IF the live session shows long occlusions are the
+   dominant failure. Deferred deliberately in ADR-070 - a third network on a contended budget, and
+   3-D position is a stronger signal than appearance at this resolution.
+```
+
+**Do not re-litigate:** the multi-person sender is a SECOND program, not a mode -
+`wholebody_udp_sender.py` stays byte-identical and remains the mirror app's path. Do not generalise
+F-21 ownership to N targets (it is a single-target state machine; this is an assignment problem).
+Do not batch N crops into one RTMW3D call - the ONNX input is fixed at [1,3,384,288] with no batch
+axis, so it would need a re-export.

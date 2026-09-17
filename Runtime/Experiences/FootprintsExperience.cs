@@ -23,10 +23,12 @@ namespace VirtualMirror.Experiences {
     /// marks are laid ON the floor plane, and before F-29 that plane was 81-127 mm out, so every
     /// mark would have floated or sunk.
     ///
-    /// HONEST LIMIT, and it shapes the design: floor contact was measured reliable to ~21 mm at
-    /// 1.4 m but only ~81 mm at 2.9 m. So a mark is placed once, where the foot FIRST settled, and
-    /// then never moved. Continuously tracking the foot position would make a far-away visitor's
-    /// mark wander across the floor as the estimate drifts.
+    /// HONEST LIMIT, and it shapes the design: floor contact was measured reliable to ~21 mm on a
+    /// single subject at 1.4 m, and to ~81 mm on the seven-person clip - where, per F-32, the error
+    /// is the crop migrating between dancers rather than depth drift. Accuracy beyond ~2 m on ONE
+    /// subject is untested. So a mark is placed once, where the foot FIRST settled, and then never
+    /// moved: whichever of those two error sources is acting, a continuously tracked mark would
+    /// wander across the floor, and a mark that wanders is worse than one placed slightly wrong.
     /// </summary>
     public sealed class FootprintsExperience : ExperienceBase {
         [Header("Footprints")]

@@ -35,8 +35,8 @@ namespace VirtualMirror.SkeletonShow {
         public static readonly int[] Extremities = { 15, 16, 27, 28 };
 
         /// <summary>The four points that actually touch the ground. The ankle is NOT one of them: it
-        /// measured 81-127 mm above the real contact point across the two regression clips, which is
-        /// the offset any ankle-based floor effect has been carrying.</summary>
+        /// measured 127 mm above the real contact point on the clean single-subject clip (and 81 mm on
+        /// the crowded one), which is the offset any ankle-based floor effect has been carrying.</summary>
         public static readonly int[] FootContacts = { 29, 30, 31, 32 };
 
         public readonly Vector3[] World = new Vector3[PoseFrame.LandmarkCount];
@@ -91,11 +91,15 @@ namespace VirtualMirror.SkeletonShow {
         // spawning roughly a hand's width above the ground the person is standing on.
         //
         // WHAT THE SAME MEASUREMENT SAYS ABOUT RELIABILITY, because it bounds what should be built on
-        // this: the per-frame lowest foot point has a standard deviation of 36 mm at 1.4 m subject
-        // distance and 66 mm at 2.9 m. Smoothing helps at close range (36 -> 21 mm over a 2 s window)
-        // and HURTS at distance (66 -> 81 mm), because at 2.9 m the error is a slow drift rather than
-        // noise and a longer window just tracks the drift. So: an effect that wants a floor to
-        // roughly sit on is well served here; one that needs true contact detection at 3 m is not.
+        // this: the per-frame lowest foot point has a standard deviation of 36 mm on a single subject
+        // at 1.4 m, and smoothing improves that to 21 mm over a 2 s window.
+        //
+        // The second figure F-29 reported - 66 mm rising to 81 mm under smoothing, attributed to a
+        // "2.9 m" subject - came from a clip that turns out to contain SEVEN dancers, where the
+        // single-person crop migrates between them (F-32). Smoothing "hurting" there is what tracking
+        // a moving target between different bodies looks like, not depth drift. Treat that row as a
+        // measurement of identity contamination. The genuine single-subject floor accuracy beyond
+        // ~2 m has NOT been measured, so do not assume either that it holds or that it fails.
         //
         // The smoother is asymmetric on purpose. It follows a DESCENDING floor almost immediately and
         // rises slowly, because a foot leaving the ground must not drag the floor up with it — the
@@ -104,8 +108,9 @@ namespace VirtualMirror.SkeletonShow {
         private const float FloorRiseTau = 0.60f;
 
         /// <summary>A foot within this of the estimated floor counts as planted. Set from the
-        /// measured per-frame spread (36 mm at close range, 66 mm at distance) with margin, so
-        /// ordinary estimator noise does not read as the foot lifting.</summary>
+        /// measured per-frame spread (36 mm on a clean single subject, 66 mm on the contaminated
+        /// crowded clip) with margin, so ordinary estimator noise does not read as the foot
+        /// lifting.</summary>
         public const float PlantedBandMetres = 0.08f;
 
         /// <summary>A planted foot must also be slower than this. A foot passing through the floor

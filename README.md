@@ -150,6 +150,38 @@ guard exists to prevent it.
 the destination port to detect a stale producer, which means it reads Unity's healthy listener as
 "port in use" and refuses to start. This flag tells it that a listener is expected.
 
+### Multi-person (F-32)
+
+A second sidecar tracks **several people at once** with stable per-person ids:
+
+```powershell
+.venv\Scripts\python.exe multiperson_udp_sender.py --max-poses 3
+```
+
+It detects people on the OAK-D's VPU (free — RGB and depth are unaffected), tracks their
+identities on the host, and poses the most-established ones on the GPU. **`--max-poses` is a
+real budget**: pose inference is 20.7 ms per person, so 2 people run at ~24 fps, 3 at ~16 fps
+and 4 at ~12 fps.
+
+It is **backward compatible**: the most-established person is also published in the ordinary
+single-person shape, so `Scenes/Bootstrap.unity` (the VRM mirror) and all nine single-person
+experience scenes work with this sender unchanged. Only `Bonds` reads the rest.
+
+Since **F-33** each tracked person carries the full single-person filter chain — P0 smoothing,
+P1-1 joint tracking, F-22 validation — in their own instance, keyed to their track id and living
+exactly as long as that identity does. At 30 fps it is the same chain with the same constants as
+the single-person sender; below 30 fps it is better, because each person measures their own update
+rate and retunes their filters from it rather than assuming camera rate. Measured: implausible
+single-frame steps (over 300 mm in one 33 ms frame) fell from 2158 to 77 across 2060
+person-frames, for 0.88 ms per person-frame. `--no-filters` restores the raw F-32 output for an
+A/B.
+
+The detector blob is not committed. Fetch it once:
+
+```powershell
+.venv\Scripts\python.exe -c "import blobconverter,shutil;shutil.copy(blobconverter.from_zoo(name='person-detection-retail-0013',shaves=6,zoo_type='intel'),'depthai_blazepose/models/person-detection-retail-0013_openvino_2022.1_6shave.blob')"
+```
+
 ### Ports
 
 | Port | Protocol | Purpose |
@@ -174,6 +206,7 @@ in front of the camera each shows a synthetic attract figure rather than a black
 | `DepthReach` | Reach *into* rings at three real distances — the demo that needs the depth camera | no |
 | `TimeEcho` | Move; four copies of you from seconds ago trail behind | no |
 | `AirGraffiti` | Pinch thumb and finger together and draw in the air | **yes** |
+| `Bonds` | **Needs two people.** Everyone gets a colour; lines connect people and brighten as they close; touch hands to make one flare | no |
 | `SkeletonShow` | The five-mode show scene, including the trust HUD (F-28/F-29) | mode 5 only |
 
 Sound is on by default in every experience scene; `M` mutes.
@@ -286,12 +319,29 @@ These are open. Do not describe them as done.
   harness that drives the real provider over a real socket with recorded packets. Every geometric
   and numeric claim is tested; no **visual** claim is. The trust HUD's depth row has consequently
   only ever shown `0/33 MEASURED`, because a video file has no stereo pair.
-* **Floor contact degrades with distance, and is not usable far away.** Measured on the F-29 clips:
-  the smoothed floor estimate is stable to 21 mm at ~1.4 m but only 81 mm at ~2.9 m, where
-  smoothing makes it *worse* because the error is a slow drift rather than noise. Hand tracking
-  fails the same way — 99.1% of hands are anatomically plausible at 1.4 m, 59.9% at 2.9 m, with
-  palms reported up to 362 mm. Both are gated and reported rather than hidden, but neither should
-  be built on at that range. See `docs/evidence/f29/measurements.txt`.
+* **Multi-person tracking exists (F-32) and now runs the full filter chain per person (F-33).**
+  P0 smoothing, P1-1 joint tracking and F-22 validation each get one instance per track id; P1-4
+  remains available and off, exactly as in the single-person sender. Two caveats stand. It has
+  **never been run with two real people in front of the camera** — all evidence is recorded video
+  and synthetic trajectories. And the filter chain costs **233 ms of lag at 30 fps**, which is not
+  new (it is the accepted single-person tuning) but should be quoted alongside any jitter figure.
+* **A slow, confident drift is still not caught.** 850 mm injected over 25 frames is followed to
+  847 mm: no single step is large enough for the displacement cap, and P1-1's residual gate adapts
+  to the joint's own scale. P1-4 catches it and P1-4 is rejected for production, so both senders
+  share this blind spot deliberately.
+* **The SINGLE-person pipeline silently produces a chimera when several people are in frame.**
+  Use `multiperson_udp_sender.py` where more than one person can appear.
+  This is the most important known limitation and it invalidated part of an earlier report (F-32).
+  `456.webm` contains seven dancers; the single-person crop migrates between them, and the emitted
+  "body" has a shoulder width varying 0.068–0.455 m — it belongs to nobody. It does not fail
+  loudly: it emits a plausible-looking skeleton, and those numbers reached a report as though they
+  measured one person. **Do not run this where more than one person can be in frame.**
+* **Range limits are less well established than previously stated.** Floor contact is stable to
+  21 mm and hands are 99.1% plausible on a clean single subject at 1.4 m; at 1.96 m hands are still
+  93.7% plausible. The much worse figures previously attributed to "2.9 m" came from the
+  seven-person clip above and measure contamination, not distance. Genuine single-subject accuracy
+  beyond ~2 m is **untested** — assume neither that it holds nor that it fails.
+  See `docs/evidence/f32/identity_contamination.txt`.
 * **F-29 hand gesture thresholds are uncalibrated.** Pinch and finger-extension thresholds are
   derived from the distribution of ordinary hand poses in two dance clips, not from a subject
   performing each gesture on cue. They separate open from closed on that data; they have not been

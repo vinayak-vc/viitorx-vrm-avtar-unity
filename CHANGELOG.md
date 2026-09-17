@@ -12,6 +12,53 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Added
 
+- **Per-person filter chains (F-33).** Every tracked person now carries the full measured
+  single-person signal chain — P0 One-Euro smoothing with its displacement cap and bounded hold,
+  P1-1 joint tracking, F-22 biomechanical validation — in one instance keyed to their **track id**
+  (ADR-071). F-32 had shipped multi-person with all of it switched off.
+  - **Keyed on identity, never on list position.** The tracker re-sorts people
+    most-established-first every frame, so an index-keyed filter bank hands one person's One-Euro
+    history to another. Unity's `TrackedStage.UpdateCrowd` already keyed `SkeletonPose` on the
+    track id for the same reason; this is the sidecar half of that decision.
+  - **Each person measures their own sample rate.** One-Euro derives velocity as `delta * freq`,
+    so a filter told 30 fps while actually sampled at 16 over-estimates speed by 1.9×, inflates
+    its adaptive cutoff and opens up exactly when it should damp. Measured at 10 fps, the naive
+    port is *worse than no filter at all* on the median frame (35.6 mm vs 33.5 mm) while costing
+    400 ms of lag; self-measured, it is 29.9 mm at 200 ms.
+  - **The feet and the head joined the filter group**, which the single-person sender never put
+    them in. They failed for opposite reasons — feet with no depth at all, the head with depth
+    sampled from the wall behind it — so they needed the bounded hold and the displacement cap
+    respectively. Implausible single-frame steps (over 300 mm in 33 ms) fell from 630 to **77**,
+    while the distal, trunk and hip figures moved by 0.0% and exactly the same 40 200 joints were
+    emitted. This is what `FootprintsExperience` reads, so it is visible, not bookkeeping.
+  - **Measured:** implausible steps 2158 → 77 against the unfiltered baseline on 2060
+    person-frames of identical input; worst single step 2091 mm → 960 mm; cost **0.88 ms per
+    person-frame** against 20.7 ms for the pose solve it follows.
+  - **Lag is 233 ms at 30 fps and is not new** — it is the accepted single-person tuning. At
+    30 fps the multi-person chain *is* the single-person chain: same modules, same constants.
+  - Unity needed **no change**: the wire shape is unaltered. The `st` trust field now carries real
+    per-joint states per person instead of `-1`.
+
+- **Multi-person detection and tracking (F-32).** `multiperson_udp_sender.py` detects every
+  person in frame on the OAK-D's VPU, assigns each a **stable id** that is never reused, poses
+  the most-established ones on the GPU, and streams them all in one datagram (ADR-070).
+  - `assignment.py` — pure-numpy optimal assignment. Greedy is suboptimal on 54.6% of random
+    4×4 cost matrices, and its failure mode is exactly an ID swap between crossing people.
+  - `person_tracker.py` — associates in **3-D** using the OAK-D's metric depth, which no
+    IoU-based tracker can: two people overlapping on screen at different distances are
+    trivially separable in Z. 19 unit tests including the crossing case.
+  - **Backward compatible by construction**: the most-established person is also published in
+    the ordinary single-person shape, so the VRM mirror app and all nine existing experience
+    scenes consume this sender unchanged. Verified across 752 Unity frames.
+  - Unity side: `CrowdFrame`, `TrackedBody`, `OakDUdpPoseProvider.TryGetCrowd`,
+    `TrackedStage.Bodies`.
+  - **Measured budget:** pose is 20.7 ms per person with a fixed batch of 1, so 2 people run at
+    ~24 fps, 3 at ~16 fps, 4 at ~12 fps. `--max-poses` defaults to 3.
+- **`Scenes/Bonds.unity` (F-32)** — the first experience that needs two people. Everyone gets a
+  colour, lines connect every pair and brighten as they close, and touching hands makes a bond
+  flare. Chosen first because it is robust to an ID switch: nothing accumulates per person, so
+  a swap costs two people trading colours rather than corrupting a score.
+
 - **Time Echo (F-31).** `Scenes/TimeEcho.unity` — four delayed copies of the tracked body trail
   behind the live one. It exists to defeat the project's hardest limit: RTMW3D-x is single-person
   with no detector and no track id, so this makes a crowd from one person without touching the
@@ -69,17 +116,31 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Fixed
 
+- **Corrected a wrong causal claim in the F-29 report (F-32).** `456.webm` was treated as a single
+  subject at 2.9 m; it contains **seven dancers**. Every degradation figure from that clip measures
+  identity contamination, not distance — the tracked body's shoulder width ranges 0.068–0.455 m. A
+  genuine single subject at 1.96 m gives 93.7% plausible hands, so hand tracking does not collapse
+  at 2 m. The true limit beyond ~2 m is untested. Corrected in the F-29 report, the README and every
+  code comment that cited those numbers.
 - **The figure stood 153 mm inside the floor.** `bodyOrigin` fixes the mid-hip at a set height, so
   foot height depended entirely on the subject's proportions. With a measured floor available, the
   new `groundToFloor` staging correction settles the feet onto the grid (0.3 mm, no overshoot).
 - **Floor-driven effects were 81–127 mm too high.** The floor was taken from the lowest *ankle*;
   it is now taken from the four foot contact points, which is where the body meets the ground.
+- **Corrected an incorrect causal claim in the F-29 report (F-32).** `456.webm` was treated as a
+  single subject at 2.9 m; it actually contains **seven dancers**, and the single-person crop
+  migrates between them. Every degradation figure taken from that clip measures identity
+  contamination, not range — the tracked body's shoulder width varies 0.068–0.455 m. A genuine
+  single subject at 1.96 m gives 93.7% plausible hands, so hand tracking does not collapse at 2 m.
+  Corrected in the F-29 report, the README, and the code comments that cited those numbers.
 
 ### Known
 
-- Floor contact is reliable at ~1.4 m (21 mm smoothed) but **not** at ~2.9 m (81 mm, where
-  smoothing makes it worse because the error is drift rather than noise). Hand tracking is likewise
-  99.1% plausible at 1.4 m and 59.9% at 2.9 m. Measurements in `docs/evidence/f29/`.
+- **Multi-person input produces a silent chimera.** The pipeline does not fail loudly when several
+  people are in frame; it emits a plausible skeleton belonging to nobody. Do not deploy where a
+  second person can enter frame. Evidence in `docs/evidence/f32/`.
+- Floor contact is reliable to ~21 mm and hands to 99.1% on a clean single subject at 1.4 m, and
+  hands remain 93.7% plausible at 1.96 m. Single-subject accuracy beyond ~2 m is untested.
 
 ## [0.1.0] — 2026-09-16
 

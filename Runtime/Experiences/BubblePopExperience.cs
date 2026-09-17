@@ -11,8 +11,8 @@ namespace VirtualMirror.Experiences {
     /// WHY THIS ONE. It is the only experience here with a game loop — a start, a timer, a score and
     /// an end — and a loop is what makes a person have a SECOND go. It also needs nothing from the
     /// hands: it runs on body joints alone, so it keeps working at the distance where hand tracking
-    /// has already been measured as unreliable (59.9% plausible at 2.9 m). It is the experience to
-    /// show in a big room.
+    /// is least reliable - both with distance and, more sharply, when several people are in frame
+    /// (59.9% plausible on the seven-person clip, F-32). It is the experience to show in a big room.
     ///
     /// SPAWNING IS IN BODY SPACE, NOT WORLD SPACE. Bubbles are placed relative to the player's own
     /// hip and shoulder width, so a tall person and a short person both get bubbles they can reach
