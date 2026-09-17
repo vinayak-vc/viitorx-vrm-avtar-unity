@@ -164,6 +164,29 @@ namespace VirtualMirror.Experiences {
         }
 
         /// <summary>
+        /// F-34 - the frequency of a pentatonic degree above <see cref="RootHz"/>, exposed so a
+        /// CONTINUOUS voice can be tuned from the same scale the one-shot cues use.
+        ///
+        /// It is exposed rather than copied because ADR-068's whole argument is that there is ONE
+        /// scale: a second table, even with the same numbers, is a second thing to retune and a
+        /// second chance for a note to clash. A caller may pass any integer - it wraps and octaves up
+        /// - so no input can produce a wrong note, which is the same guarantee
+        /// <see cref="Play"/> gives.
+        /// </summary>
+        public static float PentatonicHz(int step) {
+            int wrapped = step % Pentatonic.Length;
+            if (wrapped < 0) {
+                wrapped = wrapped + Pentatonic.Length;
+            }
+            int octaves = step / Pentatonic.Length;
+            if (step < 0 && wrapped != 0) {
+                octaves = octaves - 1;
+            }
+            float semitones = Pentatonic[wrapped] + 12f * octaves;
+            return RootHz * Mathf.Pow(2f, semitones / 12f);
+        }
+
+        /// <summary>
         /// Fire one event sound. <paramref name="step"/> picks a degree of the pentatonic scale, so a
         /// caller can make a rising run (a combo, petals opening) by counting up — and cannot produce
         /// a wrong note whatever it passes.

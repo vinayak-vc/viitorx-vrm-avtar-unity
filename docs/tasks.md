@@ -1048,3 +1048,180 @@ duplicate scan after     0 pairs, 0 duplicated functions
       It is the citation chain for the ADRs, but it is development material, not product.
 - [ ] Unity EditMode tests are not in CI — that needs a licensed editor (GameCI + secrets).
 - [ ] Tag `v0.1.0` once the Play-mode and build acceptance items above are actually run.
+
+---
+
+## F-34 — NINE CROWD EXPERIENCES (2026-09-17)
+
+Report: [`F34_CROWD_EXPERIENCES_2026-09-17.md`](F34_CROWD_EXPERIENCES_2026-09-17.md) · Decision:
+**ADR-072** · Evidence: [`evidence/f34/`](evidence/f34/)
+
+### DONE — the four prerequisites
+- [x] **`SkeletonPose.ResetHistory()` + a 12 m/s mid-hip guard.** Expressed as a speed times `dt`, so
+      it holds at 16 fps and at 60. Catches a grounding snap (a live latent bug: the ground-offset
+      snap moved the staging origin by up to a metre in one frame and produced a whole-body speed
+      spike above every strike gate at once) and a gross identity jump. It does **not** catch a slow
+      switch — 0.015 m/frame — and says so. The floor is deliberately kept across a reset.
+- [x] **`ExperienceBase.ResetsOnNewVisitor`** (default **true**, so the ten existing scenes are
+      untouched) plus `OnPersonArrived` / `OnPersonLeft`, driven by `CrowdRoster` keyed on track id.
+      `PresenceGate` answers "is there *a* person" and so never changes in a crowd.
+- [x] **`ExperienceTuning`** — the three movement thresholds (0.9 / 0.55 / 0.35) in one place with
+      the frame-rate caveat attached. `BubblePopExperience` and `ObjectPlayExperience` now reference
+      it; values unchanged.
+- [x] **`BodyRenderer.Render(pose, tint)`** as an overload. The existing signature is unchanged.
+
+### DONE — the nine scenes
+- [x] `CollectiveFluid` · `StillnessTug` · `CrowdFootprints` (TRACES) · `Eclipse` · `Chord` ·
+      `Chain` · `Pass` · `Podium` · `MirrorEachOther`. Each is one `ExperienceBase` subclass plus a
+      `.unity` that is a camera and one GameObject.
+- [x] **No per-person accumulated score in any of them**, per ADR-072. The three places identity IS
+      read — colour, a pass count, a crown-change chime — are named in each class header with what a
+      switch costs.
+- [x] Shared: `CrowdPalette`, `CrowdRoster`, `CrowdMath`, `CrowdVoices`, `ExperienceTuning`,
+      `FluidField`, `FloorMarks`.
+- [x] `CrowdBondsExperience`'s private colour table moved to `CrowdPalette` so a person keeps their
+      colour across every crowd scene. Same colours, same order, same eviction rule.
+
+### DONE — verification (headless; the Editor holds the project lock)
+```text
+compile                  VirtualMirror.{Experiences,SkeletonShow,Tests}  0 errors
+unit tests (new)         CrowdExperiencesF34Tests                        29/29, 0 skipped
+unit tests (whole suite) 171 passed, 6 failed, 21 skipped
+                         the 6 are SidecarPathsTests, which need Application.dataPath
+                         (empty outside a player) and are untouched by this work
+```
+- [x] `SkeletonShowF29Tests.Planted_RequiresBothProximityAndStillness` — its **input** was changed,
+      not its assertion: it stepped 0.4 m per 60 Hz frame (24 m/s, three times a sprinter's hip),
+      which the new guard correctly absorbs. Now 0.1 m/frame = 6 m/s, still far above the 0.35 m/s
+      planted gate. A new companion test pins the other side.
+- [x] Two behaviour-neutral changes in `FloorMarks` for testability: `Create` is pure with the
+      visuals in `BuildMarkVisuals` (the runtime refuses to JIT a whole method referencing a native
+      ECall, even on an untaken branch), and `hasVisuals` is a bool rather than a `Transform == null`
+      comparison (`UnityEngine.Object` overloads `==` with a native call).
+
+### OPEN — needs the camera and a person. NOTHING IN F-34 HAS BEEN ON A SCREEN.
+- [ ] **Play-mode smoke test `Fluid.unity` and `Footprints.unity`** — the two MIGRATED scenes.
+      Highest priority: they worked before this change.
+- [ ] Play-mode smoke test the nine new scenes with the sidecar running: attract first (empty room),
+      then one person, then two.
+- [ ] **Listen to `Chord.unity`.** It is mostly the sound and the voice bank has never produced a
+      sample. Check for clicks at the four-second loop wrap and that `M` mutes it.
+- [ ] **`Chain.unity` with two people actually holding hands.** Its risk is the DETECTOR merging two
+      boxes at that distance, which has never been measured. The HUD flags a suspected merge as a
+      known limit rather than letting it read as a bug.
+- [ ] **`Eclipse.unity` with two people at different depths.** If the HUD says "NO MEASURED DEPTH"
+      the sender is publishing no root position and the scene cannot work — that is the honest
+      failure, not a bug in the scene.
+- [ ] **Re-measure the three movement thresholds at ~16 fps** with three people (`ExperienceTuning`).
+      They were tuned at ~21 fps. The effect is one-sided: a crowd scene reads slower, so the gates
+      get harder to pass.
+- [ ] **Re-check the frame rate with three people in `Collective`** — the heaviest of the nine (one
+      grid, 1100 particles, up to 8 skeletons).
+
+---
+
+## F-35 — THE SCENE LAUNCHER (2026-09-17)
+
+Report: [`F35_SCENE_LAUNCHER_2026-09-17.md`](F35_SCENE_LAUNCHER_2026-09-17.md) · Decision:
+**ADR-073** · Evidence: [`evidence/f35/`](evidence/f35/)
+
+### DONE
+- [x] **`Scenes/Launcher.unity`** — a camera and one GameObject, like every other scene here. Three
+      columns: **ONE PERSON** (9), **TWO OR MORE** (10), **PRODUCTION** (Bootstrap).
+      Click a row, or arrows + Enter, or the number shown (1-9 then 0, within the highlighted column).
+- [x] **Grouped by how many people a scene needs**, not by theme — ten of them do nothing on your
+      own, and somebody standing alone in front of Chain concludes the installation is broken.
+- [x] **The launcher runs the real `TrackedStage` while you choose**, so "the sidecar is not running"
+      and "this is the SINGLE-PERSON sender" are visible BEFORE a scene is picked and blamed. The
+      multi-person column swaps its description for that warning when `HasCrowd` is false.
+- [x] **All 20 scenes registered in `EditorBuildSettings.asset`.** Required: `LoadScene` cannot load
+      an unregistered scene and fails *after* the click. **Index 0 is still `License-Verifier`**, so
+      a build's startup scene is unchanged.
+- [x] **Availability checked anyway**, once at startup, by walking the build list. A missing scene is
+      drawn greyed with "NOT IN BUILD SETTINGS - add Scenes/&lt;name&gt;.unity" rather than being a
+      silent dead button.
+- [x] **ESC returns to the menu from every scene**, via `LauncherScene` in the SkeletonShow assembly
+      — Experiences references SkeletonShow and not the reverse, so anything both bases call has to
+      live in the lower one. No-op with one warning when no launcher exists, so opening a single
+      scene on its own behaves exactly as before.
+- [x] **The UDP socket is released before the load, not in `OnDestroy`**, and both bases skip the rest
+      of the frame (`leaving`) instead of running Update and OnGUI against a disposed provider.
+      Every scene binds the same fixed port, so the order matters.
+- [x] `Mirror.unity` deliberately NOT on the menu: `Bootstrap` loads it additively after wiring
+      settings, avatar and UI, so opening it alone gives an unwired scene.
+- [x] **`Virtual Mirror > Register All Scenes in Build Settings`** (`Editor/SceneRegistrar.cs`),
+      because `ProjectSettings/EditorBuildSettings.asset` is **gitignored** — the registration is
+      per-machine and a clone opens the launcher with every row greyed out. The menu item only ever
+      APPENDS (never reorders, removes or disables), since index 0 is the startup scene of a build.
+      `Virtual Mirror > List Scenes in Build Settings` reports without changing anything.
+
+### DONE — verification (headless)
+```text
+compile                  VirtualMirror.{SkeletonShow,Experiences,Tests}  0 errors
+unit tests (new)         SceneLauncherF35Tests                           10/10
+unit tests (whole suite) 181 passed, 6 failed, 21 skipped
+                         the 6 are SidecarPathsTests (need Application.dataPath), unrelated
+scene registry           20/20 rows resolve to a file AND a Build Settings entry - 0 problems
+```
+- [x] The launcher tests pin the invariants whose failure mode is **silent**: no duplicate rows,
+      columns disjoint, every row has a title and a description, the launcher does not list itself,
+      no column longer than the ten rows the number shortcut can address, and the path→name parsing
+      including `null`, empty and a dot in a folder name.
+
+### OPEN — needs the Editor. NOTHING IN F-35 HAS BEEN ON A SCREEN.
+- [ ] **Open `Scenes/Launcher.unity` and press Play.** The three-column layout is computed from
+      `Screen.width` and has never been rendered.
+- [ ] **Click one row in each column, then ESC back.** The round trip is the most likely thing to be
+      wrong, because it rebinds a UDP socket on a fixed port.
+- [ ] **Launch `Bootstrap` from the menu** and confirm the app still wires up. Note ESC does NOT
+      return from it — it is not one of the two bases (known limit).
+- [ ] **Watch the multi-person column's note** with the single-person sidecar, then with
+      `multiperson_udp_sender.py`. That line is the most useful thing the menu says and is untested.
+- [ ] Decide whether a build should open on `Launcher` (move it to index 0). Not done: it changes
+      what the product does on launch.
+
+---
+
+## F-36 — PRESS PLAY ONCE (2026-09-17)
+
+Report: [`F36_SIDECAR_BOOT_2026-09-17.md`](F36_SIDECAR_BOOT_2026-09-17.md) · Decision: **ADR-074** ·
+Evidence: [`evidence/f36/`](evidence/f36/)
+
+### DONE
+- [x] **`Scenes/SidecarBoot.unity` at Build Settings index 1** (index 0 `License-Verifier` untouched).
+      Starts the sidecar, then loads `Launcher`. Order is now
+      `License-Verifier -> SidecarBoot -> Bootstrap -> Mirror -> Launcher -> ...`
+- [x] **It runs `multiperson_udp_sender.py` DIRECTLY.** The supervisor cannot: it builds its child
+      command from `--portrait --portrait-dir --subpixel-bits --seconds`, which only
+      `wholebody_udp_sender.py` accepts, and waits on a readiness contract only that sender emits.
+      The multi-person sender is backward compatible, so ONE sender serves every scene and the app.
+- [x] **The product keeps its watchdog.** `SidecarProcessLauncher.DirectScript` defaults to empty, so
+      `AppBootstrap` still goes through the supervisor. Pinned by a test.
+- [x] **It binds no UDP socket** - every scene binds 8899 for itself - and is `DontDestroyOnLoad`
+      only so the sidecar process outlives scene switches.
+- [x] **Never a second producer:** listens on the port for 400 ms first and attaches if anything is
+      already sending. The supervisor lock port is still honoured for the supervised case.
+- [x] **`AppBootstrap` untouched**, and its `mirrorSceneName` code default reverted to `"Mirror"`.
+      It was a live trap: `[SerializeField]` means the scene's value wins, so the change did nothing
+      today but would have made any NEWLY added AppBootstrap load a scene with no `AvatarRoot`.
+- [x] `SceneRegistrar` now places `SidecarBoot` at index 1 the first time it adds it; still never
+      touches index 0 and never moves an entry that is already registered.
+
+### DONE — verification (headless)
+```text
+compile     VirtualMirror.{Tracking,SkeletonShow,Editor,Tests}   0 errors
+unit tests  SidecarDirectLaunchF36Tests                          6/6
+            whole suite                                          187 passed, 6 failed, 21 skipped
+            (the 6 are SidecarPathsTests, which need Application.dataPath)
+spawned cmd executed with a bogus --model: past argparse, past provider selection
+            (DmlExecutionProvider), failing only on the missing model  -> evidence/f36/sender_args.txt
+```
+
+### OPEN — needs the camera. NOTHING IN F-36 HAS BEEN ON A SCREEN.
+- [ ] **Press Play on `Scenes/SidecarBoot.unity`.** Expect `[SidecarBoot] launching: ...`, the
+      launcher within a frame, poses after ~15 s while the model loads.
+- [ ] **Check the launcher footer shows `sidecar: ...`** - that status line has never rendered.
+- [ ] **Launch a scene from each column and ESC back**, confirming no scene fails to bind 8899.
+- [ ] **Start a sender by hand first, then press Play**, and confirm the console says *attaching to
+      it instead of starting a second one*.
+- [ ] **Exit play mode and confirm no orphan `python.exe`** is left holding the camera.

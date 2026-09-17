@@ -144,13 +144,41 @@ namespace VirtualMirror.Tests {
             }
             Assert.IsTrue(pose.Planted[0], "a still foot on the floor is planted");
 
-            // Same height, but teleporting sideways each frame: a foot crossing the floor band at
-            // speed is mid-stride, not planted.
+            // Same height, but sweeping sideways each frame: a foot crossing the floor band at speed
+            // is mid-stride, not planted.
+            //
+            // F-34 CHANGED THE INPUT HERE, not the assertion. This used to step 0.4 m per 60 Hz frame,
+            // which is 24 m/s - three times a sprinter's hip and not a movement a body can make. The
+            // F-34 identity guard now recognises that as the frame of reference moving rather than the
+            // person, and throws the history away (see SkeletonPose.TeleportSpeed). 0.1 m per frame is
+            // 6 m/s: a genuinely fast foot, far above the 0.35 m/s planted gate and far below the
+            // 12 m/s guard, so this tests what it always meant to test.
             for (int i = 0; i < 20; i++) {
-                float x = (i % 2 == 0) ? 0f : 0.4f;
+                float x = (i % 2 == 0) ? 0f : 0.1f;
                 pose.Fill(StandingFrame(-0.88f, -1.0f, x), Origin, 1f, 1f / 60f);
             }
+            Assert.Greater(pose.Speed[(int)JointId.LeftHeel], SkeletonPose.PlantedMaxSpeed,
+                           "the foot really is moving faster than the planted gate");
             Assert.IsFalse(pose.Planted[0], "a fast foot must not read as planted");
+        }
+
+        [Test]
+        public void Planted_IsNotFooledByTheHistoryBeingDiscarded() {
+            // The other side of the same coin, pinned because it is new behaviour: when the guard DOES
+            // fire, speed goes to zero, and a zero speed is exactly what the planted test looks for.
+            // A foot that is genuinely off the floor must still not read as planted, whatever the
+            // guard did to the history.
+            SkeletonPose pose = new SkeletonPose();
+            for (int i = 0; i < 240; i++) {
+                pose.Fill(StandingFrame(-0.88f, -1.0f), Origin, 1f, 1f / 60f);
+            }
+            Assert.IsTrue(pose.Planted[0]);
+
+            // A metre sideways in one frame at 60 Hz is 60 m/s - a teleport, so the guard fires and
+            // the history is discarded. The feet are also 300 mm up, which is well outside the 80 mm
+            // planted band, and proximity is not something the guard can affect.
+            pose.Fill(StandingFrame(-0.58f, -0.7f, 1.0f), Origin, 1f, 1f / 60f);
+            Assert.IsFalse(pose.Planted[0], "a lifted foot is not planted even with no speed history");
         }
 
         [Test]

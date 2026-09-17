@@ -12,6 +12,99 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Added
 
+- **Press Play once (F-36).** `Scenes/SidecarBoot.unity`, at Build Settings index 1, starts the
+  multi-person sidecar and then opens the launcher — so the whole demonstration set works without a
+  terminal (ADR-074). Index 0 is unchanged.
+  - **It runs `multiperson_udp_sender.py` directly, without the supervisor.** `sidecar_supervisor.py`
+    builds its child command from `--portrait`, `--portrait-dir`, `--subpixel-bits` and `--seconds`,
+    which only `wholebody_udp_sender.py` accepts, and waits on a readiness contract only that sender
+    emits — so the pre-existing auto-start could only ever produce the single-person stream. The
+    multi-person sender is backward compatible, so one sender now serves the single-person scenes,
+    the crowd scenes and the avatar app alike.
+  - **The demonstration path has no watchdog; the product still has one.**
+    `SidecarProcessLauncher` gained an additive `DirectScript` mode that defaults to empty, so
+    `AppBootstrap` goes through the supervisor exactly as before. A unit test pins that default,
+    because a regression there would silently remove restart-on-crash from the product.
+  - **It owns the sidecar process and no UDP socket** — each scene binds 8899 for itself — and is
+    `DontDestroyOnLoad` only so the process outlives scene switches.
+  - **It never starts a second producer:** it listens on the destination port for 400 ms first and
+    attaches if anything is already sending, rather than interleaving poses from two sessions.
+  - `AppBootstrap` is untouched, and a stray `mirrorSceneName` code default was reverted to
+    `"Mirror"` — it did nothing (the serialized scene value wins) but would have made any newly added
+    `AppBootstrap` load a scene with no `AvatarRoot`.
+  - **Verified headless: 0 compile errors, 6/6 new tests, 187 passed suite-wide**, plus the spawned
+    command executed end-to-end past argparse and provider selection. Nothing has been on a screen.
+
+- **One launcher scene (F-35).** `Scenes/Launcher.unity` lists all twenty scenes in three columns
+  and loads any of them; **ESC returns to it from any scene** (ADR-073). Click a row, or arrows plus
+  Enter, or the number shown on it.
+  - **Grouped by how many people a scene needs**, not by theme. Ten of the nineteen demonstrations do
+    nothing on your own, and somebody standing alone in front of Chain concludes the installation is
+    broken; the menu answers that before they choose.
+  - **The launcher runs the real tracking while you choose**, so "the sidecar is not running" and
+    "this is the SINGLE-PERSON sender" are visible BEFORE a scene is picked and blamed for it. The
+    multi-person column replaces its description with that warning and names the sender to run.
+  - **All 20 scenes are now registered in Build Settings**, which is what makes them loadable at
+    runtime and means they are in a player build. They are camera-and-one-GameObject scenes, so the
+    cost is negligible. **Index 0 is unchanged**, so a build's startup scene is not affected.
+  - **A row whose scene is not registered is greyed out with the reason** rather than being a button
+    that silently does nothing — Unity's own failure for that is a console error after the click.
+  - **The UDP socket is released before the scene load**, not in `OnDestroy`, because every scene
+    binds the same fixed port; both scene bases also skip the rest of the frame rather than running
+    against a disposed provider.
+  - **`Virtual Mirror > Register All Scenes in Build Settings`** (new Editor menu item), because
+    `ProjectSettings/EditorBuildSettings.asset` is gitignored and the registration is therefore
+    per-machine — a fresh clone opens the launcher with every row greyed out. It only ever appends,
+    never reorders or removes, since index 0 is the startup scene of a build.
+  - Known limits, recorded rather than fixed: ESC does not return from `Bootstrap` (the production
+    app is not one of the two scene bases), the catalogue's titles are copied rather than read (the
+    menu's assembly cannot see the experience types), and the launcher has no audio.
+  - **Verified headless only: 0 compile errors, 10/10 new unit tests, 181 passed suite-wide, and a
+    registry cross-check showing all 20 rows resolve to a registered scene.** Nothing has been on a
+    screen; the Editor checks are in §5 of the report.
+
+- **Nine crowd experiences (F-34).** Nine new scenes that need more than one person — Collective,
+  Stillness, Traces, Eclipse, Chord, Chain, Pass, Podium and Mirror Each Other — each one
+  `ExperienceBase` subclass plus a `.unity` that is a camera and one GameObject (ADR-072). The
+  sidecar is unchanged: these are consumers of the crowd F-32 put on the wire and F-33 filtered.
+  - **One rule decided which ideas exist.** An identity switch cannot be detected: the live
+    two-person session measured an identity migrating between two humans at **0.015 m per frame**
+    against a **0.35 m** association margin — 97 datagrams, **zero events logged**. There is no
+    discontinuity to trigger on, so "detect a switch and freeze the score" cannot be written. The
+    only defence is structural — **symmetric in the participants, reads only the current frame** —
+    and that single test sorted the whole candidate list.
+  - **No per-person accumulated score exists in any of them, on purpose.** Points, streaks and hold
+    timers are exactly the state a silent switch corrupts, and the failure is maximally visible: a
+    player watches their points appear on somebody else's counter. Accumulated state is allowed only
+    where it belongs to something that is not a person — a rally, a circuit, a light's drift, a
+    floor. The **three** places identity *is* read (colour, a pass count, a crown-change chime) are
+    named in each class header with what a switch costs; all three are bounded.
+  - **The budget is three people at 16 fps** — 20.43 ms per person at p50 over 400 warm inferences
+    (p90 20.89, p99 21.69). The detector sees seven; the GPU affords three. Four costs 12 fps.
+  - **`SkeletonPose.ResetHistory()` and a 12 m/s mid-hip guard**, which fixed a live latent bug:
+    `TrackedStage` snaps its ground offset on first floor acquisition, moving the staging origin by
+    up to a metre in one frame, so the next frame differenced two positions measured against
+    different origins and reported a whole-body speed spike above every strike gate at once (0.9 m/s
+    in Bubble Pop, 0.55 in Objects) while un-planting every planted foot. The guard does **not**
+    catch the slow switch above — nothing can — and says so.
+  - **`ExperienceBase` no longer wipes a crowd when somebody walks up.** `PresenceGate` answers "is
+    there *a* person", so it never changes in a crowd; arrivals and departures now come from
+    `CrowdRoster`, keyed on the track id. `ResetsOnNewVisitor` defaults to true, so the ten existing
+    single-person scenes are behaviourally unchanged.
+  - **The three movement thresholds are gathered into `ExperienceTuning`** with the caveat attached:
+    they were tuned at ~21 fps and a crowd stream runs at ~16, and they have **not** been
+    re-measured. The effect is one-sided — a crowd scene reads slower, so the gates get harder to
+    pass, not easier.
+  - **`BodyRenderer.Render(pose, tint)`** added as an overload, so a crowd scene can colour a body
+    per person without dropping the speed palette and confidence-in-line-width the way `RenderRaw`
+    does.
+  - `FluidFieldExperience` and `FootprintsExperience` were **migrated** onto new shared `FluidField`
+    and `FloorMarks` classes rather than having the logic copied — same grid, same decay, same merge
+    radius, same fade. Two copies drift apart the first time either is tuned.
+  - **Verified headless only: 0 compile errors, 29/29 new unit tests, 171 passed suite-wide.**
+    Nothing in F-34 has been on a screen; the play-mode and hardware checks are listed in §8 of the
+    report.
+
 - **Per-person filter chains (F-33).** Every tracked person now carries the full measured
   single-person signal chain — P0 One-Euro smoothing with its displacement cap and bounded hold,
   P1-1 joint tracking, F-22 biomechanical validation — in one instance keyed to their **track id**

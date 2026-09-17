@@ -1,8 +1,5 @@
-using System.Collections.Generic;
-
 using UnityEngine;
 
-using VirtualMirror.Core;
 using VirtualMirror.SkeletonShow;
 
 namespace VirtualMirror.Experiences {
@@ -20,15 +17,13 @@ namespace VirtualMirror.Experiences {
     /// IT IS BUILT ON <see cref="SkeletonPose.Planted"/>, which is the F-29 foot work doing the job
     /// it was measured for: a foot counts as planted when it is within 80 mm of the estimated floor
     /// AND moving slower than 0.35 m/s. The measured floor matters here more than anywhere else —
-    /// marks are laid ON the floor plane, and before F-29 that plane was 81-127 mm out, so every
+    /// marks are laid ON the floor plane, and before F-29 that plane was 81–127 mm out, so every
     /// mark would have floated or sunk.
     ///
-    /// HONEST LIMIT, and it shapes the design: floor contact was measured reliable to ~21 mm on a
-    /// single subject at 1.4 m, and to ~81 mm on the seven-person clip - where, per F-32, the error
-    /// is the crop migrating between dancers rather than depth drift. Accuracy beyond ~2 m on ONE
-    /// subject is untested. So a mark is placed once, where the foot FIRST settled, and then never
-    /// moved: whichever of those two error sources is acting, a continuously tracked mark would
-    /// wander across the floor, and a mark that wanders is worse than one placed slightly wrong.
+    /// THE MARKS THEMSELVES LIVE IN <see cref="FloorMarks"/> as of F-34, unchanged. They moved
+    /// because <see cref="CrowdFootprintsExperience"/> writes into the same kind of floor with
+    /// several people on it, and the honest limit that shapes the design — a mark is a PLACE, placed
+    /// once and never moved — is a property of the floor rather than of this scene.
     /// </summary>
     public sealed class FootprintsExperience : ExperienceBase {
         [Header("Footprints")]
@@ -37,30 +32,8 @@ namespace VirtualMirror.Experiences {
         [Tooltip("How many marks the floor remembers before the oldest fades away.")]
         [SerializeField] private int maxMarks = 48;
 
-        /// <summary>A new mark is only started this far from every existing one, so shifting weight
-        /// grows the mark you are already standing on instead of stamping a new one beside it.</summary>
-        private const float NewMarkDistance = 0.22f;
-
-        /// <summary>Petals per mark. The bloom opens one petal at a time, so a viewer can SEE the
-        /// count going up and works out for themselves that standing longer is what does it.</summary>
-        private const int Petals = 9;
-
         private BodyRenderer body;
-        private Transform markRoot;
-        private readonly List<Mark> marks = new List<Mark>();
-        private float totalDwell;
-
-        private sealed class Mark {
-            public Vector3 Position;
-            public Transform Root;
-            public Transform Core;
-            public Material CoreMaterial;
-            public Transform[] PetalVisuals;
-            public Material[] PetalMaterials;
-            public float Dwell;       // seconds of standing accumulated here
-            public float Age;         // seconds since it was last grown, for the slow fade
-            public float Spin;
-        }
+        private readonly FloorMarks floor = new FloorMarks();
 
         public override string Title {
             get {
@@ -82,13 +55,14 @@ namespace VirtualMirror.Experiences {
             body = new BodyRenderer(Palette);
             body.Build(root);
             body.Dim = 0.5f;
-            markRoot = new GameObject("Marks").transform;
-            markRoot.SetParent(root, false);
+            floor.SecondsToFullBloom = secondsToFullBloom;
+            floor.MaxMarks = maxMarks;
+            floor.Build(root, Palette);
         }
 
         protected override void ReadExtraInput() {
             if (Input.GetKeyDown(KeyCode.C)) {
-                ClearMarks();
+                floor.Clear();
             }
         }
 
@@ -96,18 +70,6 @@ namespace VirtualMirror.Experiences {
         // is that the floor accumulates across visitors - resetting per person would throw away the
         // only thing this experience is trying to build.
         protected override void ResetExperience() {
-        }
-
-        private void ClearMarks() {
-            int i = 0;
-            while (i < marks.Count) {
-                if (marks[i].Root != null) {
-                    Object.Destroy(marks[i].Root.gameObject);
-                }
-                i = i + 1;
-            }
-            marks.Clear();
-            totalDwell = 0f;
         }
 
         protected override void Play(float deltaSeconds) {
@@ -125,125 +87,26 @@ namespace VirtualMirror.Experiences {
                         if (pose.Present[joint]) {
                             Vector3 at = pose.World[joint];
                             at.y = pose.FloorY;   // marks live ON the floor plane, not on the foot
-                            Grow(at, deltaSeconds);
+                            int petal = floor.Grow(at, deltaSeconds);
+                            if (petal >= 0) {
+                                // One note per petal, climbing. Standing still is otherwise a silent
+                                // activity, and this is the only feedback that rewards it without
+                                // asking the person to look down.
+                                Audio.Play(SoundCue.Bloom, petal, 0.5f);
+                            }
                         }
                     }
                     i = i + 1;
                 }
             }
 
-            Animate(deltaSeconds);
-        }
-
-        // Add dwell to the mark under this foot, or start one.
-        private void Grow(Vector3 at, float dt) {
-            Mark nearest = null;
-            float best = NewMarkDistance;
-            int i = 0;
-            while (i < marks.Count) {
-                float d = Vector3.Distance(marks[i].Position, at);
-                if (d < best) {
-                    best = d;
-                    nearest = marks[i];
-                }
-                i = i + 1;
-            }
-            if (nearest == null) {
-                nearest = Create(at);
-            }
-            int petalsBefore = Mathf.FloorToInt(Mathf.Clamp01(nearest.Dwell / Mathf.Max(0.5f, secondsToFullBloom)) * Petals + 0.001f);
-            nearest.Dwell = nearest.Dwell + dt;
-            nearest.Age = 0f;
-            totalDwell = totalDwell + dt;
-            int petalsAfter = Mathf.FloorToInt(Mathf.Clamp01(nearest.Dwell / Mathf.Max(0.5f, secondsToFullBloom)) * Petals + 0.001f);
-            if (petalsAfter > petalsBefore) {
-                // One note per petal, climbing. Standing still is otherwise a silent activity, and
-                // this is the only feedback that rewards it without asking the person to look down.
-                Audio.Play(SoundCue.Bloom, petalsAfter, 0.5f);
-            }
-        }
-
-        private Mark Create(Vector3 at) {
-            Mark m = new Mark();
-            m.Position = at;
-            m.Spin = Random.Range(0f, Mathf.PI * 2f);
-            m.Root = new GameObject("mark").transform;
-            m.Root.SetParent(markRoot, false);
-            m.Root.position = at;
-
-            m.Core = ShowStage.Sphere(m.Root, "core", 0.06f, Palette, Palette.Warm, true,
-                                      out m.CoreMaterial);
-            m.Core.localScale = new Vector3(0.06f, 0.012f, 0.06f);   // flattened onto the floor
-
-            m.PetalVisuals = new Transform[Petals];
-            m.PetalMaterials = new Material[Petals];
-            int i = 0;
-            while (i < Petals) {
-                m.PetalVisuals[i] = ShowStage.Sphere(m.Root, "petal_" + i, 0.05f, Palette,
-                                                     Palette.Cool, true, out m.PetalMaterials[i]);
-                m.PetalVisuals[i].gameObject.SetActive(false);
-                i = i + 1;
-            }
-
-            marks.Add(m);
-            while (marks.Count > maxMarks) {
-                if (marks[0].Root != null) {
-                    Object.Destroy(marks[0].Root.gameObject);
-                }
-                marks.RemoveAt(0);
-            }
-            return m;
-        }
-
-        private void Animate(float dt) {
-            int i = 0;
-            while (i < marks.Count) {
-                Mark m = marks[i];
-                m.Age = m.Age + dt;
-                m.Spin = m.Spin + dt * 0.35f;
-
-                float bloom = Mathf.Clamp01(m.Dwell / Mathf.Max(0.5f, secondsToFullBloom));
-                // Marks fade over ten minutes rather than persisting forever: an installation that
-                // never forgets ends the day as an unreadable smear of overlapping blooms.
-                float fade = Mathf.Clamp01(1f - (m.Age - 60f) / 600f);
-
-                float coreSize = 0.06f + 0.10f * bloom;
-                m.Core.localScale = new Vector3(coreSize, 0.012f, coreSize);
-                SkeletonShowPalette.SetColour(m.CoreMaterial,
-                    Color.Lerp(Palette.Warm, Palette.Hot, bloom) * fade);
-
-                // Petals open one at a time as the dwell grows, so the mark counts the time visibly.
-                int open = Mathf.FloorToInt(bloom * Petals + 0.001f);
-                int p = 0;
-                while (p < Petals) {
-                    bool show = p < open;
-                    m.PetalVisuals[p].gameObject.SetActive(show && fade > 0.02f);
-                    if (show) {
-                        float angle = m.Spin + (Mathf.PI * 2f) * (p / (float)Petals);
-                        float radius = 0.10f + 0.16f * bloom;
-                        m.PetalVisuals[p].position = m.Position
-                            + new Vector3(Mathf.Cos(angle) * radius, 0.004f, Mathf.Sin(angle) * radius);
-                        float petalSize = 0.035f + 0.03f * bloom;
-                        m.PetalVisuals[p].localScale = new Vector3(petalSize, 0.010f, petalSize);
-                        SkeletonShowPalette.SetColour(m.PetalMaterials[p],
-                            Color.Lerp(Palette.Cool, Palette.Warm, p / (float)Petals) * fade);
-                    }
-                    p = p + 1;
-                }
-
-                if (fade <= 0.01f) {
-                    Object.Destroy(m.Root.gameObject);
-                    marks.RemoveAt(i);
-                    continue;
-                }
-                i = i + 1;
-            }
+            floor.Animate(deltaSeconds);
         }
 
         protected override string StatusText() {
             if (!ScoringAllowed) {
-                return marks.Count > 0
-                    ? "The floor remembers " + marks.Count + " place" + (marks.Count == 1 ? "" : "s")
+                return floor.Count > 0
+                    ? "The floor remembers " + floor.Count + " place" + (floor.Count == 1 ? "" : "s")
                       + " somebody stood."
                     : "Step in front of the camera and stand still.";
             }
@@ -259,8 +122,8 @@ namespace VirtualMirror.Experiences {
                 ? planted + " foot point" + (planted == 1 ? "" : "s") + " planted - growing"
                 : "keep still to leave a mark";
             return feet
-                   + "\nmarks " + marks.Count + " / " + maxMarks
-                   + "      total time stood " + Mathf.FloorToInt(totalDwell) + " s";
+                   + "\nmarks " + floor.Count + " / " + maxMarks
+                   + "      total time stood " + Mathf.FloorToInt(floor.TotalDwell) + " s";
         }
     }
 }

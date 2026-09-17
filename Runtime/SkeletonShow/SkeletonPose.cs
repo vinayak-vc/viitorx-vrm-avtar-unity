@@ -117,6 +117,36 @@ namespace VirtualMirror.SkeletonShow {
         /// band at speed is mid-stride, not planted.</summary>
         public const float PlantedMaxSpeed = 0.35f;
 
+        /// <summary>
+        /// F-34 IDENTITY GUARD. Above this apparent mid-hip speed the history is thrown away rather
+        /// than differenced, because no person moves this fast: a sprinter's hip travels at about
+        /// 8 m/s, so 12 m/s cannot be a body and must be the FRAME of reference having changed
+        /// underneath it.
+        ///
+        /// Expressed as a SPEED and multiplied by the frame's dt, not as a fixed distance, so the
+        /// same guard holds at 16 fps (multi-person) and at 60 fps (a single person on a fast host).
+        /// A fixed distance would be either useless at low frame rates or trigger constantly at high
+        /// ones.
+        ///
+        /// TWO THINGS IT CATCHES, and one it does NOT - stated because the gap is the whole reason
+        /// the multi-person experiences are shaped the way they are:
+        ///
+        ///  * A GROUNDING SNAP. <see cref="TrackedStage"/> snaps its ground offset the first time it
+        ///    has a floor, which can move the staging origin by the better part of a metre in one
+        ///    frame. Every joint's world position moves with it, so the very next frame differences
+        ///    two positions that were measured against different origins and reports a spike on the
+        ///    WHOLE body. That spike is above every experience's strike gate.
+        ///  * A GROSS IDENTITY SWITCH, where the pose under one id jumps to a body standing
+        ///    somewhere else in the room.
+        ///
+        ///  * IT DOES NOT CATCH A SLOW SWITCH. The live two-person session measured an identity
+        ///    migrating between two humans at 0.015 m per frame - roughly 0.24 m/s, three orders of
+        ///    magnitude below this guard and well inside ordinary movement. Nothing in the geometry
+        ///    announces it. That is why no experience here may accumulate per-person state and
+        ///    expect it to stay attached to the right person; see the F-34 report.
+        /// </summary>
+        public const float TeleportSpeed = 12f;
+
         /// <summary>Estimated floor height in world Y. Valid only when <see cref="HasFloor"/>.</summary>
         public float FloorY;
 
@@ -157,6 +187,17 @@ namespace VirtualMirror.SkeletonShow {
                 return;
             }
             float dt = deltaSeconds > 1e-4f ? deltaSeconds : 1f / 60f;
+
+            // Identity/origin guard, BEFORE anything is differenced. Valid and Centre still hold
+            // last frame's answer at this point, which is exactly what has to be compared against.
+            if (hasPrevious && Valid) {
+                Vector3 hipLeft = origin + frame.GetLandmark((JointId)23).Position * scale;
+                Vector3 hipRight = origin + frame.GetLandmark((JointId)24).Position * scale;
+                Vector3 candidate = 0.5f * (hipLeft + hipRight);
+                if ((candidate - Centre).magnitude > TeleportSpeed * dt) {
+                    ResetHistory();
+                }
+            }
             float smooth = 1f - Mathf.Exp(-dt / 0.08f);
             float total = 0f;
             int counted = 0;
@@ -226,6 +267,40 @@ namespace VirtualMirror.SkeletonShow {
                              && World[joint].y - FloorY < PlantedBandMetres
                              && Speed[joint] < PlantedMaxSpeed;
                 i = i + 1;
+            }
+        }
+
+        /// <summary>
+        /// Forget every temporal quantity derived by differencing against the previous frame - speed,
+        /// velocity, foot contact - without disturbing the pose itself.
+        ///
+        /// WHY THIS IS NEEDED AT ALL. Speed and Velocity are differences between THIS frame's world
+        /// position and the LAST one's. That is only meaningful while both belong to the same body
+        /// measured against the same origin. When either changes, the difference is not a slow joint
+        /// or a fast one - it is a meaningless number, and it is large. One such frame is enough to
+        /// fire every strike gate in the experiences at once (0.9 m/s in Bubble Pop, 0.55 m/s in
+        /// Objects) and to un-plant every planted foot (which needs Speed below 0.35 m/s), so a
+        /// person standing still can score a handful of points and lose their footprints in the same
+        /// frame, for no reason they can see.
+        ///
+        /// THE FLOOR IS DELIBERATELY KEPT. It is a property of the ROOM, not of the body: the same
+        /// floor is still under whoever is standing there now. Re-estimating it from scratch would
+        /// make every floor effect jump at the exact moment the guard fired, which is the visible
+        /// symptom this exists to prevent.
+        /// </summary>
+        public void ResetHistory() {
+            hasPrevious = false;
+            int i = 0;
+            while (i < Speed.Length) {
+                Speed[i] = 0f;
+                Velocity[i] = Vector3.zero;
+                i = i + 1;
+            }
+            Energy = 0f;
+            int k = 0;
+            while (k < Planted.Length) {
+                Planted[k] = false;
+                k = k + 1;
             }
         }
 

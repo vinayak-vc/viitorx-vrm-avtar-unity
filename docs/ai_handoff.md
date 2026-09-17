@@ -1,6 +1,6 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-17 (F-33 per-person filters)
+Last updated: 2026-09-17 (F-36 sidecar boot scene)
 Purpose: next agent can continue without re-deriving context.
 
 **This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
@@ -11,7 +11,174 @@ for anything after 2026-08-11; the sections below are historical context for M0�
 
 ---
 
-## 🔷 CURRENT — F-33 per-person filters (2026-09-17)
+## 🔷 CURRENT — F-36 press Play once (2026-09-17)
+
+**Start here: `Scenes/SidecarBoot.unity`. Press Play.** It starts the multi-person sidecar, then
+opens the launcher; pick any of the twenty scenes, ESC comes back. No terminal.
+Full report: `F36_SIDECAR_BOOT_2026-09-17.md`. Decision: **ADR-074**.
+
+```text
+Runtime/SkeletonShow/SidecarBootstrap.cs        NEW  starts the sidecar, then loads Launcher
+Runtime/Tracking/OakD/SidecarProcessLauncher.cs +    DirectScript / DirectArguments (additive)
+Runtime/SkeletonShow/SceneLauncher.cs           +    sidecar status in the footer
+Runtime/Bootstrap/AppBootstrap.cs               ~    mirrorSceneName default REVERTED to "Mirror"
+Editor/SceneRegistrar.cs                        +    puts SidecarBoot at index 1 on a clone
+Tests/EditMode/SidecarDirectLaunchF36Tests.cs   NEW  6/6
+Scenes/SidecarBoot.unity                        NEW
+```
+
+Build order: `License-Verifier → SidecarBoot → Bootstrap → Mirror → Launcher → …` (index 0 untouched).
+
+### The four things to carry forward
+
+1. **THE SUPERVISOR CANNOT RUN THE MULTI-PERSON SENDER.** `sidecar_supervisor.py` builds its child
+   command from a fixed flag set — `--portrait`, `--portrait-dir`, `--subpixel-bits`, `--seconds` —
+   that only `wholebody_udp_sender.py` accepts, and waits on a readiness contract only that sender
+   emits. So the pre-existing auto-start could only ever produce the single-person stream. That is
+   why the boot scene runs the sender **directly**, and why `SidecarProcessLauncher` grew a
+   `DirectScript` mode.
+2. **THE DEMO PATH HAS NO WATCHDOG; THE PRODUCT STILL HAS ONE.** `DirectScript` defaults to empty, so
+   `AppBootstrap` gets the supervisor exactly as before, and a unit test pins that default. Do not
+   "simplify" by making the direct path the default — that silently removes restart-on-crash from
+   the product.
+3. **NOTHING OUTSIDE A SCENE MAY BIND UDP 8899.** `SidecarBootstrap` owns the sidecar PROCESS and
+   deliberately no socket, because every scene binds 8899 for itself. This is also why pointing
+   `AppBootstrap.mirrorSceneName` at the launcher does not work: it binds the port, loads additively,
+   and looks for an `AvatarRoot` the launcher does not have. `AppBootstrap` is the avatar app, not a
+   router — its code default was reverted to `"Mirror"`.
+4. **IT NEVER STARTS A SECOND PRODUCER.** It listens on the port for 400 ms first; datagrams arriving
+   mean somebody is already sending and it attaches. Two producers on one port interleave poses from
+   different sessions, which reads as violent jitter rather than as a configuration error.
+
+### What is NOT verified
+
+**Nothing in F-36 has been on a screen.** Compile is clean, 6/6 new tests pass (187 suite-wide), and
+`evidence/f36/sender_args.txt` shows the exact spawned command getting past argparse and provider
+selection (`DmlExecutionProvider`) and failing only on a deliberately bogus model. Untested: the
+actual Play run, the launcher's new `sidecar:` footer line, the attach-don't-spawn branch, and that
+no orphan `python.exe` survives exiting play mode.
+
+---
+
+## F-35 the scene launcher (2026-09-17)
+
+**Start here: `Scenes/Launcher.unity`. Press Play.** It lists all twenty scenes in three columns and
+ESC brings you back from any of them. Full report: `F35_SCENE_LAUNCHER_2026-09-17.md`.
+Decision: **ADR-073**.
+
+```text
+Runtime/SkeletonShow/SceneLauncher.cs          NEW  the menu
+Runtime/SkeletonShow/LauncherScene.cs          NEW  "back to the menu", shared by both scene bases
+Runtime/Experiences/ExperienceBase.cs          +    ESC -> menu (all 18 experience scenes)
+Runtime/SkeletonShow/SkeletonShowBootstrap.cs  +    the same, for the one scene that is not one
+Tests/EditMode/SceneLauncherF35Tests.cs        NEW  10/10
+Scenes/Launcher.unity                          NEW
+ProjectSettings/EditorBuildSettings.asset      +    20 scenes registered
+```
+
+### The three things to carry forward
+
+1. **ALL 20 SCENES ARE NOW IN BUILD SETTINGS, and they have to be.** `SceneManager.LoadScene` cannot
+   load a scene that is not registered, and its failure is a console error *after* the click — a
+   button that appears to do nothing. Do not "tidy" them out of the list. **Index 0 is still
+   `License-Verifier`**, so a build's startup scene is unchanged; moving `Launcher` there is a
+   product decision nobody has made.
+   **BUT `ProjectSettings/EditorBuildSettings.asset` IS GITIGNORED**, so this does NOT travel with
+   the repo: a fresh clone opens the launcher with every row greyed out. Run
+   **`Virtual Mirror > Register All Scenes in Build Settings`** (`Editor/SceneRegistrar.cs`) once.
+   It only ever APPENDS — never reorders, removes or disables — because index 0 is the startup scene.
+2. **THE GROUPING IS THE FEATURE.** Scenes are split by how many people they need, because ten of
+   them do nothing on your own and somebody standing alone in front of Chain concludes the
+   installation is broken. The launcher also runs the real `TrackedStage` while you choose, so "the
+   sidecar is not running" and "it is the SINGLE-PERSON sender" are visible *before* you pick a
+   scene and blame it.
+3. **THE UDP PORT IS THE COUPLING TO WATCH.** Every scene binds the same fixed port. Both bases now
+   stop tracking *before* `LoadScene` rather than in `OnDestroy`, and set `leaving` to skip the rest
+   of the frame instead of running Update and OnGUI against a disposed provider. If a scene ever
+   fails to receive after a launcher round trip, this is the first place to look.
+
+### Known limits, recorded rather than fixed
+
+* **ESC does not return from `Bootstrap`** — it is the production app, not one of the two bases.
+* **The catalogue titles are COPIED, not read.** SkeletonShow cannot see the Experiences types. A
+  unit test pins column membership and structure; it cannot pin that a blurb still matches a scene's
+  own `Instruction`. **If the two disagree, the scene is right.**
+* **No audio in the launcher** — `ExperienceAudio` is in an assembly SkeletonShow cannot reference.
+
+### What is NOT verified
+
+Same state as F-34: **nothing has been on a screen.** Compile is clean (0 errors), 181 tests pass,
+and `evidence/f35/scene_registry.txt` proves every row resolves to a registered scene. Untested: the
+layout at a real resolution, and the ESC round trip rebinding the UDP port.
+
+---
+
+## F-34 nine crowd experiences (2026-09-17)
+
+**Read this, then the F-33 and F-32 sections below it, in that order.**
+
+F-32 put a crowd on the wire and F-33 filtered it. F-34 spends it: nine new scenes that need more
+than one person, plus the four fixes they needed first.
+Full report: `F34_CROWD_EXPERIENCES_2026-09-17.md`. Decision: **ADR-072**.
+
+```text
+Runtime/Experiences/{CollectiveFluid,StillnessTug,CrowdFootprints,Eclipse,Chord,
+                     Chain,Pass,Podium,MirrorEachOther}Experience.cs   NEW  the nine
+Runtime/Experiences/{CrowdPalette,CrowdRoster,CrowdMath,CrowdVoices,
+                     ExperienceTuning,FluidField,FloorMarks}.cs        NEW  shared
+Runtime/SkeletonShow/SkeletonPose.cs                                   +    ResetHistory + 12 m/s guard
+Runtime/Experiences/ExperienceBase.cs                                  +    ResetsOnNewVisitor + 2 hooks
+Runtime/Experiences/BodyRenderer.cs                                    +    Render(pose, tint)
+Runtime/Experiences/ExperienceAudio.cs                                 +    PentatonicHz(step)
+Runtime/Experiences/{FluidField,Footprints}Experience.cs               ~    MIGRATED - smoke-test these
+Tests/EditMode/CrowdExperiencesF34Tests.cs                             NEW  29/29
+Scenes/*.unity                                                         NEW  nine
+python-sidecar~                                                        unchanged
+```
+
+### The four things to carry forward
+
+1. **AN IDENTITY SWITCH CANNOT BE DETECTED, so it must be designed around.** Measured live: an
+   identity migrating between two humans at **0.015 m per frame** against a **0.35 m** margin — 97
+   datagrams, **zero events logged**. No discontinuity, no guard to write. The only defence is
+   structural: **symmetric in the participants, reads only the current frame.** That single test
+   decided which of the candidate experiences exist. Read ADR-072 before designing another one.
+
+2. **No per-person accumulated score exists anywhere in the nine, on purpose.** Points, streaks and
+   hold timers are exactly the state a silent switch corrupts, in the most visible way possible.
+   Accumulated state is allowed only when it belongs to something that is not a person — a rally, a
+   circuit, a light's drift, a floor. The **three** places identity IS read are named in each class
+   header with what a switch costs; all three are bounded.
+
+3. **The budget is three people at 16 fps.** 20.43 ms per person at p50 (p90 20.89, p99 21.69). The
+   detector sees seven; the GPU affords three. Four costs 12 fps. Every scene's cap of 8 is a
+   *rendering* ceiling and says so.
+
+4. **`SkeletonPose` now has `ResetHistory()` and a 12 m/s mid-hip guard**, and it fixed a live latent
+   bug nobody had named: `TrackedStage` snaps its ground offset on first floor acquisition, which
+   moves the staging origin by up to a metre in one frame — so the next frame differenced two
+   positions measured against different origins and reported a whole-body speed spike above every
+   strike gate at once. It does **not** catch the slow switch in (1); nothing can.
+
+### What is NOT verified — this is the next agent's first job
+
+**Nothing in F-34 has been on a screen.** It compiles (0 errors) and 29/29 new unit tests pass, and
+that is all. In priority order:
+
+1. **Play-mode smoke test `Fluid.unity` and `Footprints.unity`** — the two MIGRATED scenes. They
+   worked before this change; their logic moved into `FluidField` / `FloorMarks` unchanged, but that
+   is an argument, not a test.
+2. Play-mode smoke test the nine new scenes: attract, then one person, then two.
+3. **Listen to `Chord.unity`** — it is mostly the sound and the voice bank has never made a noise.
+4. **`Chain.unity` with two people actually holding hands.** Its risk is not identity, it is the
+   detector merging two boxes when people stand that close, which has never been measured. The HUD
+   flags a suspected merge.
+5. **Re-measure the three movement thresholds at ~16 fps** (`ExperienceTuning` — they were tuned at
+   ~21 and the file says so).
+
+---
+
+## F-33 per-person filters (2026-09-17)
 
 **Read this and the F-32 section below it, in that order.**
 

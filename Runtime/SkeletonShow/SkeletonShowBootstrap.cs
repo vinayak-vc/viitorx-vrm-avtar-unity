@@ -158,8 +158,16 @@ namespace VirtualMirror.SkeletonShow {
             }
         }
 
+        /// <summary>Set once the launcher has been asked for. The scene is torn down at the end of
+        /// the frame, and everything below this point dereferences a provider that has already been
+        /// disposed - so the rest of the frame is skipped rather than guarded line by line.</summary>
+        private bool leaving;
+
         private void Update() {
             ReadInput();
+            if (leaving) {
+                return;
+            }
 
             float dt = Time.deltaTime;
             lastFrameSeconds = dt;
@@ -275,6 +283,21 @@ namespace VirtualMirror.SkeletonShow {
         }
 
         private void ReadInput() {
+            // F-35 - back to the menu, on the same key every experience uses. Does nothing when
+            // there is no launcher in Build Settings.
+            if (LauncherScene.ReturnRequested() && LauncherScene.IsAvailable) {
+                // Release the UDP socket here rather than leaving it to OnDestroy: the scene being
+                // opened binds the same fixed port.
+                if (provider != null) {
+                    provider.StopTracking();
+                    provider.Dispose();
+                    provider = null;
+                }
+                leaving = LauncherScene.Load();
+                if (leaving) {
+                    return;
+                }
+            }
             if (Input.GetKeyDown(KeyCode.Alpha1)) {
                 SwitchTo(0);
             }
@@ -409,6 +432,9 @@ namespace VirtualMirror.SkeletonShow {
         // the scene asset stays trivial. This is a show/diagnostic scene, not shipped UI.
         // ---------------------------------------------------------------------------------------
         private void OnGUI() {
+            if (leaving) {
+                return;
+            }
             if (hudStyle == null) {
                 hudStyle = new GUIStyle(GUI.skin.label);
                 hudStyle.fontSize = 15;

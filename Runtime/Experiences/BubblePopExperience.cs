@@ -38,8 +38,10 @@ namespace VirtualMirror.Experiences {
 
         /// <summary>The striker must also be moving this fast. A hand resting in a bubble is not a
         /// hit; F-28 measured a wave at 1-2 m/s, so this sits well below a deliberate swipe and well
-        /// above idle drift.</summary>
-        private const float HitSpeed = 0.9f;
+        /// above idle drift. Owned by <see cref="ExperienceTuning"/> since F-34, which records the
+        /// one thing the bare literal hid: it was tuned at ~21 fps and has not been re-measured at
+        /// the ~16 fps a three-person stream runs at.</summary>
+        private const float HitSpeed = ExperienceTuning.StrikeSpeed;
 
         /// <summary>Consecutive pops within this window keep the combo alive.</summary>
         private const float ComboWindow = 1.6f;

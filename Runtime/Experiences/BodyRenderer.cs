@@ -33,6 +33,10 @@ namespace VirtualMirror.Experiences {
         /// <summary>Multiplies every colour. 1 = the full glow skeleton, ~0.35 = present but quiet.</summary>
         public float Dim = 1f;
 
+        /// <summary>Multiplied into every colour alongside <see cref="Dim"/>. White is a no-op, which
+        /// is the default, so an experience that never asks for a tint is unaffected.</summary>
+        private Color activeTint = Color.white;
+
         /// <summary>Draw the hands' 21 landmarks too, when they are tracked.</summary>
         public bool ShowHands;
 
@@ -87,6 +91,31 @@ namespace VirtualMirror.Experiences {
         }
 
         public void Render(SkeletonPose pose) {
+            Render(pose, Color.white);
+        }
+
+        /// <summary>
+        /// F-34 - the same body, every colour multiplied by <paramref name="tint"/>.
+        ///
+        /// WHY THIS EXISTS AND WHY IT IS AN OVERLOAD RATHER THAN THE ONLY FORM. In a crowd, a body
+        /// has to be identifiable as a PERSON, and until now the only way to colour one was
+        /// <see cref="RenderRaw"/>, which throws away the speed palette, the confidence-in-line-width
+        /// rule and the per-joint heat - so Bonds draws flat bodies purely because that was the only
+        /// tinted path available.
+        ///
+        /// READ THIS BEFORE USING IT. Colour already means SPEED, everywhere, in every mode - that is
+        /// the one rule that makes the scenes read as one piece of work. Tinting spends part of that
+        /// same channel on identity, and two meanings on one channel is unreadable; Time Echo hit
+        /// this and chose to drop speed entirely rather than blend them. So a scene should pick ONE:
+        /// either bodies are tinted per person and the heat palette is muted toward white, or the
+        /// heat palette is left alone and identity is carried by something else (a line, a marker, a
+        /// footprint). A tint near white leaves the palette untouched, which is the default.
+        ///
+        /// Hands drawn by <see cref="RenderHands"/> inherit the tint most recently passed here, so a
+        /// person's fingers match their body rather than being the only untinted part of them.
+        /// </summary>
+        public void Render(SkeletonPose pose, Color tint) {
+            activeTint = tint;
             if (root == null) {
                 return;
             }
@@ -205,7 +234,10 @@ namespace VirtualMirror.Experiences {
         }
 
         private Color Scale(Color c) {
-            return new Color(c.r * Dim, c.g * Dim, c.b * Dim, c.a);
+            return new Color(c.r * Dim * activeTint.r,
+                             c.g * Dim * activeTint.g,
+                             c.b * Dim * activeTint.b,
+                             c.a);
         }
     }
 }

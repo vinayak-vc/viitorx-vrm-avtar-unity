@@ -3045,3 +3045,259 @@ directly, so an unfiltered heel is a footprint appearing two metres from the per
 * **Tighten the hip displacement cap.** Rejected for now: the 77 residual implausible steps are
   dominated by whole-body origin shifts, but three events over 2060 person-frames is not enough
   evidence to retune a constant that was tuned on live data (AGENTS.md §10).
+
+---
+
+## ADR-072 — A crowd experience must be SYMMETRIC IN ITS PARTICIPANTS, because an identity switch cannot be detected
+
+Date: 2026-09-17
+Status: Accepted
+Supersedes: nothing. Extends ADR-067 (experiences are separate scenes over one shared tracking core)
+and ADR-070 (multi-person: detector on the VPU, optimal assignment on the host).
+Report: `F34_CROWD_EXPERIENCES_2026-09-17.md`
+Evidence: `evidence/f34/`
+
+### Context
+
+F-32 put a crowd on the wire and F-33 gave each person a real filter chain. That unlocked a long list
+of multi-person experience ideas, and the question was which of them can honestly be built.
+
+The answer is decided by one measurement. **The live two-person session measured an identity
+migrating between two humans at 0.015 m per frame against a 0.35 m association margin — 97
+datagrams, zero events logged.** Roughly 0.24 m/s: well inside ordinary human movement, three orders
+of magnitude below anything a discontinuity test could catch, and with nothing in the stream marking
+it.
+
+That rules out the obvious defence. "Detect a switch and freeze the score" cannot be written, because
+nothing announces one. It also rules out treating it as rare: it happened in the first live
+two-person session anybody ran.
+
+### Decision
+
+**An experience may only be built on quantities that are symmetric in the people and computed from
+the current frame.** Concretely:
+
+1. **No per-person accumulated state may be presented as a score.** Not points, not a streak, not a
+   hold timer, not a leaderboard. If exchanging two people's labels would change what is on screen,
+   the design is wrong.
+2. **Accumulated state is allowed when it belongs to something that is not a person** — a rally, a
+   circuit, a light's drift, a floor. Those survive a switch because a switch does not touch them.
+3. **Every deliberate exception is named in the class header**, with what a switch costs. F-34 has
+   exactly three, all bounded: colour (two people trade colours), a pass count (one off-by-one in a
+   shared total), and a crown-change chime (one spurious chime that nothing depends on).
+4. **The symmetry claim goes in a test, not a comment.** The two measures a crowd scene may take live
+   in `CrowdMath` as pure static functions for exactly this reason; `FluidField`'s injection is
+   likewise asserted order-independent. A claim like this is too easy to break silently.
+
+A fourth rule follows from the same reasoning but is about presence rather than identity:
+**`PresenceGate` is not a crowd signal.** It answers "is there *a* person", so it never changes in a
+crowd. Arrivals and departures come from `CrowdRoster`, keyed on the track id, and exist to **release
+resources** — a voice, a slot — never to start or stop a score.
+
+### Consequences
+
+* **Nine scenes shipped** and several obvious ones deliberately did not. Head-to-head Bubble Pop,
+  a hold-the-crown timer in Podium and a per-pair streak in Mirror Each Other were all designed out,
+  and the reason is recorded in each file rather than left as an absence.
+* **`SkeletonPose` gained `ResetHistory()` and a 12 m/s mid-hip guard.** It does *not* catch the slow
+  switch above — nothing can — but it does catch the two detectable cases, one of which was a live
+  latent bug: `TrackedStage` snaps its ground offset on first floor acquisition, which moved the
+  staging origin by up to a metre in one frame and produced a whole-body speed spike above every
+  strike gate at once.
+* **`ExperienceBase.ResetsOnNewVisitor` defaults to true**, so the ten single-person scenes are
+  behaviourally untouched. All nine crowd scenes set it false.
+* **Two shipped scenes were migrated onto shared logic** (`FluidField`, `FloorMarks`) rather than
+  having it copied. They need a play-mode smoke test; that is the cost of not having two fluids that
+  drift apart.
+* **The three movement thresholds are now in one place with their caveat attached** and have NOT been
+  re-measured at 16 fps. A test pins the current values so a re-measurement is deliberate.
+* **Nothing here has been on a screen.** The decision is about what is buildable, and what shipped is
+  verified to compile and to satisfy its symmetry claims. §8 of the report lists what the camera has
+  to confirm.
+
+### Alternatives rejected
+
+* **Detect the switch and compensate.** Rejected on the measurement: 0.015 m/frame against a 0.35 m
+  margin with nothing logged. There is no signal to trigger on. Building a detector anyway would have
+  produced a guard that fires never and is believed to work.
+* **Tighten the tracker's association margin so switches stop happening.** Rejected as out of scope
+  and probably a trade rather than a fix — a tighter margin drops identities under occlusion, which
+  is the failure the margin exists to prevent. Worth measuring separately; it does not change what an
+  experience should be built on, because no margin makes a switch *impossible*.
+* **Ship per-player scores and accept the occasional wrong one.** Rejected: the failure is
+  maximally visible and unexplainable to the person it happens to — they watch their points appear on
+  somebody else's counter. An installation cannot apologise.
+* **Key experience state on list position instead of the track id.** Rejected for the reason
+  ADR-071 already gives on the sidecar side: `TrackedStage` re-sorts most-established-first every
+  frame, so position-keyed state cross-contaminates on every frame rather than only on a switch.
+* **Rebuild Bonds as the "constellation" scene.** Rejected: it already is one. Only its private
+  colour table moved out, so a person keeps their colour across every crowd scene.
+* **Migrate `ObjectPlayExperience` onto Pass's ball physics.** Rejected: the divergence is measured,
+  not accidental. Objects grabs by pinch, and hand plausibility falls from 99.1% on a single subject
+  at 1.4 m to 59.9% on the seven-person clip, so a crowd scene cannot use that channel at all.
+
+---
+
+## ADR-073 — Every demonstration scene is in Build Settings, and the menu checks anyway
+
+Date: 2026-09-17
+Status: Accepted
+Extends: ADR-067 (experiences are separate scenes over one shared tracking core)
+Report: `F35_SCENE_LAUNCHER_2026-09-17.md`
+Evidence: `evidence/f35/`
+
+### Context
+
+ADR-067 made every experience its own scene, which is why there are now nineteen of them plus the
+production app. Picking one meant finding it in the Project window and double-clicking it — fine for
+the person who wrote them, useless for anyone demonstrating the system, and impossible in a build.
+
+Two facts shaped the answer:
+
+* **`SceneManager.LoadScene` only works for a scene in Build Settings**, and its failure for one that
+  is not is a console error *after* the click. The symptom is a button that does nothing.
+* **Ten of the nineteen scenes do nothing on their own.** Somebody standing alone in front of Chain
+  or Mirror Each Other sees a scene that appears broken, and the fix is a second person or a
+  different sidecar — neither of which the scene can tell them before they choose it.
+
+### Decision
+
+1. **All 20 launchable scenes are registered in `EditorBuildSettings.asset`, enabled.** This is what
+   makes them loadable at runtime, in the Editor and in a player. They are camera-and-one-GameObject
+   scenes, so the build cost is negligible — but it is a real change to what ships, and it is
+   recorded here so nobody removes them wondering what they are for.
+2. **`License-Verifier` stays at index 0.** The startup scene of a build is unchanged. Opening a
+   build on the menu instead is a separate decision and has not been made.
+3. **The launcher never assumes registration.** Availability is resolved once at startup by walking
+   the build list, and an unregistered row is drawn greyed with the reason. A silent dead button is
+   the one failure a menu must not have.
+4. **Scenes are grouped by HOW MANY PEOPLE they need**, not by theme. That is the only grouping that
+   changes what a visitor should do next.
+5. **The launcher runs the real `TrackedStage` while you choose**, so the sidecar being absent — or
+   being the single-person sender — is visible *before* a scene is picked rather than being
+   discovered inside one and blamed on it.
+6. **`ESC` returns to the menu, from both scene bases, via `LauncherScene` in the SkeletonShow
+   assembly.** Experiences references SkeletonShow and not the reverse, so anything both bases call
+   has to live in the lower assembly. It is a no-op with one warning when no launcher is present, so
+   opening a single scene on its own keeps working exactly as before.
+
+### Consequences
+
+* A demonstration is now: open `Launcher`, click, `ESC`, click. No Project window.
+* **The registration does not travel.** `ProjectSettings/EditorBuildSettings.asset` is gitignored in
+  the Unity project, so the list is per-machine and a clone opens the launcher with every row greyed
+  out. `Virtual Mirror > Register All Scenes in Build Settings` (`Editor/SceneRegistrar.cs`) fixes
+  that in one click; it only ever APPENDS, because index 0 is the startup scene and a convenience
+  must not be able to change what the product does on launch. Un-ignoring the asset was not done: it
+  also carries the startup scene and whatever anyone else has added locally, which is a repo decision
+  rather than one this change should make.
+* **The UDP port is the coupling to watch.** Every scene binds the same fixed port, so both bases now
+  stop tracking *before* `LoadScene` rather than leaving it to `OnDestroy`, and skip the rest of the
+  frame instead of running Update and OnGUI against a disposed provider.
+* **The catalogue is copied, not read.** SkeletonShow cannot see the Experiences types, so titles and
+  one-liners are duplicated in `SceneLauncher`. A unit test pins the column membership and the
+  structural invariants; it cannot pin that a blurb still matches the scene's own `Instruction`. If
+  the two ever disagree, the scene is right.
+* **`ESC` does not return from `Bootstrap`**, which is the production app and not one of the two
+  bases. Listed as a known limit rather than fixed, because wiring a demo key into the product needs
+  its own decision.
+* `Mirror.unity` is deliberately not on the menu: `Bootstrap` loads it additively after wiring
+  settings, avatar and UI, so opening it alone gives an unwired scene.
+
+### Alternatives rejected
+
+* **A canvas-based menu with prefabs.** Rejected for the reason ADR-067 gives for the scenes
+  themselves: a scene asset full of hand-placed UI is not reviewable in a diff and drifts from the
+  code that drives it. IMGUI keeps the scene a camera and one GameObject.
+* **Read each experience's `Title`/`Instruction` by reflection.** Rejected: the menu is in the
+  assembly the experiences reference, not the other way round, so it would mean inverting the
+  dependency or loading types by string — a lot of machinery to avoid copying two strings, and it
+  would fail silently if a type moved.
+* **Put the launcher in the Experiences assembly instead.** Rejected: `SkeletonShowBootstrap` could
+  then not call back into it, so the one scene that is not an `ExperienceBase` would have no way
+  home.
+* **Additive loading, keeping the menu alive underneath.** Rejected: the menu holds a UDP socket on
+  the same fixed port every scene wants, so it would have to stop tracking anyway — and a live menu
+  behind a running experience is a second thing drawing and consuming frames during the measurements
+  everything else here depends on.
+* **Make `Launcher` index 0 so builds open on it.** Rejected as out of scope: it changes what the
+  product does on launch, which is a product decision rather than a demonstration one.
+
+---
+
+## ADR-074 — The demonstration launcher starts the sidecar itself, UNSUPERVISED, and the product does not
+
+Date: 2026-09-17
+Status: Accepted
+Extends: ADR-064 (Unity launches the sidecar itself), ADR-073 (the scene launcher)
+Report: `F36_SIDECAR_BOOT_2026-09-17.md`
+Evidence: `evidence/f36/`
+
+### Context
+
+ADR-073 gave the nineteen demonstration scenes a menu. It did not give them a producer: every scene
+listens on UDP 8899 and none starts one, so the whole set needed a terminal open before it did
+anything. Only `Bootstrap.unity` auto-started a sidecar, and that is the avatar application.
+
+The obvious fix — point `AppBootstrap` at the launcher — fails on three counts. It loads the scene
+**additively** and then builds the avatar session against an `AvatarRoot` the launcher does not have;
+it **binds UDP 8899 itself**, so every scene the launcher then opens would fail to receive; and it
+survives scene loads with its camera and UI, which fight `ShowStage.BuildCamera` over `Camera.main`.
+
+The less obvious fix — reuse `SidecarProcessLauncher` as-is — fails on one, and it is decisive.
+`sidecar_supervisor.py` builds its child command from a fixed flag set (`--portrait`,
+`--portrait-dir`, `--subpixel-bits`, `--seconds`) that **only `wholebody_udp_sender.py` accepts**, and
+waits on a readiness contract only that sender emits. So the existing auto-start can produce the
+single-person stream and nothing else — a working ONE PERSON column and a dead TWO OR MORE column.
+
+### Decision
+
+1. **A separate boot scene, `Scenes/SidecarBoot.unity`, at Build Settings index 1.** Index 0 stays
+   `License-Verifier`. It owns exactly one thing — the sidecar process — and is `DontDestroyOnLoad`
+   only so that process outlives every scene switch. **It binds no UDP socket**, because each scene
+   binds 8899 for itself and a second bind is the failure this exists to remove.
+2. **It runs `multiperson_udp_sender.py` DIRECTLY, without the supervisor.** That sender is backward
+   compatible — it publishes the most-established person in the single-person shape, hands included —
+   so ONE sender serves the single-person scenes, the crowd scenes and the avatar app.
+3. **The demonstration path therefore has NO WATCHDOG, and the product keeps one.** The change to
+   `SidecarProcessLauncher` is additive: `DirectScript` defaults to empty, so `AppBootstrap` gets the
+   supervisor exactly as before. A unit test pins that default, because a silent regression there
+   would take the product's restart-on-crash out without anything failing.
+4. **Never a second producer.** Before spawning, the boot scene listens on the destination port for
+   400 ms; datagrams arriving mean somebody is already producing and it attaches instead. This tests
+   the condition itself rather than a proxy like a lock file, which a hand-started sender never
+   creates. The supervisor's lock port is still honoured for the supervised case.
+5. **`AppBootstrap` is untouched**, and its `mirrorSceneName` code default was reverted to `"Mirror"`.
+   The value is `[SerializeField]`, so the scene's serialized `Mirror` was winning anyway — but the
+   changed default would have made any NEWLY added `AppBootstrap` load a scene with no `AvatarRoot`.
+
+### Consequences
+
+* The whole installation is now: press Play on `SidecarBoot`. Sidecar up, menu, pick anything, ESC
+  back. No terminal.
+* **A sidecar crash is not recovered** on this path. It stays dead until play mode is restarted. This
+  is the one real regression against the supervised path and it is accepted only because the product
+  does not take it.
+* `SidecarProcessLauncher` now has two modes. Its orphan prevention — the kill-on-close job object and
+  the `taskkill /F /T` of the whole tree — applies to both, which is why reusing it beat writing a
+  second launcher.
+* `SceneRegistrar` places `SidecarBoot` at index 1 the first time it adds it, rather than appending.
+  It still never touches index 0 and never moves an entry that is already registered; nothing here
+  loads a scene by build index.
+* The boot adds a 400 ms probe when no producer is running. Paid once.
+
+### Alternatives rejected
+
+* **Teach `sidecar_supervisor.py` to supervise the multi-person sender.** The better long-term answer
+  and rejected for now as the wrong size: it needs flag mapping plus the readiness/heartbeat contract,
+  and it changes the Python production path that F-20B measured 35/35. Worth doing if the
+  demonstration path ever needs restart-on-crash.
+* **Boot scene on the supervised single-person sender.** Keeps the watchdog and needs no Python work,
+  and leaves the ten multi-person scenes dead unless somebody starts their sender by hand — which is
+  the problem this ADR exists to remove.
+* **Point `AppBootstrap.mirrorSceneName` at the launcher.** Rejected on the three counts in Context.
+* **A generic `--extra-args` passthrough on the supervisor.** Rejected for the reason the supervisor's
+  own comment already gives: a supervisor that forwards arbitrary strings into a supervised process
+  can also forward `--seconds 30`, and then the thing under test is not the thing that was configured.
+* **Have the launcher itself start the sidecar.** Rejected: the launcher is torn down by the first
+  scene it loads, so the sidecar would die with it. Something outside the scene graph has to own it.

@@ -47,8 +47,9 @@ namespace VirtualMirror.Experiences {
         private const float PlayExtent = 2.6f;
 
         /// <summary>Below this a strike is a touch, not a hit. Without it, resting a hand against a
-        /// ball slowly pushes it across the room, which feels broken rather than gentle.</summary>
-        private const float MinStrikeSpeed = 0.55f;
+        /// ball slowly pushes it across the room, which feels broken rather than gentle. Owned by
+        /// <see cref="ExperienceTuning"/> since F-34 - see there for the frame-rate caveat.</summary>
+        private const float MinStrikeSpeed = ExperienceTuning.TouchSpeed;
 
         /// <summary>How much of the joint's speed is transferred. Above 1 so a deliberate swing
         /// sends an object properly flying — a 1:1 transfer feels oddly dead, because a real hand

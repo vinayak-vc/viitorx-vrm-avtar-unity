@@ -52,27 +52,17 @@ namespace VirtualMirror.Experiences {
         /// <summary>One line per PAIR, so N people need N*(N-1)/2 bonds. At the cap that is 28.</summary>
         private const int MaxBonds = MaxBodies * (MaxBodies - 1) / 2;
 
-        /// <summary>Per-person colours. Deliberately far apart in hue: two people whose colours are
-        /// similar cannot be told apart at a glance, which defeats the whole point.</summary>
-        private static readonly Color[] PersonColours = {
-            new Color(0.25f, 1.90f, 1.10f, 1f),   // cyan
-            new Color(2.30f, 0.80f, 0.25f, 1f),   // orange
-            new Color(0.70f, 0.60f, 2.40f, 1f),   // violet
-            new Color(0.40f, 2.10f, 0.50f, 1f),   // green
-            new Color(2.40f, 0.40f, 1.30f, 1f),   // magenta
-            new Color(2.20f, 2.00f, 0.40f, 1f),   // yellow
-            new Color(0.30f, 1.20f, 2.40f, 1f),   // blue
-            new Color(2.40f, 1.60f, 1.40f, 1f),   // warm white
-        };
-
         private BodyRenderer[] renderers;
         private LineRenderer[] bonds;
         private Material[] bondMaterials;
         private Transform[] touchFlares;
         private Material[] touchFlareMaterials;
 
-        private readonly Dictionary<int, int> colourOfId = new Dictionary<int, int>();
-        private int nextColour;
+        /// <summary>F-34: the per-id colour table moved to <see cref="CrowdPalette"/> so that a
+        /// person keeps the same colour in every crowd scene, not just this one. Same colours, same
+        /// assignment order, same eviction rule - only the ownership changed.</summary>
+        private readonly CrowdPalette colours = new CrowdPalette();
+
         private int touchCount;
         private float touchCooldown;
         private float closestPair = -1f;
@@ -117,27 +107,14 @@ namespace VirtualMirror.Experiences {
 
         protected override void ResetExperience() {
             touchCount = 0;
-            colourOfId.Clear();
-            nextColour = 0;
+            colours.Clear();
         }
 
         // A colour is assigned per track id and remembered, so a person keeps their colour for as
         // long as the tracker keeps their identity. Assigning by list POSITION instead would make
         // everyone's colour change whenever anybody joined or left, which reads as a bug.
         private Color ColourFor(int id) {
-            int index;
-            if (!colourOfId.TryGetValue(id, out index)) {
-                index = nextColour % PersonColours.Length;
-                nextColour = nextColour + 1;
-                colourOfId[id] = index;
-                if (colourOfId.Count > 64) {
-                    // A long unattended session would otherwise remember every visitor who ever
-                    // stood here. Ids are never reused, so old entries can only be dead.
-                    colourOfId.Clear();
-                    colourOfId[id] = index;
-                }
-            }
-            return PersonColours[index];
+            return colours.ColourFor(id);
         }
 
         protected override void Play(float deltaSeconds) {

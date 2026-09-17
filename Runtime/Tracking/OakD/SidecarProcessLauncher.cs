@@ -130,6 +130,12 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             List<string> problems = SidecarPaths.Validate(paths);
+            if (!string.IsNullOrEmpty(options.DirectScript)) {
+                string direct = ResolveDirectScript(paths);
+                if (!System.IO.File.Exists(direct)) {
+                    problems.Add("Sender script is missing: " + direct);
+                }
+            }
             if (problems.Count > 0) {
                 string detail = string.Join(" | ", problems.ToArray());
                 SetState(SidecarLaunchState.Failed, detail);
@@ -183,7 +189,9 @@ namespace VirtualMirror.Tracking.OakD {
             AssignToJobObject(childPid);
 
             SetState(SidecarLaunchState.Starting, string.Empty);
-            Info("sidecar supervisor started, pid " + childPid);
+            Info((string.IsNullOrEmpty(options.DirectScript)
+                  ? "sidecar supervisor started, pid "
+                  : "sidecar started UNSUPERVISED (no watchdog), pid ") + childPid);
             return true;
         }
 
@@ -193,6 +201,9 @@ namespace VirtualMirror.Tracking.OakD {
         /// project and we already know the answer.
         /// </summary>
         private string BuildArguments(SidecarPathSet paths) {
+            if (!string.IsNullOrEmpty(options.DirectScript)) {
+                return BuildDirectArguments(paths);
+            }
             StringBuilder sb = new StringBuilder();
             sb.Append("-u ").Append(Quote(paths.SupervisorScript));
             sb.Append(" --python ").Append(Quote(paths.PythonExe));
@@ -213,6 +224,38 @@ namespace VirtualMirror.Tracking.OakD {
                 sb.Append(" ").Append(options.ExtraArguments);
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Command line for the DIRECT path. Deliberately minimal: only the three flags every sender
+        /// here accepts, plus whatever the caller named explicitly. The supervisor's portrait and
+        /// subpixel flags are absent because the multi-person sender does not take them - it handles
+        /// portrait internally - and passing an unrecognised flag makes Python exit before the camera
+        /// is ever opened.
+        /// </summary>
+        private string BuildDirectArguments(SidecarPathSet paths) {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("-u ").Append(Quote(ResolveDirectScript(paths)));
+            sb.Append(" --host ").Append(options.Host);
+            sb.Append(" --port ").Append(options.UdpPort);
+            sb.Append(" --model ").Append(Quote(paths.ModelFile));
+            if (!string.IsNullOrEmpty(options.DirectArguments)) {
+                sb.Append(" ").Append(options.DirectArguments);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>The direct script as an absolute path: taken as-is when rooted, otherwise
+        /// resolved against the sidecar root.</summary>
+        public string ResolveDirectScript(SidecarPathSet paths) {
+            string script = options.DirectScript;
+            if (string.IsNullOrEmpty(script)) {
+                return string.Empty;
+            }
+            if (System.IO.Path.IsPathRooted(script)) {
+                return script.Replace('\\', '/');
+            }
+            return (paths.Root.TrimEnd('/') + "/" + script).Replace('\\', '/');
         }
 
         /// <summary>
@@ -532,6 +575,30 @@ namespace VirtualMirror.Tracking.OakD {
         public string PortraitDirection = "ccw";
         public int SubpixelBits = 3;
         public string ExtraArguments = string.Empty;
+
+        /// <summary>
+        /// F-36 — run this sender DIRECTLY instead of going through the supervisor. Empty (the
+        /// default) keeps the supervised production path exactly as it was.
+        ///
+        /// WHY THIS EXISTS AT ALL, because bypassing a tested watchdog needs a reason. The supervisor
+        /// builds its child command from a fixed set of flags — `--portrait`, `--portrait-dir`,
+        /// `--subpixel-bits`, `--seconds` — that only `wholebody_udp_sender.py` accepts, and it waits
+        /// on a readiness contract only that sender emits. `multiperson_udp_sender.py` takes none of
+        /// them, so it cannot be supervised without changing the supervisor, which is the Python
+        /// production path. The demonstration launcher needs the multi-person stream and does not
+        /// need restart-on-crash, so it takes the direct route and says so.
+        ///
+        /// Everything else this class does still applies — the kill-on-close job object, the
+        /// taskkill of the whole tree, path validation, the log tag. Those are what make it worth
+        /// reusing rather than writing a second launcher.
+        ///
+        /// A path relative to the sidecar root, or absolute.
+        /// </summary>
+        public string DirectScript = string.Empty;
+
+        /// <summary>Extra arguments for <see cref="DirectScript"/>, appended after host/port/model.
+        /// Ignored unless DirectScript is set.</summary>
+        public string DirectArguments = string.Empty;
         /// <summary>Overrides the model location; empty means use the packaged path.</summary>
         public string ModelPathOverride = string.Empty;
     }

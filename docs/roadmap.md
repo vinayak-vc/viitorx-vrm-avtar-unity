@@ -762,10 +762,14 @@ cost). Lower the noise floor and the deadzone can come down honestly. It is a de
                                             refuses a hand-off, this one tests whether the
                                             multi-person tracker keeps two ids apart. Run them in
                                             the same booking - the same two people, ~45 min.
-0b. OPEN THE SCENES AND LOOK AT THEM     <- still true for F-30/F-31/F-32/F-33. Nothing in the
-                                            demonstration branch has EVER been rendered on a
+0b. OPEN THE SCENES AND LOOK AT THEM     <- still true for F-30/F-31/F-32/F-33/F-34. Nothing in
+                                            the demonstration branch has EVER been rendered on a
                                             screen by a human. Every geometric and numeric claim
-                                            is tested; no VISUAL claim is.
+                                            is tested; no VISUAL claim is. F-34 adds NINE more
+                                            scenes to look at, and MIGRATED two that already
+                                            worked (Fluid, Footprints) onto shared logic - start
+                                            with those two, because they are the only ones this
+                                            change could have broken.
 1. F-21 LIVE TWO-PERSON SESSION          <- blocks "target ownership: PASS". Instrument is ready.
                                             Needs TWO people, ~30 min. CLEAR CHAIRS FIRST: the
                                             tracker was seen locking an empty office chair at

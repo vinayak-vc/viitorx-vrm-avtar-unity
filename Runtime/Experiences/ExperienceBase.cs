@@ -66,6 +66,16 @@ namespace VirtualMirror.Experiences {
         protected Transform Root { get; private set; }
         protected ILogService Log { get; private set; }
 
+        /// <summary>F-34 - arrivals and departures BY TRACK ID. The presence gate cannot report
+        /// these: it answers "is there a person", so in a crowd it never changes.</summary>
+        protected CrowdRoster Roster {
+            get {
+                return roster;
+            }
+        }
+
+        private readonly CrowdRoster roster = new CrowdRoster();
+
         private GUIStyle hudStyle;
         private GUIStyle titleStyle;
         private float smoothedFps = 60f;
@@ -91,6 +101,30 @@ namespace VirtualMirror.Experiences {
         /// <summary>Reset whatever this experience counts. Bound to R, and called automatically when
         /// a new person arrives — a visitor must never inherit the previous visitor's score.</summary>
         protected virtual void ResetExperience() {
+        }
+
+        /// <summary>
+        /// F-34 - whether a new VISITOR wipes this experience.
+        ///
+        /// True for the single-person scenes, which is right: an inherited score is the first thing
+        /// anybody notices. A CROWD scene overrides it to false, because with three people already
+        /// playing the fourth walking in must not wipe the other three - and because a crowd scene
+        /// that keeps no per-visitor state has nothing to wipe in the first place, which is exactly
+        /// what makes it safe against an identity switch. Use the two hooks below instead.
+        /// </summary>
+        protected virtual bool ResetsOnNewVisitor {
+            get {
+                return true;
+            }
+        }
+
+        /// <summary>A track id appeared. For ALLOCATING something to a person - a voice, a slot.
+        /// Not for starting a score: see <see cref="CrowdRoster"/>.</summary>
+        protected virtual void OnPersonArrived(int id) {
+        }
+
+        /// <summary>A track id went away. For RELEASING what was allocated to them.</summary>
+        protected virtual void OnPersonLeft(int id) {
         }
 
         /// <summary>Per-experience keys, handled after the shared ones.</summary>
@@ -142,11 +176,19 @@ namespace VirtualMirror.Experiences {
             }
         }
 
+        /// <summary>Set once the launcher has been asked for. The scene is torn down at the end of
+        /// the frame; skipping the rest of it keeps an experience from scoring or drawing against a
+        /// pose whose provider has already been released.</summary>
+        private bool leaving;
+
         private void Update() {
             float dt = Time.deltaTime;
             smoothedFps = Mathf.Lerp(smoothedFps, 1f / Mathf.Max(1e-4f, dt),
                                      1f - Mathf.Exp(-dt / 0.5f));
             ReadInput();
+            if (leaving) {
+                return;
+            }
 
             // Tracking FIRST, then the experience reads it. The whole reason TrackedStage is a plain
             // class rather than a component: this order is in the code, not in a project setting.
@@ -159,16 +201,42 @@ namespace VirtualMirror.Experiences {
             if (Stage.Presence.Changed) {
                 Audio.Play(Stage.Presence.Present ? SoundCue.Arrive : SoundCue.Depart, 0, 0.5f);
             }
-            if (Stage.IsLive && !wasLive && Stage.Presence.Changed) {
+            roster.Update(Stage.Bodies);
+            if (ResetsOnNewVisitor && Stage.IsLive && !wasLive && Stage.Presence.Changed) {
                 // A new person just walked up. Whatever the last one scored is theirs, not this
                 // visitor's, and an inherited score is the first thing anybody notices.
                 ResetExperience();
+            }
+            int arrivedAt = 0;
+            while (arrivedAt < roster.Arrived.Count) {
+                OnPersonArrived(roster.Arrived[arrivedAt]);
+                arrivedAt = arrivedAt + 1;
+            }
+            int leftAt = 0;
+            while (leftAt < roster.Left.Count) {
+                OnPersonLeft(roster.Left[leftAt]);
+                leftAt = leftAt + 1;
             }
 
             Play(dt);
         }
 
         private void ReadInput() {
+            // F-35 - back to the menu, from every experience, on one key. Nothing else is read this
+            // frame: the scene is about to be torn down and a toggle applied on the way out would be
+            // lost anyway. Does nothing when there is no launcher in Build Settings, so a scene
+            // opened on its own in the Editor behaves exactly as it did before.
+            if (LauncherScene.ReturnRequested() && LauncherScene.IsAvailable) {
+                // Release the UDP socket here rather than leaving it to OnDestroy: the scene being
+                // opened binds the same fixed port.
+                if (Stage != null) {
+                    Stage.Stop();
+                }
+                leaving = LauncherScene.Load();
+                if (leaving) {
+                    return;
+                }
+            }
             if (Input.GetKeyDown(KeyCode.H)) {
                 useHumanizedSkeleton = !useHumanizedSkeleton;
                 Stage.UseHumanized = useHumanizedSkeleton;
@@ -193,6 +261,9 @@ namespace VirtualMirror.Experiences {
         }
 
         private void OnGUI() {
+            if (leaving) {
+                return;
+            }
             if (hudStyle == null) {
                 hudStyle = new GUIStyle(GUI.skin.label);
                 hudStyle.fontSize = 15;
@@ -223,7 +294,8 @@ namespace VirtualMirror.Experiences {
                       + "      " + smoothedFps.ToString("F0") + " fps",
                       hudStyle);
             GUI.Label(new Rect(16f, y + 22f, 1600f, 22f),
-                      "R reset      H humanized      A attract      G ground      M mute" + ExtraKeyHelp(),
+                      "R reset      H humanized      A attract      G ground      M mute"
+                      + ExtraKeyHelp() + LauncherScene.KeyHelp(),
                       hudStyle);
         }
 
