@@ -242,7 +242,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: VirtualMirror.Experiences::VirtualMirror.Experiences.PodiumExperience
   udpPort: 8899
   poseInterpolationDelayMs: 40
-  flipX: 0
+  flipX: 1
   flipY: 1
   flipZ: 0
   bodyOrigin: {x: 0, y: 0.95, z: 0}

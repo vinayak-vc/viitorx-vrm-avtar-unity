@@ -23,6 +23,13 @@ namespace VirtualMirror.Experiences {
         private const float BaseWidth = 0.016f;
         private const float JointSize = 0.032f;
 
+        /// <summary>Floor-pool radius in metres. Roughly a person's stance, so it reads as where
+        /// they are standing rather than as a target painted on the floor.</summary>
+        private const float GroundPoolRadius = 0.26f;
+
+        /// <summary>How far below the body's own brightness the pool sits.</summary>
+        private const float GroundPoolDim = 0.25f;
+
         private readonly SkeletonShowPalette palette;
         private Transform root;
         private LineRenderer[] bones;
@@ -40,6 +47,15 @@ namespace VirtualMirror.Experiences {
         /// <summary>Draw the hands' 21 landmarks too, when they are tracked.</summary>
         public bool ShowHands;
 
+        /// <summary>Draw the floor pool that shows where this body is STANDING. See
+        /// <see cref="ShowStage.GroundPool"/> for why depth needs its own object rather than a
+        /// colour or a width. Off for a body that is not a person standing on the floor — an echo,
+        /// a ghost, a recorded replay — because a pool asserts "somebody is here".</summary>
+        public bool ShowGroundPool = true;
+
+        private Transform groundPool;
+        private Material groundPoolMaterial;
+
         private LineRenderer[] leftHandBones;
         private LineRenderer[] rightHandBones;
         private Material handMaterial;
@@ -52,6 +68,7 @@ namespace VirtualMirror.Experiences {
             root = new GameObject("Body").transform;
             root.SetParent(parent, false);
             ShowHands = withHands;
+            groundPool = ShowStage.GroundPool(root, palette, out groundPoolMaterial);
 
             int boneCount = SkeletonPose.Bones.Length / 2;
             bones = new LineRenderer[boneCount];
@@ -155,6 +172,36 @@ namespace VirtualMirror.Experiences {
                 }
                 i = i + 1;
             }
+
+            UpdateGroundPool(pose);
+        }
+
+        /// <summary>
+        /// Put the floor pool where this body is standing.
+        ///
+        /// ANCHORED ON THE MID-HIP, not on the feet. The feet are the truer contact point and much
+        /// the noisier one - they leave the frame, they get occluded by furniture, and a pool that
+        /// jumps when an ankle drops out draws the eye to the failure rather than to the person. The
+        /// hips are the most reliably tracked pair on the body and are what the whole pose is
+        /// authored around, so the pool sits under the body's own origin.
+        /// </summary>
+        private void UpdateGroundPool(SkeletonPose pose) {
+            if (groundPool == null) {
+                return;
+            }
+            bool show = ShowGroundPool
+                        && pose.Present[(int)JointId.LeftHip] && pose.Present[(int)JointId.RightHip];
+            groundPool.gameObject.SetActive(show);
+            if (!show) {
+                return;
+            }
+            Vector3 ground = 0.5f * (pose.World[(int)JointId.LeftHip]
+                                     + pose.World[(int)JointId.RightHip]);
+            ShowStage.PlaceGroundPool(groundPool, ground, GroundPoolRadius,
+                                      pose.HasFloor ? pose.FloorY : 0f);
+            // A quarter of the body's brightness: an anchor the eye finds when it looks for it, and
+            // never the thing it lands on first.
+            SkeletonShowPalette.SetColour(groundPoolMaterial, Scale(palette.Cool) * GroundPoolDim);
         }
 
         /// <summary>
@@ -167,7 +214,13 @@ namespace VirtualMirror.Experiences {
         /// the same reason. It also avoids having to store and replay a velocity history purely to
         /// colour something the viewer is meant to read as "the past".
         /// </summary>
+        /// <summary>Raw bodies get NO floor pool. A pool says "a person is standing here", and the
+        /// callers of this overload are echoes, ghosts and recorded replays - things that are
+        /// deliberately not a person standing anywhere.</summary>
         public void RenderRaw(Vector3[] world, float[] confidence, Color tint, float widthScale) {
+            if (groundPool != null) {
+                groundPool.gameObject.SetActive(false);
+            }
             if (root == null) {
                 return;
             }

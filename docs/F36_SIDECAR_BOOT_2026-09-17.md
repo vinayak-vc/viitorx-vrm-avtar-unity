@@ -5,6 +5,14 @@ Decision: **ADR-074**
 Evidence: [`docs/evidence/f36/`](evidence/f36/)
 Depends on: F-35 (the launcher), ADR-064 (Unity launches the sidecar itself)
 
+> ⚠️ **Partly superseded the same day by ADR-075 (F-37 in `tasks.md`).** The scene topology in this
+> report stands. Its central claim — that `sidecar_supervisor.py` cannot run the multi-person sender,
+> so the sender is launched DIRECTLY and the demonstration path knowingly has no watchdog — is no
+> longer true and should not be carried forward. The supervisor now builds its child command from
+> the sender it is given, both bootstraps launch supervised, and `SidecarBootstrap` no longer holds
+> the single-instance lock by hand. What forced the correction: with `--show` on, the preview
+> window bound ESC to quitting the producer, and an unsupervised producer never came back.
+
 ---
 
 ## 1. What shipped
@@ -14,11 +22,12 @@ opens the launcher. Index 0 (`License-Verifier`) is untouched.
 
 ```text
 Runtime/SkeletonShow/SidecarBootstrap.cs        NEW  starts the sidecar, then loads Launcher
+Runtime/Tracking/OakD/SidecarSingleInstanceLock NEW  "somebody owns the sidecar", one definition
 Runtime/Tracking/OakD/SidecarProcessLauncher.cs +    DirectScript / DirectArguments
 Runtime/SkeletonShow/SceneLauncher.cs           +    sidecar status in the footer
 Runtime/Bootstrap/AppBootstrap.cs               ~    mirrorSceneName default back to "Mirror"
 Editor/SceneRegistrar.cs                        +    puts SidecarBoot at index 1 on a fresh clone
-Tests/EditMode/SidecarDirectLaunchF36Tests.cs   NEW  6/6
+Tests/EditMode/SidecarDirectLaunchF36Tests.cs   NEW  10/10
 Scenes/SidecarBoot.unity                        NEW
 ProjectSettings/EditorBuildSettings.asset       +    SidecarBoot at index 1
 ```
@@ -89,7 +98,44 @@ a scene with no `AvatarRoot`.
 
 ---
 
-## 4. It never starts a second producer
+## 4. `Bootstrap.unity` is NOT superseded
+
+It is the product. The two scenes do different jobs and both are needed:
+
+| | `SidecarBoot` | `Bootstrap` |
+|---|---|---|
+| What it is | demonstration entry point | the shipping VRM mirror application |
+| Owns | the sidecar process, nothing else | settings, avatar, retargeting, IK, mirror UI, its own tracking |
+| Sidecar | multi-person, **direct**, no watchdog | single-person, **supervised**, watchdog + crash-loop detection |
+| Loads | `Launcher` (single) | `Mirror` (additive) |
+| In the menu | not listed | PRODUCTION column |
+
+`SidecarBoot` cannot replace `Bootstrap` — it builds no avatar and no UI. `Bootstrap` cannot replace
+`SidecarBoot` — §3.
+
+### The defect that pairing them exposed
+
+`Bootstrap.unity` ships with `useOakUdpTracking: 1`, and `autoStartSidecar` defaults to true. So
+launching the avatar app from the launcher's PRODUCTION column made `AppBootstrap` start **its own
+supervised sidecar** — while the boot scene's multi-person one was still running. Two producers on
+UDP 8899.
+
+`SidecarProcessLauncher` already guards against this by probing the supervisor's single-instance lock
+port before spawning. The hole was that the boot scene **held no lock**: it runs the sender directly
+and never starts a supervisor, so the port read free.
+
+Fixed by making the lock something that can be **held** as well as probed —
+`SidecarSingleInstanceLock`, now the single definition used by both sides. The boot scene takes it
+when (and only when) it actually spawned a sidecar, and releases it on teardown; `AppBootstrap` sees
+it held and attaches instead of spawning. Four unit tests pin the behaviour, including that releasing
+lets the next run take it — a lock that outlived its owner would block every subsequent start.
+
+Launching the avatar app from the menu now works properly: it attaches to the running multi-person
+sidecar, which it can, because that sender publishes the primary person in the single-person shape.
+
+---
+
+## 5. It never starts a second producer
 
 Two producers on one UDP port interleave poses from different sessions, which reads as violent jitter
 rather than as a configuration error. Before spawning anything, `SidecarBootstrap` **listens on the
@@ -106,11 +152,11 @@ the next run.
 
 ---
 
-## 5. What was verified, and what was not
+## 6. What was verified, and what was not
 
 **Compile — 0 errors** across `VirtualMirror.Tracking`, `SkeletonShow`, `Editor` and `Tests`.
 
-**Unit tests — 6/6 new, 187 passed overall.** The six failures are the pre-existing
+**Unit tests — 10/10 new, 191 passed overall.** The six failures are the pre-existing
 `SidecarPathsTests`, which need `Application.dataPath`.
 
 The new tests deliberately spend most of their effort on the **old** path: that `DirectScript`
@@ -129,13 +175,15 @@ model. That is the proof the flag set is accepted; the supervisor's set would no
 2. **Check the launcher footer** shows `sidecar: …` — the status line is new and has never rendered.
 3. **Launch a scene from each column and ESC back**, confirming the sidecar survives the round trip
    and no scene fails to bind 8899.
-4. **Start a sender by hand first, then press Play**, and confirm the console says *attaching to it
+4. **Launch `Bootstrap` from the PRODUCTION column** and confirm the console says *attaching to it
+   instead of starting a second one* — that is the §4 fix, and it has only been unit-tested.
+5. **Start a sender by hand first, then press Play**, and confirm the console says *attaching to it
    instead of starting a second one* rather than spawning a rival producer.
-5. **Exit play mode and confirm no orphan `python.exe`** is left holding the camera.
+6. **Exit play mode and confirm no orphan `python.exe`** is left holding the camera.
 
 ---
 
-## 6. Known limits
+## 7. Known limits
 
 * **No watchdog on this path** — §2.
 * **ESC does not return from `Bootstrap`**, unchanged from F-35. Launching the avatar app from the

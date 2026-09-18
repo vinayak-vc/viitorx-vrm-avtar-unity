@@ -31,7 +31,7 @@ namespace VirtualMirror.Experiences {
         [Tooltip("P1-3 presentation delay in ms, as in the mirror app. 0 = latest-wins.")]
         [SerializeField] protected float poseInterpolationDelayMs = 40f;
         [Tooltip("Mirror the subject left/right, as a real mirror does.")]
-        [SerializeField] protected bool flipX;
+        [SerializeField] protected bool flipX = true;
         [Tooltip("Landmark space is Y-down; the scene is Y-up. Leave on.")]
         [SerializeField] protected bool flipY = true;
         [SerializeField] protected bool flipZ;

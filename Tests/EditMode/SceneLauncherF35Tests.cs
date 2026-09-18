@@ -120,6 +120,69 @@ namespace VirtualMirror.Tests {
             Assert.AreEqual("Mirror", LauncherScene.NameOf("Assets/My.Game/Scenes/Mirror.unity"));
         }
 
+        // ------------------------------------------------ which sender each scene needs (F-38)
+
+        [Test]
+        public void EverySingleAndProductionSceneAsksForTheSinglePersonSender() {
+            // The whole point: a one-person scene must not be served by the crowd sender. That
+            // costs it the dedicated pipeline — F-21 ownership and the measured filter chain — for
+            // a crowd it cannot show, which is the quality regression this classification fixes.
+            foreach (SceneLauncher.Entry entry in SceneLauncher.SinglePersonScenes) {
+                Assert.AreEqual(SceneLauncher.TrackingNeed.SinglePerson,
+                                SceneLauncher.TrackingNeedFor(entry.Scene), entry.Scene);
+            }
+            foreach (SceneLauncher.Entry entry in SceneLauncher.ProductionScenes) {
+                Assert.AreEqual(SceneLauncher.TrackingNeed.SinglePerson,
+                                SceneLauncher.TrackingNeedFor(entry.Scene), entry.Scene);
+            }
+        }
+
+        [Test]
+        public void EveryCrowdSceneAsksForTheMultiPersonSender() {
+            foreach (SceneLauncher.Entry entry in SceneLauncher.MultiPersonScenes) {
+                Assert.AreEqual(SceneLauncher.TrackingNeed.MultiPerson,
+                                SceneLauncher.TrackingNeedFor(entry.Scene), entry.Scene);
+            }
+        }
+
+        [Test]
+        public void TheLauncherAndAnythingUnlistedChangeNothing() {
+            // THE ONE THAT KEEPS THE MENU USABLE. Launcher is passed through on every navigation;
+            // if it resolved to either sender, backing out of a scene would restart the sidecar and
+            // cost ~15 s of no tracking every single time.
+            Assert.AreEqual(SceneLauncher.TrackingNeed.Unspecified,
+                            SceneLauncher.TrackingNeedFor(LauncherScene.SceneName));
+            Assert.AreEqual(SceneLauncher.TrackingNeed.Unspecified,
+                            SceneLauncher.TrackingNeedFor("Bootstrap"));
+            Assert.AreEqual(SceneLauncher.TrackingNeed.Unspecified,
+                            SceneLauncher.TrackingNeedFor("License-Verifier"));
+            Assert.AreEqual(SceneLauncher.TrackingNeed.Unspecified,
+                            SceneLauncher.TrackingNeedFor(string.Empty));
+            Assert.AreEqual(SceneLauncher.TrackingNeed.Unspecified,
+                            SceneLauncher.TrackingNeedFor(null));
+        }
+
+        [Test]
+        public void TheClassificationIsExactlyTheCatalogue() {
+            // A scene added to a column but not reachable here would silently get whichever sender
+            // happened to be running.
+            foreach (SceneLauncher.Entry entry in All()) {
+                Assert.AreNotEqual(SceneLauncher.TrackingNeed.Unspecified,
+                                   SceneLauncher.TrackingNeedFor(entry.Scene),
+                                   entry.Scene + " is in the menu but has no tracking requirement");
+            }
+        }
+
+        [Test]
+        public void SceneNamesAreMatchedExactly() {
+            // Case and near-misses must not resolve: Unity scene names are exact, and a fuzzy match
+            // here would start the wrong producer for a scene that merely looks familiar.
+            Assert.AreEqual(SceneLauncher.TrackingNeed.Unspecified,
+                            SceneLauncher.TrackingNeedFor("posematch"));
+            Assert.AreEqual(SceneLauncher.TrackingNeed.Unspecified,
+                            SceneLauncher.TrackingNeedFor("PoseMatch2"));
+        }
+
         private static IEnumerable<SceneLauncher.Entry> All() {
             foreach (SceneLauncher.Entry entry in SceneLauncher.SinglePersonScenes) {
                 yield return entry;

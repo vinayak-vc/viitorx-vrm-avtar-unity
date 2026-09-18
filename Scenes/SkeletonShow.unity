@@ -242,7 +242,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: VirtualMirror.SkeletonShow::VirtualMirror.SkeletonShow.SkeletonShowBootstrap
   udpPort: 8899
   poseInterpolationDelayMs: 40
-  flipX: 0
+  flipX: 1
   flipY: 1
   flipZ: 0
   useHumanizedSkeleton: 1

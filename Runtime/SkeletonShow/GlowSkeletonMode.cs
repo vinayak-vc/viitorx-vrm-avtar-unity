@@ -29,6 +29,13 @@ namespace VirtualMirror.SkeletonShow {
         private Material[] boneMaterials;
         private Material[] jointMaterials;
         private TrailRenderer[] trails;
+        private Transform groundPool;
+        private Material groundPoolMaterial;
+
+        /// <summary>Floor-pool radius in metres, and how far below the body's brightness it
+        /// sits. See <see cref="ShowStage.GroundPool"/> for why depth gets its own object.</summary>
+        private const float GroundPoolRadius = 0.26f;
+        private const float GroundPoolDim = 0.25f;
 
         public string Name {
             get {
@@ -46,6 +53,7 @@ namespace VirtualMirror.SkeletonShow {
             root = new GameObject("Mode_GlowSkeleton").transform;
             root.SetParent(parent, false);
             palette = sharedPalette;
+            groundPool = ShowStage.GroundPool(root, palette, out groundPoolMaterial);
 
             int boneCount = SkeletonPose.Bones.Length / 2;
             bones = new LineRenderer[boneCount];
@@ -114,6 +122,8 @@ namespace VirtualMirror.SkeletonShow {
             bones = null;
             joints = null;
             trails = null;
+            groundPool = null;
+            groundPoolMaterial = null;
             boneMaterials = null;
             jointMaterials = null;
         }
@@ -179,6 +189,23 @@ namespace VirtualMirror.SkeletonShow {
                     trails[i].Clear();
                 }
                 i = i + 1;
+            }
+
+            // WHERE THIS BODY IS STANDING. Anchored on the mid-hip rather than the feet: the feet are
+            // the truer contact point and much the noisier one, and a pool that jumps when an ankle
+            // drops out draws the eye to the failure instead of to the person.
+            if (groundPool != null) {
+                bool standing = pose.Present[(int)JointId.LeftHip]
+                                && pose.Present[(int)JointId.RightHip];
+                groundPool.gameObject.SetActive(standing);
+                if (standing) {
+                    Vector3 ground = 0.5f * (pose.World[(int)JointId.LeftHip]
+                                             + pose.World[(int)JointId.RightHip]);
+                    ShowStage.PlaceGroundPool(groundPool, ground, GroundPoolRadius,
+                                              pose.HasFloor ? pose.FloorY : 0f);
+                    SkeletonShowPalette.SetColour(groundPoolMaterial,
+                                                  palette.Cool * GroundPoolDim);
+                }
             }
         }
     }

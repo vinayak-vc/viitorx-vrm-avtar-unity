@@ -1,6 +1,6 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-17 (F-36 sidecar boot scene)
+Last updated: 2026-09-17 (ADR-075..078: detector geometry, scene picks the sender, sub-pixel depth, mirror + mount + walk)
 Purpose: next agent can continue without re-deriving context.
 
 **This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
@@ -11,44 +11,143 @@ for anything after 2026-08-11; the sections below are historical context for M0�
 
 ---
 
-## 🔷 CURRENT — F-36 press Play once (2026-09-17)
+## 🔷 CURRENT — Unified Bootstrap: Bootstrap -> Launcher -> any scene (2026-09-17)
 
-**Start here: `Scenes/SidecarBoot.unity`. Press Play.** It starts the multi-person sidecar, then
-opens the launcher; pick any of the twenty scenes, ESC comes back. No terminal.
-Full report: `F36_SIDECAR_BOOT_2026-09-17.md`. Decision: **ADR-074**.
+**Start here: `Scenes/Bootstrap.unity`. Press Play.** It starts the multi-person sidecar, then
+opens `Launcher.unity`. Pick any scene (experience scenes or the avatar mirror in the PRODUCTION column);
+ESC brings you back to the Launcher. No terminal required.
 
-```text
-Runtime/SkeletonShow/SidecarBootstrap.cs        NEW  starts the sidecar, then loads Launcher
-Runtime/Tracking/OakD/SidecarProcessLauncher.cs +    DirectScript / DirectArguments (additive)
-Runtime/SkeletonShow/SceneLauncher.cs           +    sidecar status in the footer
-Runtime/Bootstrap/AppBootstrap.cs               ~    mirrorSceneName default REVERTED to "Mirror"
-Editor/SceneRegistrar.cs                        +    puts SidecarBoot at index 1 on a clone
-Tests/EditMode/SidecarDirectLaunchF36Tests.cs   NEW  6/6
-Scenes/SidecarBoot.unity                        NEW
-```
+There is now ONLY ONE bootstrap scene: `Bootstrap.unity`.
+The temporary `SidecarBoot.unity` scene has been retired and removed.
+`AppBootstrap` lives directly in `Mirror.unity`, binding UDP 8899 only when in the avatar scene,
+and cleanly releases UDP 8899 on exit via ESC so all other scenes receive tracking without port collision.
 
-Build order: `License-Verifier → SidecarBoot → Bootstrap → Mirror → Launcher → …` (index 0 untouched).
+Build order: `License-Verifier → Bootstrap → Mirror → Launcher → …` (index 0 untouched).
 
-### The four things to carry forward
+### The nine things to carry forward
 
-1. **THE SUPERVISOR CANNOT RUN THE MULTI-PERSON SENDER.** `sidecar_supervisor.py` builds its child
-   command from a fixed flag set — `--portrait`, `--portrait-dir`, `--subpixel-bits`, `--seconds` —
-   that only `wholebody_udp_sender.py` accepts, and waits on a readiness contract only that sender
-   emits. So the pre-existing auto-start could only ever produce the single-person stream. That is
-   why the boot scene runs the sender **directly**, and why `SidecarProcessLauncher` grew a
-   `DirectScript` mode.
-2. **THE DEMO PATH HAS NO WATCHDOG; THE PRODUCT STILL HAS ONE.** `DirectScript` defaults to empty, so
-   `AppBootstrap` gets the supervisor exactly as before, and a unit test pins that default. Do not
-   "simplify" by making the direct path the default — that silently removes restart-on-crash from
-   the product.
+*(Points 1, 2 and 4 were rewritten on 2026-09-17 — see ADR-075. The versions they replace said the
+supervisor could not run the multi-person sender, that the demo path had no watchdog, and that Unity
+held the lock by hand. All three were true for about a day and are now wrong; if you find that
+wording anywhere else, it is stale.)*
+
+1. **THE SUPERVISOR RUNS EITHER SENDER.** `sidecar_supervisor.py` picks its child command shape from
+   the script it is given (`SENDER_BY_SCRIPT` → `build_command`), so the multi-person branch passes
+   only flags that sender's argparse defines and the single-person command is unchanged byte for
+   byte. Both senders print the `producer session id = ` banner and `frames=` lines, so one readiness
+   contract covers both. It USED to be true that only `wholebody_udp_sender.py` could be supervised;
+   that is what forced the `DirectScript` route, and it no longer applies.
+2. **EVERYTHING IS SUPERVISED. DO NOT GO BACK TO `DirectScript`.** Both bootstraps set
+   `SupervisedSenderScript`; `DirectScript` survives only for one-off experiments and defaults to
+   empty, pinned by a unit test. The cost of the direct route was not theoretical: with `--show` on,
+   the preview window bound ESC to quit while the app's own hint reads "ESC menu", so one keypress
+   ended tracking for the session with nothing to bring it back.
 3. **NOTHING OUTSIDE A SCENE MAY BIND UDP 8899.** `SidecarBootstrap` owns the sidecar PROCESS and
    deliberately no socket, because every scene binds 8899 for itself. This is also why pointing
    `AppBootstrap.mirrorSceneName` at the launcher does not work: it binds the port, loads additively,
    and looks for an `AvatarRoot` the launcher does not have. `AppBootstrap` is the avatar app, not a
    router — its code default was reverted to `"Mirror"`.
-4. **IT NEVER STARTS A SECOND PRODUCER.** It listens on the port for 400 ms first; datagrams arriving
-   mean somebody is already sending and it attaches. Two producers on one port interleave poses from
-   different sessions, which reads as violent jitter rather than as a configuration error.
+4. **IT NEVER STARTS A SECOND PRODUCER, IN BOTH DIRECTIONS.** It listens on the port for 400 ms
+   first and attaches if anything is already sending. In the other direction the SUPERVISOR's own
+   `--lock-port` mutex does the work — it binds that port for as long as it lives, so launching the
+   avatar app from the menu makes `AppBootstrap` see an owner and attach. `Bootstrap.unity` ships
+   with `useOakUdpTracking: 1` and auto-start on, so this matters: two producers on one port
+   interleave poses from different sessions, which reads as violent jitter rather than as a
+   configuration error. Unity must NOT take that lock itself — the supervisor would then abort on
+   its own mutex.
+
+### 5. THE SCENE CHOOSES THE SENDER (ADR-076)
+
+One sidecar per session, but not one sender. `SceneLauncher.TrackingNeedFor()` reads the menu's own
+catalogue: single-person scenes and `Mirror` get `wholebody_udp_sender.py`, crowd scenes get
+`multiperson_udp_sender.py`, and anything unlisted returns `Unspecified` so the sidecar is left
+alone. That last part is load-bearing — `Launcher` is passed through on every navigation, and
+resolving it either way would restart the producer every time somebody backed out of a scene.
+`AppBootstrap.EnsureSidecarForScene` does the switching, only when the requirement changes, at a cost
+of ~15-20 s of no tracking.
+
+**Do not "simplify" this to `multiperson --max-poses 1`.** The cap limits how many people get posed;
+it does not remove the detector and per-person crop, which are exactly what makes the crowd pipeline
+worse for one person. And **do not reach for `depthai_blazepose/udp_pose_sender.py`** when somebody
+asks for MediaPipe: it sends no `lh`/`rh`, so the two pinch experiences (AIR GRAFFITI, OBJECTS) stop
+working. `OakDUdpPoseProvider:319` warns about it by name.
+
+### 6. THE TWO SENDERS SHARE `STEREO_CONFIG`, SO A FLAG MISSING FROM ONE IS A SILENT DOWNGRADE
+
+`multiperson_udp_sender.py` had no `--subpixel-bits` flag at all, so it inherited the shipped
+`subpixel: False` while the single-person sender acted on the `--subpixel-bits 3` Unity sends. Every
+crowd scene measured depth on whole-pixel disparity. Depth error is `z² × Δd / (f × B)` — the
+disparity step multiplies error at EVERY range, so that was 8× worse depth everywhere, not a
+far-field detail. Fixed in ADR-077.
+
+**The lesson is the diagnosis, not the fix:** it went unnoticed because the multi-person sender never
+printed its stereo configuration, and sub-pixel is invisible in the stream. If you add a pipeline
+setting, print it at startup — otherwise "configured" and "in effect" can differ for weeks. Both
+senders now print `stereo: preset=… subpixel=… LR-check=… mono=…`.
+
+Real calibration for this device, for any future depth arithmetic:
+`baseline 7.5 cm`, `mono fx 287.16 px` at 640×400 → `f·B = 21.54`, so `Δz ≈ z²/21.54` per pixel of
+disparity step.
+
+### 7. THE MIRROR, THE MOUNT AND THE WALK (ADR-078)
+
+* **`flipX` is ON in every experience scene and in the launcher.** A mirror installation that shows a
+  photograph has your right hand driving the figure's left. `Mirror.unity` and the VRM avatar are the
+  exception and stay unflipped — ADR-023: reflecting the input twists a rotation retarget, a true
+  avatar mirror is done output-side. Consequence worth knowing: `OakDUdpPoseProvider.PalmRotation`
+  builds a quaternion from a cross product, and a reflection inverts it. Nothing reads it today; if
+  an experience starts using palm orientation, fix it output-side rather than turning the mirror off.
+* **Camera orientation is PER SENDER**, because the physical mount differs: portrait for one person
+  (more pixels on a standing body), landscape for a crowd (more room, and the person detector runs on
+  the UNROTATED stream so a rotated mount makes it read people lying sideways). `O` in play mode
+  flips the running sender and restarts it.
+* **`TrackedStage.FollowPosition`** drives the staged body's X/Z from the measured mid-hip. Y belongs
+  to the grounding loop. It translates the whole group, so crowd pair geometry is unchanged.
+
+### 8. A SUPERVISED SENDER MUST KEEP TALKING WHEN THE ROOM IS EMPTY
+
+The multi-person sender's heartbeat sat below `if not persons: continue`, so nobody in frame meant no
+stdout, and `sidecar_supervisor.py` killed it after 10 s. Harmless unsupervised, fatal supervised —
+and the supervision was new. **If you add an early `continue` to a sender's main loop, check what is
+below it.** The watchdog contract is stdout growth, not process liveness.
+
+### 9. THE MOUNT IS NOW A FIRST-CLASS SETTING (ADR-079/080, F-43)
+
+* **`CameraMount.TiltDegrees` is the ONE place camera pitch lives.** Do not add a serialized tilt to
+  a component. Four components build a `PoseSpaceConverter` and `flipX` is declared in all four —
+  that cost twenty edited scene files in F-40. `AppBootstrap.Awake` publishes the tilt before the
+  first scene loads, which is the only reason a scene-launched converter agrees with the bootstrap's.
+* **Why it exists:** `SkeletonPose.FloorY` is a SINGLE SCALAR learned from foot contacts, and a
+  camera pitched by θ makes the floor appear `tan(θ)` metres higher per metre of depth. At 15° that
+  is 0.27 m/m and it crosses `PlantedBandMetres` (0.08 m) in 30 cm of walking. F-18 measured this
+  without naming it, at +0.338 m/m. **A level mount is still better than a corrected one** — this
+  removes the floor shear, not the foreshortening or the out-of-distribution poses at steep angles.
+* **The SIGN is not automated and must not be.** `mount.json` records magnitude only and says so;
+  F-19 §7 disproved the board's identity IMU-to-camera extrinsic directly. A wrong sign DOUBLES the
+  error. Positive = nose down. Default 0, and 0 is bit-identical to pre-F-43.
+* **The rotation runs BEFORE the mirror signs.** The signs are a display convention applied to
+  already-levelled data; reversing the order leans the body the wrong way whenever `flipZ` is on.
+  Both entry points get it — landmarks and the mid-hip `xyz` — because they share one back-projection
+  in the sender and splitting them would tear the root off the body.
+* **The IR dot projector is ON** (`--ir-dot 0.8`). It never had been. F-17's finding is what makes it
+  free on this board: CAM_A is IR-cut colour, the mono pair is unfiltered, so the dots reach the
+  matcher and never the pose model's input. Turn it off if a second OAK-D shares the room.
+
+### The tracking-quality rule this cost a day to learn
+
+**The detector must see the same picture the pose stage does.** `multiperson_udp_sender.py` feeds
+`cam.preview` → `ImageManip` → the person detector, and none of that is aspect- or crop-safe by
+default: `cam.preview` is 300x300 with `keepAspectRatio` ON unless you say otherwise, which
+centre-crops the 640x400 ISP and throws away 120 px of FOV on each side. Detections come back
+normalised to THAT frame, so anything mapping them onto the full frame is wrong by a fixed affine
+amount — which does not fail loudly, it just looks like a detector that cannot find people and fires
+on cartons and chair backs. The pipeline now letterboxes with `setResizeThumbnail` and inverts it
+through `letterbox_mapping`, one definition shared with the video harness. If you touch the preview
+size, the manip config or `detections_from`, re-check the round trip.
+
+5. **`Bootstrap.unity` IS STILL THE PRODUCT** and is not superseded. `SidecarBoot` owns only the
+   sidecar process; it builds no avatar, no UI and no tracking. The menu lists `Bootstrap` in its
+   PRODUCTION column and launching it now attaches to the running multi-person sidecar.
 
 ### What is NOT verified
 
@@ -57,6 +156,16 @@ Build order: `License-Verifier → SidecarBoot → Bootstrap → Mirror → Laun
 selection (`DmlExecutionProvider`) and failing only on a deliberately bogus model. Untested: the
 actual Play run, the launcher's new `sidecar:` footer line, the attach-don't-spawn branch, and that
 no orphan `python.exe` survives exiting play mode.
+
+**F-43 is verified unevenly, and the split matters.** The IR projector is confirmed ON THE DEVICE —
+`IR dot projector: on (80%, driver LM3644)` in
+`evidence/oak_v4/f20b/tests/a_normal_start/logs/run_001.txt`, with F-20B 6/6 PASS against the real
+camera — but its BENEFIT is unmeasured; the number to A/B against is the "~63% of keypoints get
+measured depth" in `RETARGET_AUDIT_2026-08-11.md`. The tilt correction is verified only in
+arithmetic: 11 tests pin the geometry and the zero-tilt identity, and nobody has yet pitched the
+camera, set `cameraTiltDegrees` and walked toward it. **That walk is the acceptance test** — the
+ground pool should stay under the feet at both ends of the room, and if the figure sinks MORE as you
+approach, the sign is inverted.
 
 ---
 

@@ -39,7 +39,7 @@ namespace VirtualMirror.SkeletonShow {
         [Tooltip("P1-3 presentation delay in ms, as in the mirror app. 0 = latest-wins.")]
         [SerializeField] private float poseInterpolationDelayMs = 40f;
         [Tooltip("Mirror the subject left/right, as a real mirror does.")]
-        [SerializeField] private bool flipX;
+        [SerializeField] private bool flipX = true;
         [Tooltip("Landmark space is Y-down; the scene is Y-up. Leave on.")]
         [SerializeField] private bool flipY = true;
         [SerializeField] private bool flipZ;
@@ -119,7 +119,9 @@ namespace VirtualMirror.SkeletonShow {
             palette = new SkeletonShowPalette();
             pose = new SkeletonPose();
             humanized = new HumanizedSkeleton();
-            converter = new PoseSpaceConverter(flipX, flipY, flipZ);
+            // F-43: tilt comes from CameraMount, not a field here, because it describes the bracket
+            // rather than this scene. See CameraMount for why that is a static.
+            converter = new PoseSpaceConverter(flipX, flipY, flipZ, CameraMount.TiltDegrees);
 
             BuildStage();
 

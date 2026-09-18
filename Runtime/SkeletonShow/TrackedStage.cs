@@ -96,6 +96,25 @@ namespace VirtualMirror.SkeletonShow {
         /// without it a 1.4 m subject stands 153 mm inside the floor.</summary>
         public bool GroundToFloor = true;
 
+        /// <summary>
+        /// Walk left and the figure walks left. Drives the staged body's X and Z from the measured
+        /// mid-hip, relative to wherever the first tracked person was standing.
+        ///
+        /// OFF, every body was pinned to <see cref="BodyOrigin"/> and only the CROWD moved — each
+        /// extra person was offset by their own hip relative to the primary's, so two people
+        /// separated correctly while one person stayed nailed to the spot however far they walked.
+        /// That is what "the skeleton is not changing position if I go left or right" was.
+        ///
+        /// Turning it on translates the whole group, so the pair geometry every crowd experience
+        /// reads — who is near whom — is EXACTLY as before: it is a difference, and a common offset
+        /// cancels out of a difference.
+        /// </summary>
+        public bool FollowPosition = true;
+
+        /// <summary>Scene metres per real metre walked. 1 = life-size. Below 1 keeps a big room
+        /// inside a small stage; 0 is <see cref="FollowPosition"/> off.</summary>
+        public float FollowScale = 1f;
+
         /// <summary>True when a real person is being tracked right now.</summary>
         public bool IsLive { get; private set; }
 
@@ -134,6 +153,23 @@ namespace VirtualMirror.SkeletonShow {
         private const float GroundingTau = 1.5f;
         private float groundOffset;
         private bool hasGroundOffset;
+
+        /// <summary>How long a late-arriving floor may still be SNAPPED to rather than eased into.
+        /// Long enough to cover a normal acquisition (the feet usually land within a frame or two of
+        /// the body), short enough that nobody has settled on the figure yet.</summary>
+        private const float GroundSnapSeconds = 2f;
+
+        /// <summary>Seconds this body has been continuously live. Reset when the stage goes quiet, so
+        /// the next visitor gets the snap and not an eased slide.</summary>
+        private float liveFor;
+
+        /// <summary>Walk-following smoothing. MUCH faster than grounding (1.5 s): the floor is a
+        /// slow-moving estimate that should not chase noise, whereas a person walking is a real,
+        /// fast signal and a slow follow reads as the figure being dragged along behind them.</summary>
+        private const float FollowTau = 0.12f;
+        private Vector3 followOffset;
+        private Vector3 followNeutral;
+        private bool hasFollowNeutral;
         private bool hasTelemetry;
 
         public TrackedStage(ILogService logService, int port, float poseInterpolationDelayMs) {
@@ -143,7 +179,10 @@ namespace VirtualMirror.SkeletonShow {
         }
 
         public void Start(bool flipX, bool flipY, bool flipZ) {
-            converter = new PoseSpaceConverter(flipX, flipY, flipZ);
+            // F-43: tilt comes from CameraMount, not from this call's arguments, because it
+            // describes the bracket rather than the caller. Both callers (ExperienceBase and
+            // SceneLauncher) therefore get it without either one having to carry the value.
+            converter = new PoseSpaceConverter(flipX, flipY, flipZ, CameraMount.TiltDegrees);
             humanized = new HumanizedSkeleton();
             attract = new AttractSkeleton();
             provider = new OakDUdpPoseProvider(log, converter, udpPort);
@@ -171,10 +210,20 @@ namespace VirtualMirror.SkeletonShow {
             PoseFrame frame;
             bool live = provider.TryGetLatestFrame(out frame) && frame != null && frame.IsValid;
             presence.Update(live, deltaSeconds);
-            if (presence.Changed && log != null) {
-                log.Log(LogLevel.Info, presence.Present
-                        ? "presence: person acquired - going live."
-                        : "presence: nobody tracked - returning to the attract loop.");
+            if (presence.Changed) {
+                if (log != null) {
+                    log.Log(LogLevel.Info, presence.Present
+                            ? "presence: person acquired - going live."
+                            : "presence: nobody tracked - returning to the attract loop.");
+                }
+                if (!presence.Present) {
+                    // The room emptied. Forget where the last person stood, so the next one to walk
+                    // up re-centres on the authored framing instead of inheriting a stranger's
+                    // offset and starting the session standing off to one side. The floor goes with
+                    // it: a new visitor is a fresh acquisition and gets the snap, not a slide.
+                    ResetFollow();
+                    ResetGrounding();
+                }
             }
 
             hasTelemetry = provider.TryGetTelemetry(telemetry);
@@ -182,6 +231,11 @@ namespace VirtualMirror.SkeletonShow {
 
             IsLive = live;
             IsAttract = false;
+            liveFor = live ? liveFor + deltaSeconds : 0f;
+            // BEFORE the fills below, all of which read StagingOrigin(). Grounding runs at the end
+            // of Tick and so lands one frame later, which is fine for a slow floor estimate and
+            // would not be for a walking person.
+            UpdateFollow(frame, live, deltaSeconds);
             if (live) {
                 EverTracked = true;
                 PoseFrame shown = frame;
@@ -319,10 +373,55 @@ namespace VirtualMirror.SkeletonShow {
 
         private readonly List<int> retired = new List<int>();
 
-        /// <summary>Where the mid-hip sits this frame: authored origin plus grounding. One accessor,
-        /// so the body and the hands can never be staged differently.</summary>
+        /// <summary>Where the mid-hip sits this frame: authored origin, plus grounding on Y, plus
+        /// the walked offset on X/Z. One accessor, so the body and the hands can never be staged
+        /// differently — which is exactly what would happen if a caller added the walk itself.</summary>
         public Vector3 StagingOrigin() {
-            return new Vector3(BodyOrigin.x, BodyOrigin.y + groundOffset, BodyOrigin.z);
+            return new Vector3(BodyOrigin.x + followOffset.x,
+                               BodyOrigin.y + groundOffset,
+                               BodyOrigin.z + followOffset.z);
+        }
+
+        /// <summary>
+        /// Track where the person has walked to, relative to where the first one stood.
+        ///
+        /// RELATIVE TO A NEUTRAL, not absolute, because the camera's origin is the camera — staging
+        /// a person at their absolute measured Z would put them wherever they happened to be
+        /// standing when the scene opened, which for a 2 m subject is 2 m behind the authored
+        /// framing. The neutral is captured on first sight and re-captured after an absence.
+        ///
+        /// Y IS NOT FOLLOWED. Vertical placement belongs to the grounding loop, which stands the
+        /// figure on its own measured floor; hip height is the noisiest of the three axes and
+        /// letting it through makes the figure bob.
+        /// </summary>
+        private void UpdateFollow(PoseFrame frame, bool live, float dt) {
+            if (!FollowPosition) {
+                followOffset = Vector3.Lerp(followOffset, Vector3.zero,
+                                            1f - Mathf.Exp(-dt / FollowTau));
+                return;
+            }
+            if (!live || frame == null || !frame.HasRootPosition) {
+                // Hold the last offset rather than easing home: a person who steps out of frame for
+                // a moment should not have the figure slide back to the middle and then out again.
+                return;
+            }
+            Vector3 root = frame.RootPositionMetres;
+            if (!hasFollowNeutral) {
+                followNeutral = root;
+                followOffset = Vector3.zero;
+                hasFollowNeutral = true;
+                return;
+            }
+            float k = BodyScale * FollowScale;
+            Vector3 target = new Vector3((root.x - followNeutral.x) * k, 0f,
+                                         (root.z - followNeutral.z) * k);
+            followOffset = Vector3.Lerp(followOffset, target, 1f - Mathf.Exp(-dt / FollowTau));
+        }
+
+        /// <summary>Forget where the person was standing, so the next one re-centres. Called when
+        /// the stage goes quiet, and available to an experience that restages by hand.</summary>
+        public void ResetFollow() {
+            hasFollowNeutral = false;
         }
 
         private void UpdateGrounding(float dt) {
@@ -335,11 +434,27 @@ namespace VirtualMirror.SkeletonShow {
             }
             float target = groundOffset - Pose.FloorY;
             if (!hasGroundOffset) {
-                // Snap the first time. Easing in from zero would slide the figure up through the
-                // floor over the first second and a half, in full view of whoever just walked up.
-                groundOffset = target;
                 hasGroundOffset = true;
-                return;
+                // SNAP ONLY WHILE THE BODY IS STILL ARRIVING.
+                //
+                // The snap is right for the case it was written for - a person walks up, the floor
+                // is known within a frame or two, and easing in from zero would slide the figure up
+                // through the floor for a second and a half while they watch.
+                //
+                // But the condition is not "the first frame", it is "the first frame WITH A FLOOR",
+                // and the floor needs a FOOT (FootContacts = heels and toes). If the feet are not
+                // tracked - too close to the camera, cut off at the frame edge, behind a desk - then
+                // HasFloor stays false and this never runs. When the feet are finally found, thirty
+                // seconds in, the snap fires then: a whole-body vertical teleport in front of
+                // somebody who has been standing still. Measured live on 2026-09-17, reported as
+                // "the leg was not recognized and when found the skeleton jumped at 00:27".
+                //
+                // So: snap while nobody has settled on the figure yet, and ease once they have. A
+                // slide is the lesser evil of the two once the scene has been on screen a while.
+                if (liveFor <= GroundSnapSeconds) {
+                    groundOffset = target;
+                    return;
+                }
             }
             groundOffset = groundOffset + (1f - Mathf.Exp(-dt / GroundingTau)) * (target - groundOffset);
         }

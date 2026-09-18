@@ -39,7 +39,7 @@ namespace VirtualMirror.SkeletonShow {
         [Tooltip("P1-3 presentation delay in ms, as in the mirror app. 0 = latest-wins.")]
         [SerializeField] private float poseInterpolationDelayMs = 40f;
         [Tooltip("Mirror the subject left/right, as a real mirror does.")]
-        [SerializeField] private bool flipX;
+        [SerializeField] private bool flipX = true;
         [Tooltip("Landmark space is Y-down; the scene is Y-up. Leave on.")]
         [SerializeField] private bool flipY = true;
         [SerializeField] private bool flipZ;
@@ -110,7 +110,7 @@ namespace VirtualMirror.SkeletonShow {
         /// their scaffold. Listed because "launch any scene" has to mean any scene, and separated
         /// because launching it starts the whole app rather than a demonstration.</summary>
         private static readonly Entry[] Production = {
-            new Entry("Bootstrap", "VIRTUAL MIRROR",
+            new Entry("Mirror", "VIRTUAL MIRROR",
                       "The full avatar application: loads a VRM, retargets it and shows the mirror UI."),
         };
 
@@ -148,6 +148,55 @@ namespace VirtualMirror.SkeletonShow {
             get {
                 return Production;
             }
+        }
+
+        /// <summary>How many people a scene needs the sidecar to track. See
+        /// <see cref="TrackingNeedFor"/>.</summary>
+        public enum TrackingNeed {
+            /// <summary>Not in the catalogue — the Launcher, Bootstrap, the licence scene. The
+            /// sidecar must be left exactly as it is; passing through the menu is not a reason to
+            /// restart a producer.</summary>
+            Unspecified,
+            /// <summary>One person, tracked as well as this rig can. The dedicated single-person
+            /// sender, not the multi-person one capped to one.</summary>
+            SinglePerson,
+            /// <summary>Two or more, which only the multi-person sender produces.</summary>
+            MultiPerson
+        }
+
+        /// <summary>
+        /// Which sender a scene needs, from the catalogue above — the same list the menu draws, so
+        /// the columns a person sees and the tracking they get cannot disagree.
+        ///
+        /// THE PRODUCTION COLUMN COUNTS AS SINGLE-PERSON. `Mirror` loads one VRM and retargets one
+        /// body; the multi-person path would cost it the dedicated single-person pipeline for a
+        /// crowd it cannot show.
+        ///
+        /// An unknown scene is <see cref="TrackingNeed.Unspecified"/> rather than a default, because
+        /// the caller's correct response to "I don't know" is to change nothing. The Launcher itself
+        /// is the case that matters: it is passed through on every single navigation, and defaulting
+        /// it either way would restart the sidecar every time somebody backed out of a scene.
+        /// </summary>
+        public static TrackingNeed TrackingNeedFor(string sceneName) {
+            if (string.IsNullOrEmpty(sceneName)) {
+                return TrackingNeed.Unspecified;
+            }
+            if (Contains(MultiPerson, sceneName)) {
+                return TrackingNeed.MultiPerson;
+            }
+            if (Contains(SinglePerson, sceneName) || Contains(Production, sceneName)) {
+                return TrackingNeed.SinglePerson;
+            }
+            return TrackingNeed.Unspecified;
+        }
+
+        private static bool Contains(Entry[] entries, string sceneName) {
+            for (int i = 0; i < entries.Length; i++) {
+                if (string.Equals(entries[i].Scene, sceneName, System.StringComparison.Ordinal)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>How many rows a column may hold before the number-key shortcut stops covering

@@ -127,6 +127,47 @@ namespace VirtualMirror.SkeletonShow {
             return go.transform;
         }
 
+        /// <summary>
+        /// THE DEPTH CUE. A flat glowing pool on the floor, directly under a body.
+        ///
+        /// WHY THIS AND NOT A COLOUR OR A WIDTH. The stream carries real depth — measured on a live
+        /// session, the wrist moves 0.79 m in Z against 1.14 m in X — but the scenes could not show
+        /// it: a dead-on camera 3.2 m away turns that 0.79 m into roughly a 15% change in apparent
+        /// size, which the eye does not read. The obvious fixes are both taken. Colour already means
+        /// SPEED in every mode, and <see cref="Experiences.BodyRenderer"/> says plainly why a second
+        /// meaning on that channel is unreadable; line width already means confidence. A separate
+        /// object on the floor spends no existing channel.
+        ///
+        /// It works because of where the camera is, not in spite of it. At 1 m of height and 3.2 m
+        /// of distance the floor is seen at a grazing ~17 degrees, so a metre of walking toward the
+        /// camera sweeps the pool a long way DOWN the screen, across the converging grid lines. The
+        /// flatter the view, the better this reads — which is the opposite of how apparent size
+        /// behaves, and why it is the right cue for this stage.
+        ///
+        /// Deliberately dim: it is an anchor, not a subject. The body has to stay the brightest
+        /// thing on screen.
+        /// </summary>
+        public static Transform GroundPool(Transform parent, SkeletonShowPalette palette,
+                                           out Material material) {
+            Transform pool = Sphere(parent, "GroundPool", 1f, palette, palette.Cool, true,
+                                    out material);
+            return pool;
+        }
+
+        /// <summary>Place a <see cref="GroundPool"/> under a body. `floorY` is the stage's own floor,
+        /// so the pool sits on the same plane the figure is grounded to rather than on y=0 while the
+        /// feet are somewhere else.</summary>
+        public static void PlaceGroundPool(Transform pool, Vector3 groundPoint, float radius,
+                                           float floorY = 0f) {
+            if (pool == null) {
+                return;
+            }
+            pool.position = new Vector3(groundPoint.x, floorY + 0.01f, groundPoint.z);
+            // Squashed to a disc rather than scaled as a sphere: a sphere sitting on the floor reads
+            // as a ball the person is standing on, which is a different (and wrong) depth claim.
+            pool.localScale = new Vector3(radius * 2f, 0.012f, radius * 2f);
+        }
+
         /// <summary>A two-point line renderer in world space, for bones and links.</summary>
         public static LineRenderer Line(Transform parent, string name, float width, Material material) {
             GameObject go = new GameObject(name);

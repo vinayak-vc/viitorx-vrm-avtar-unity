@@ -33,8 +33,8 @@ namespace VirtualMirror.Editor {
     public static class SceneRegistrar {
         private const string ScenesFolder = "Assets/Games/viitorx-vrm-avtar-unity/Scenes";
 
-        /// <summary>Loaded additively by Bootstrap, never on its own. See the class note.</summary>
-        private static readonly string[] Excluded = { "Mirror" };
+        /// <summary>No scenes excluded; all scenes in Scenes/ are registered.</summary>
+        private static readonly string[] Excluded = new string[0];
 
         /// <summary>
         /// The boot scene, which starts the sidecar and then opens the launcher. It is placed
@@ -45,7 +45,7 @@ namespace VirtualMirror.Editor {
         /// so this can reorder nothing that somebody has deliberately arranged. Nothing here loads a
         /// scene by build index; every load is by name.
         /// </summary>
-        private const string BootScene = "SidecarBoot";
+        private const string BootScene = "Bootstrap";
 
         [MenuItem("Virtual Mirror/Register All Scenes in Build Settings", priority = 200)]
         public static void RegisterAll() {

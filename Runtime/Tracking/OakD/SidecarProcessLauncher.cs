@@ -60,6 +60,7 @@ namespace VirtualMirror.Tracking.OakD {
         private SidecarLaunchState state = SidecarLaunchState.Disabled;
         private string lastError = string.Empty;
         private int childPid = -1;
+        private string lastStderrLine = string.Empty;
         private bool disposed;
 
         /// <summary>Current state. Safe to read from the main thread while stdout arrives on another.</summary>
@@ -135,6 +136,13 @@ namespace VirtualMirror.Tracking.OakD {
                 if (!System.IO.File.Exists(direct)) {
                     problems.Add("Sender script is missing: " + direct);
                 }
+            } else if (!string.IsNullOrEmpty(options.SupervisedSenderScript)) {
+                // Validate::SenderScript only ever checks the PACKAGED sender, so a typo'd override
+                // would otherwise surface as the supervisor dying on a missing file after launch.
+                string supervised = ResolveSupervisedSender(paths);
+                if (!System.IO.File.Exists(supervised)) {
+                    problems.Add("Sender script is missing: " + supervised);
+                }
             }
             if (problems.Count > 0) {
                 string detail = string.Join(" | ", problems.ToArray());
@@ -207,7 +215,7 @@ namespace VirtualMirror.Tracking.OakD {
             StringBuilder sb = new StringBuilder();
             sb.Append("-u ").Append(Quote(paths.SupervisorScript));
             sb.Append(" --python ").Append(Quote(paths.PythonExe));
-            sb.Append(" --script ").Append(Quote(paths.SenderScript));
+            sb.Append(" --script ").Append(Quote(ResolveSupervisedSender(paths)));
             sb.Append(" --model ").Append(Quote(paths.ModelFile));
             sb.Append(" --host ").Append(options.Host);
             sb.Append(" --port ").Append(options.UdpPort);
@@ -216,6 +224,22 @@ namespace VirtualMirror.Tracking.OakD {
                 ? " --portrait --portrait-dir " + options.PortraitDirection
                 : " --no-portrait");
             sb.Append(" --subpixel-bits ").Append(options.SubpixelBits);
+            // F-44. Forwarded to BOTH senders by the supervisor, like --subpixel-bits and for the
+            // same reason: these change the depth and the crop the sender measures from, so one
+            // sender running native while the other runs half-res would make the two columns
+            // disagree about the same room.
+            if (!string.IsNullOrEmpty(options.MonoResolution)) {
+                sb.Append(" --mono-res ").Append(options.MonoResolution);
+            }
+            if (!string.IsNullOrEmpty(options.RgbIspScale)) {
+                sb.Append(" --rgb-isp ").Append(options.RgbIspScale);
+            }
+            // Which of these the supervisor actually forwards depends on the sender it was pointed
+            // at - the portrait/subpixel pair for the single-person sender, --max-poses for the
+            // multi-person one. That decision lives in ONE place (sidecar_supervisor.build_command)
+            // rather than being duplicated here, so the two cannot drift into a combination that
+            // makes Python exit on an unrecognised flag before the camera is ever opened.
+            sb.Append(" --max-poses ").Append(Math.Max(1, Math.Min(8, options.MaxPoses)));
             // Unity is listening on the destination port while in Play mode. The supervisor's port
             // probe binds that port to look for a stale producer, so it reads our healthy listener
             // as "port in use" and refuses to launch. This flag exists for exactly this case.
@@ -248,7 +272,20 @@ namespace VirtualMirror.Tracking.OakD {
         /// <summary>The direct script as an absolute path: taken as-is when rooted, otherwise
         /// resolved against the sidecar root.</summary>
         public string ResolveDirectScript(SidecarPathSet paths) {
-            string script = options.DirectScript;
+            return ResolveAgainstRoot(paths, options.DirectScript);
+        }
+
+        /// <summary>
+        /// The sender the SUPERVISOR should launch. Falls back to the packaged single-person sender,
+        /// so a caller that names nothing gets exactly the behaviour it always had.
+        /// </summary>
+        public string ResolveSupervisedSender(SidecarPathSet paths) {
+            string resolved = ResolveAgainstRoot(paths, options.SupervisedSenderScript);
+            return string.IsNullOrEmpty(resolved) ? paths.SenderScript : resolved;
+        }
+
+        /// <summary>A sidecar-relative script name as an absolute path; empty stays empty.</summary>
+        private static string ResolveAgainstRoot(SidecarPathSet paths, string script) {
             if (string.IsNullOrEmpty(script)) {
                 return string.Empty;
             }
@@ -337,26 +374,11 @@ namespace VirtualMirror.Tracking.OakD {
         /// trying to bind it. A successful bind means nobody owns it, so we are clear to spawn.
         /// </summary>
         private bool IsLockPortHeld() {
-            TcpListener listener = null;
-            try {
-                listener = new TcpListener(IPAddress.Loopback, options.LockPort);
-                listener.Start();
-                return false;
-            } catch (SocketException) {
-                return true;
-            } catch (Exception) {
-                // Unknown failure - assume free and let the supervisor arbitrate. It aborts cleanly
-                // and says so on stderr if it loses the race.
-                return false;
-            } finally {
-                try {
-                    if (listener != null) {
-                        listener.Stop();
-                    }
-                } catch (Exception) {
-                    // Nothing useful to do.
-                }
-            }
+            // F-36: the probe moved to SidecarSingleInstanceLock, because the lock is now something
+            // that can be HELD as well as tested - SidecarBootstrap owns a sidecar without ever
+            // starting a supervisor, and has to be visible to this check. Same bind test, one
+            // definition, so both sides agree on what "already owned" means.
+            return SidecarSingleInstanceLock.IsHeldByAnyone(options.LockPort);
         }
 
         // ---- supervisor output -> ILogService --------------------------------------------------
@@ -378,6 +400,7 @@ namespace VirtualMirror.Tracking.OakD {
             if (e == null || string.IsNullOrEmpty(e.Data)) {
                 return;
             }
+            lastStderrLine = e.Data;
             log?.Log(LogLevel.Warning, LogTag + e.Data);
         }
 
@@ -393,8 +416,15 @@ namespace VirtualMirror.Tracking.OakD {
             }
             // An exit during teardown is expected; only an unrequested one is a failure.
             if (State == SidecarLaunchState.Starting || State == SidecarLaunchState.Running) {
-                SetState(SidecarLaunchState.Failed, "sidecar exited with code " + code);
-                log?.Log(LogLevel.Error, LogTag + "sidecar supervisor exited unexpectedly, code " + code);
+                string name = string.IsNullOrEmpty(options.DirectScript)
+                    ? "sidecar supervisor"
+                    : "sidecar (" + options.DirectScript + ")";
+                string detail = name + " exited unexpectedly, code " + code;
+                if (!string.IsNullOrEmpty(lastStderrLine)) {
+                    detail += " | Last error: " + lastStderrLine;
+                }
+                SetState(SidecarLaunchState.Failed, detail);
+                log?.Log(LogLevel.Error, LogTag + detail);
             }
         }
 
@@ -574,19 +604,49 @@ namespace VirtualMirror.Tracking.OakD {
         public bool Portrait = true;
         public string PortraitDirection = "ccw";
         public int SubpixelBits = 3;
+
+        /// <summary>
+        /// F-44 WORKING VOLUME. Both OV9782 sensors are 1280x800 and the pipeline used to discard
+        /// half the linear resolution on each path. `MonoResolution` 800p halves depth error at every
+        /// range (mono fx 287 -> 574, so f·B doubles); `RgbIspScale` 1/1 keeps the native frame at
+        /// FULL FOV and doubles the pixels on a body, which is what sets the distance at which the
+        /// pose model still sees a person. Measured cost of both together: 30.0 -> 29.2 fps.
+        /// The pose solve is unaffected — RTMW3D always resizes its crop to 288x384.
+        /// </summary>
+        public string MonoResolution = "800p";
+        public string RgbIspScale = "1/1";
+
         public string ExtraArguments = string.Empty;
+
+        /// <summary>
+        /// Which sender the SUPERVISOR launches, relative to the sidecar root (or absolute). Empty
+        /// means the packaged single-person sender, which is what this always did.
+        ///
+        /// Prefer this over <see cref="DirectScript"/>. Both can reach the multi-person sender; only
+        /// this one keeps the watchdog, and an unsupervised sidecar has no way back from anything
+        /// that ends the process.
+        /// </summary>
+        public string SupervisedSenderScript = string.Empty;
+
+        /// <summary>People posed per frame, forwarded to the multi-person sender. The single-person
+        /// sender has no such flag and the supervisor does not forward it there.</summary>
+        public int MaxPoses = 3;
 
         /// <summary>
         /// F-36 — run this sender DIRECTLY instead of going through the supervisor. Empty (the
         /// default) keeps the supervised production path exactly as it was.
         ///
-        /// WHY THIS EXISTS AT ALL, because bypassing a tested watchdog needs a reason. The supervisor
-        /// builds its child command from a fixed set of flags — `--portrait`, `--portrait-dir`,
-        /// `--subpixel-bits`, `--seconds` — that only `wholebody_udp_sender.py` accepts, and it waits
-        /// on a readiness contract only that sender emits. `multiperson_udp_sender.py` takes none of
-        /// them, so it cannot be supervised without changing the supervisor, which is the Python
-        /// production path. The demonstration launcher needs the multi-person stream and does not
-        /// need restart-on-crash, so it takes the direct route and says so.
+        /// PREFER <see cref="SupervisedSenderScript"/>. This existed because the supervisor built its
+        /// child command from a fixed set of flags — `--portrait`, `--portrait-dir`,
+        /// `--subpixel-bits`, `--seconds` — that only `wholebody_udp_sender.py` accepts, so the
+        /// multi-person sender could not be supervised at all. That is no longer true: the supervisor
+        /// now picks the command shape from the sender it is given, and both senders print the
+        /// readiness markers it waits on.
+        ///
+        /// What the direct route costs, measured the hard way: a sidecar launched this way has NO
+        /// watchdog, so anything that ends the process — a crash, a USB unplug, or the preview
+        /// window's own quit key — takes tracking down for the rest of the session with nothing to
+        /// bring it back. Keep this only for one-off experiments that genuinely must not restart.
         ///
         /// Everything else this class does still applies — the kill-on-close job object, the
         /// taskkill of the whole tree, path validation, the log tag. Those are what make it worth

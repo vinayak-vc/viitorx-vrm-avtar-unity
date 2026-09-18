@@ -22,25 +22,28 @@ namespace VirtualMirror.SkeletonShow {
     /// UDP socket** — because each scene binds 8899 for itself, and two binds on one port is the
     /// failure this is meant to remove rather than create.
     ///
-    /// IT RUNS THE MULTI-PERSON SENDER, and that is the whole reason it does not use the supervisor.
-    /// `sidecar_supervisor.py` builds its child command from flags only `wholebody_udp_sender.py`
-    /// accepts (`--portrait`, `--portrait-dir`, `--subpixel-bits`, `--seconds`) and waits on a
-    /// readiness contract only that sender emits, so it cannot supervise the multi-person one without
-    /// changing the Python production path. `multiperson_udp_sender.py` is backward compatible — it
-    /// publishes the most-established person in the ordinary single-person shape as well — so ONE
-    /// sender serves the single-person scenes, the crowd scenes and the avatar app alike.
+    /// IT RUNS THE MULTI-PERSON SENDER, SUPERVISED. `multiperson_udp_sender.py` is backward
+    /// compatible — it publishes the most-established person in the ordinary single-person shape as
+    /// well — so ONE sender serves the single-person scenes, the crowd scenes and the avatar app
+    /// alike.
     ///
-    /// THE COST, stated plainly: the direct route has NO WATCHDOG. The supervised path restarts a
-    /// dead sidecar, detects crash loops and validates the environment (F-20B, 35/35); this does not.
-    /// If the sidecar dies here, it stays dead until you leave play mode and press Play again. That
-    /// is an acceptable trade for a demonstration launcher and an unacceptable one for the product,
-    /// which is why `AppBootstrap` is untouched and still supervised.
+    /// THIS USED TO LAUNCH IT DIRECTLY, and that was a mistake worth remembering. The reason was
+    /// real: `sidecar_supervisor.py` built its child command from flags only
+    /// `wholebody_udp_sender.py` accepts (`--portrait`, `--portrait-dir`, `--subpixel-bits`,
+    /// `--seconds`), so it could not launch the multi-person sender at all. The direct route got the
+    /// stream at the price of the watchdog — and a sidecar with no watchdog stays dead after
+    /// ANYTHING that ends the process, including its own preview window's quit key. The supervisor
+    /// now picks its command shape from the sender it is given and both senders print the readiness
+    /// markers it waits on, so there is no longer a trade to make.
     ///
-    /// IT NEVER STARTS A SECOND PRODUCER. Before spawning anything it LISTENS on the destination port
-    /// for a moment: if datagrams are already arriving, somebody is producing — a sidecar started by
-    /// hand, or another Unity instance — and it attaches instead. Two producers on one port interleave
-    /// poses from different sessions, which reads as violent jitter rather than as a configuration
-    /// error, so it is worth the few hundred milliseconds to rule out.
+    /// IT NEVER STARTS A SECOND PRODUCER, in both directions. Before spawning anything it LISTENS on
+    /// the destination port for a moment: if datagrams are already arriving, somebody is producing — a
+    /// sidecar started by hand, or another Unity instance — and it attaches instead. In the other
+    /// direction the SUPERVISOR's own single-instance lock does the work: it binds the lock port for
+    /// as long as it lives, so launching the avatar app from the menu's PRODUCTION column makes
+    /// `AppBootstrap` see an owner and attach rather than start a second producer on UDP 8899. This
+    /// class used to hold that lock by hand precisely because nothing else did; taking it here now
+    /// would make the supervisor abort on its own mutex.
     /// </summary>
     public sealed class SidecarBootstrap : MonoBehaviour {
         [Header("Sidecar")]
@@ -71,11 +74,22 @@ namespace VirtualMirror.SkeletonShow {
         private static SidecarBootstrap instance;
 
         /// <summary>
+        /// External status provider (e.g. from AppBootstrap when booting via Bootstrap.unity).
+        /// </summary>
+        public static System.Func<string> ExternalStatusProvider;
+
+        /// <summary>
         /// One line about the sidecar, for the launcher's footer. Null when no boot scene ran — the
         /// launcher then says nothing rather than claiming a sidecar it knows nothing about.
         /// </summary>
         public static string Status {
             get {
+                if (ExternalStatusProvider != null) {
+                    string external = ExternalStatusProvider();
+                    if (!string.IsNullOrEmpty(external)) {
+                        return external;
+                    }
+                }
                 if (instance == null) {
                     return null;
                 }
@@ -124,24 +138,23 @@ namespace VirtualMirror.SkeletonShow {
                 AutoStart = true,
                 Host = "127.0.0.1",
                 UdpPort = udpPort,
-                // The supervisor's single-instance lock. Nothing here binds it, but leaving it set
-                // means that if the SUPERVISED sidecar is already up - somebody ran the production
-                // path - this attaches to it rather than adding a second producer.
-                LockPort = 8897,
+                // The supervisor's single-instance lock, read here and HELD below. Read, so that a
+                // supervised sidecar already running means we attach instead of adding a second
+                // producer; held, so that the avatar app defers to us for the same reason.
+                LockPort = SidecarSingleInstanceLock.DefaultPort,
                 ModelPathOverride = modelPathOverride,
-                DirectScript = senderScript,
-                DirectArguments = BuildSenderArguments()
+                // SUPERVISED, like the avatar app. This used to launch the sender directly, because
+                // the supervisor could only build a command for the single-person one - which also
+                // meant no watchdog, and no single-instance lock to speak of, which is why this
+                // class used to take one BY HAND below. The supervisor now handles both senders, so
+                // it binds its own lock port and restarts its own child, and the hand-held lock is
+                // gone: taking it here would make the supervisor abort on its own mutex.
+                SupervisedSenderScript = senderScript,
+                MaxPoses = maxPoses,
+                ExtraArguments = showPreview ? "--show" : string.Empty
             };
             launcher = new SidecarProcessLauncher(log, options);
             launcher.Start(SidecarLocator.Resolve(modelPathOverride));
-        }
-
-        private string BuildSenderArguments() {
-            string args = "--max-poses " + Mathf.Clamp(maxPoses, 1, 8);
-            if (showPreview) {
-                args = args + " --show";
-            }
-            return args;
         }
 
         /// <summary>
