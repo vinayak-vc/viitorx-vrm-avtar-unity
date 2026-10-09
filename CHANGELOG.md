@@ -12,6 +12,33 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Added
 
+- **Run the whole thing on a video instead of the OAK-D (F-49 / ADR-085).** `AppBootstrap > Video Test
+  Source`: tick **Track From Video**, give it a link or a path, press Play. A new supervised sender,
+  `tools/video/video_udp_sender.py`, runs the production single-person pipeline on the clip and sends the
+  identical UDP datagram, so every scene, the skeleton show and the VRM avatar run unchanged. Edits made
+  while playing restart the sidecar after a second. Honest about what it is: no stereo (0/33 measured),
+  one person, estimated depth, F-21 off. Direct http(s) video links are downloaded once and cached; page
+  links (YouTube) need `yt-dlp`, which is not installed. Verified end to end headlessly (supervisor → real
+  RTMW3D → Unity's `TrackedStage` over UDP, 0 parse errors); **not yet run in the Editor.**
+
+- **An operating volume: out-of-range poses are refused, not clamped (F-48 / ADR-084).** SR7 stood the
+  subject at 0.66-1.28 m, below the 1.4-4.5 m the camera can measure, and everything downstream
+  consumed it: the avatar was walked toward the lens by a 0.66 m hip and the skeleton's proportions
+  stretched, while the transport stayed perfectly healthy. A pose whose hip depth is outside
+  `1.35-4.5 m` (Inspector fields on `AppBootstrap`, defaults only until the acceptance take confirms
+  them) now holds the last good body for 0.75 s, stops the walk-follow and the calibration, and then
+  withholds the body under an explicit `TOO CLOSE - step back` / `TOO FAR - step closer`. **This puts the
+  old 0.90 m single-person operating point outside the range — a product decision, flagged in ADR-084.**
+  - **Calibration learns only from stereo-measured joints** (`DepthMeasured`, through the existing trust
+    channel), inside the volume and settled, and each bone has its own anatomical band — a 0.55 m
+    forearm used to pass the global 0.01-0.80 m one. Left/right are averaged only when they agree.
+  - **Hands are validated per landmark** against their own wrist: a 147 mm palm with a thumb 2273 mm from
+    its index finger is now refused, and the other hand stays usable. Air Graffiti no longer tells a
+    too-close user to "step closer".
+  - The correction layer's HUD is five short lines that fit an 1100 px capture, with the counters that
+    say which gate refused a sample. 60 new tests, including two end-to-end `TrackedStage` tests over
+    UDP. **Not yet filmed**; ADR-083 / F-21 is untouched and still open.
+
 - **Every body now shows where it is STANDING — the depth cue.** The stream has always carried real
   depth (measured live: the wrist moves 0.79 m in Z against 1.14 m in X) and the scenes could not
   show it: a dead-on camera 3.2 m away turns that into roughly a 15% change in apparent size, which
@@ -440,6 +467,16 @@ While the version is `0.x`, the public API may change in a minor release. See
   second person can enter frame. Evidence in `docs/evidence/f32/`.
 - Floor contact is reliable to ~21 mm and hands to 99.1% on a clean single subject at 1.4 m, and
   hands remain 93.7% plausible at 1.96 m. Single-subject accuracy beyond ~2 m is untested.
+- **F-21 target ownership freezes Unity when the subject walks (ADR-083, diagnosed not fixed).**
+  The ownership layer gates the UDP send, and `_preview()` is drawn inside the withheld branch - so a
+  withheld frame looks like a perfect sidecar preview and a frozen Unity. `LOCKED` rejects an
+  observation whose hip moved > 0.35 m from the owner and **does not update `owner_pos` on
+  rejection**, so one fast movement strands the subject outside their own margin until a 4 s timeout
+  releases and re-acquires them as a new owner. Measured on SR6: **13 ownership switches with one
+  person in the room.** It surfaced now because `FollowPosition`, the 3-4x working volume and the
+  demo run-of-show all made walking normal, and F-21 assumes a subject standing still at 0.90 m.
+  Workaround for a solo shoot is `--no-ownership` (hand-start the sender; the supervisor refuses to
+  forward it by design). **Do not delete F-21** - F-19 measured the failure it prevents.
 - **Tilt compensation is verified in arithmetic, not against a real angled mount.** Eleven tests pin
   the geometry and the zero-tilt identity, but nobody has yet pitched the camera, set
   `cameraTiltDegrees` and walked toward it. Until that is done, treat a level mount as the supported

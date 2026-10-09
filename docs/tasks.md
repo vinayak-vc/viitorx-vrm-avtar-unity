@@ -1848,3 +1848,323 @@ The median joint does not move. The tail is ~1 joint in 1000, which P0's One-Eur
       1.26.4 → 2.2.6 under a system whose measured evidence base was produced on numpy 1.x. Pinned
       back; the converter still runs on 1.26.4 and `ml-dtypes`' warning can be ignored. Do not let
       model tooling move numpy under the capture path.
+
+---
+
+## F-46 — SHOOT SUPPORT: PREFLIGHT, DIRECTOR, RUN OF SHOW (2026-09-18)
+
+A demonstration video is wanted as proof and as a closing note, shot **solo**. Two constraints shaped
+what was built: one person cannot perform at 0.9–4 m and operate a keyboard at the same time, and
+everything F-43/44/45 changed is still unverified on camera — so **the shoot is the verification
+pass**, and the tooling has to make a wrong rig visible before filming rather than after.
+
+### DONE
+
+- [x] **`tools/capture/f46_preflight.py`** — twelve checks, one verdict. Interpreter (the CPU-fallback
+      trap), model precision, sub-pixel, resolution, UDP 8899, crowd footage, camera, IR projector,
+      frame size, throughput, valid depth, mount tilt from the IMU. It reads the **supervisor's**
+      `--subpixel-bits` default rather than the bare module default, because the module ships
+      sub-pixel off and every production launch turns it on — checking the default would report a
+      configuration nothing runs.
+- [x] **`Runtime/SkeletonShow/DemoDirector.cs`** — walks the run of show on a timer, loads scenes,
+      switches SKELETON SHOW modes, and captions what each shot proves. Installed by
+      `[RuntimeInitializeOnLoadMethod]` and **dormant until F9/F10/F12**, so no scene contains it and
+      no Inspector configures it — the F-40 mirror problem is not repeated for a demo aid. Two
+      sequences, not one: crossing the single/crowd columns swaps senders (15–20 s of no tracking),
+      and with the crowd half driven from a recorded file an automatic swap would kill the process
+      feeding it.
+- [x] **`docs/F46_DEMO_RUN_OF_SHOW.md`** — printable. Six acts, exact scenes and keys, what each
+      shot proves, and what to do when something looks wrong instead of quietly retaking.
+
+### FOUND — the preflight earned itself on its first run
+
+Mount tilt read **88.0°**: gravity has moved from the IMU's Y axis (where `mount.json` recorded it at
+5.89° on 2026-09-11) to its Z axis, and F-19 §7 established that **Z is the optical axis**. The
+camera is lying flat facing up, not aimed at a room. 490 clean samples, |g| = 9.659.
+
+That also exposed a flaw in the tool, since fixed: it advised setting `cameraTiltDegrees` to 88,
+which is obediently wrong. Above 45° it now says the camera is not mounted rather than offering to
+compensate a non-tilt.
+
+### NOT DONE — for the shoot itself
+
+- [ ] The camera has to be mounted and the preflight has to say READY.
+- [ ] **Act 1 is the tilt test**, Act 2's DEPTH REACH beat is the **4 m range test**, and every act
+      exercises FP16. None of those have been confirmed.
+- [ ] Act 4 runs from `456.webm` because the shoot is solo — **no stereo depth from a video file**,
+      which the captions state on screen. Live crowd tracking stays unverified.
+- [ ] Act 5 (kill the sidecar on camera, watch it recover) is the one shot that has never been filmed
+      and is the strongest production-readiness claim available.
+
+---
+
+## F-47 — SR6: THE SIDECAR TRACKS, UNITY DOES NOT, AND F-21 IS WHY (2026-09-18)
+
+Evidence: `Assets/Games/video/SR6.mp4` (6m21s, one person). Decision: **ADR-083**.
+Status: **DIAGNOSED, NOT FIXED.** A shoot-time workaround exists; the production fix is specified
+and deliberately deferred.
+
+### The report
+1. tracking quality degrades over a session
+2. **Unity does not react while the sidecar preview tracks perfectly**
+3. the sidecar sometimes loses the subject completely
+
+### DONE — root-caused, all three from one mechanism
+
+(2) is not a tracking failure. `wholebody_udp_sender.py` draws `_preview(...)` **inside** the
+`if not should_emit:` branch and skips the `sendto` — so a withheld frame looks like a perfect
+preview and a frozen Unity, which is precisely what was reported.
+
+Measured from SR6: `switches=12` by 5:20 and `13` by 6:15, repeated `F-21 NO TARGET`, and Unity
+reading `packetAgeMs=994.0 clampNewest=2048` — **thirteen ownership switches with one person.**
+
+The trap, in `target_ownership.py`: `LOCKED` rejects an observation whose hip moved more than
+`SWITCH_MARGIN_M = 0.35` from the owner (`position_jump`), **and does not update `owner_pos` on
+rejection.** The subject is then permanently outside their own margin, every later frame is rejected
+identically, and `RELEASE_TIMEOUT_S = 4.0` eventually releases and re-acquires them as a new owner.
+Positive feedback, not a merely-tight threshold.
+
+(3) is the same state: `NO_TARGET`/`RELEASED` resets the crop to `R.center_bbox(...)`, so an
+off-centre subject drops out of the pose crop and the **preview** loses them too. (1) is these
+accumulating.
+
+**It surfaced now because of our own work:** F-40 added `FollowPosition`, F-44 took the usable band
+to ~1.4–4.5 m, and F-46's run of show instructs the subject in writing to walk toward and away from
+the camera. F-21 assumes a subject standing at 0.90 m and not moving.
+
+### DONE — the shoot is unblocked
+
+- [x] Start the sender by hand with `--no-ownership` and let `SidecarBootstrap` attach (the
+      supervisor deliberately refuses to forward `--ownership`; uncheck `Auto Start Sidecar` first
+      so Unity cannot race it). Exact command in ADR-083.
+- [x] Middle path recorded: `--ownership-switch-margin 1.2` keeps the protection and tolerates a
+      step.
+
+### NOT DONE — the production fix
+
+- [ ] **Capture the reason before tuning.** The sender already logs `[wb] TARGET ... reason=...` and
+      `--ownership-log-dir` writes it per event. ADR-083 establishes the MECHANISM; it does not
+      establish whether `position_jump` or `scale_mismatch` dominates live.
+- [ ] **Close the feedback trap** — update or decay `owner_pos` toward a rejected-but-plausible
+      observation so one fast movement cannot strand the owner outside its own margin. Smallest
+      correct change; does not widen the gate.
+- [ ] **Consider a velocity-aware margin** instead of a fixed metre count.
+- [ ] **Do NOT simply raise `SWITCH_MARGIN_M`** — ADR-061 measured a real identity migration at
+      0.015 m/frame, 23x under the existing margin.
+- [ ] Nothing filmed with `--no-ownership` demonstrates target ownership. Say so if the footage is
+      ever used as evidence for F-21.
+
+---
+
+## F-48 — SR7: THE TRANSPORT IS FIXED, THE INPUT IS OUT OF RANGE, AND THE CALIBRATION LEARNED FROM IT (2026-10-09)
+
+Evidence: `Assets/Games/video/SR7.mp4` (200.6 s, one person, sender run with `--no-ownership`).
+Decision: **ADR-084**. Status: **IMPLEMENTED AND UNIT/INTEGRATION-TESTED; NOT YET FILMED.**
+
+**Provenance of the SR7 figures below:** they are the analysis handed to this task (frames extracted
+with `ffmpeg` at ~1100 px). They were not re-extracted in the session that wrote F-48; the code and
+tests were built against them.
+
+### What SR7 established
+
+SR6's failure (F-47, ADR-083) was transport starvation caused by F-21 gating the UDP send. SR7 ran
+`--no-ownership`, so it proves the workaround bypasses F-21 and **says nothing about whether F-21 is
+fixed** (Unity's TRUST HUD read `ownership not running (--no-ownership)`; the sidecar HUD had no
+`F21` line). With F-21 out of the way the transport was healthy: `packetAgeMs` 8-31 ms (SR6: 994),
+`clampNewest` 20-49 (SR6: 1177-1750), ~40 ms end to end, `parseErr=0`, sender 29.0-29.6 fps, Unity
+163-194 fps. **Do not regress this** — nothing in F-48 touches the receive path.
+
+What was wrong was the INPUT. The subject spent minutes at **0.91, 1.07-1.28 and finally 0.66 m**
+hip depth, against F-44's usable band of ~1.4-4.5 m. Landmarks dropped out of the preview, the TRUST HUD
+read 17-21 of 33 joints measured, and everything downstream still ran on it:
+
+| symptom | cause |
+|---|---|
+| debug skeleton collapses to a vertical line (~104-112 s) | inferred-depth joints fed the body |
+| avatar driven toward the camera (~192 s, hip 0.66 m) | `FollowPosition` / `ApplyRootPosition` obeyed the root |
+| stretched bones in still frames | `LearnBoneLengths` accepted any pair that was merely *valid*, and the global band was 0.01-0.80 m |
+| left palm 147 mm but thumb-index 2273 mm (~48 s) | the palm gate checks one segment; one fingertip can be metres away |
+| "OUT OF RANGE - step closer" | one message for every hand refusal, including a hand that was too close |
+| `maxCorr` / bone error missing from the capture | a single ~220-character HUD line ran off an 1100 px frame |
+
+### DONE — Stage A: the operating volume
+
+- [x] **`OperatingVolume`** (static, like `CameraMount`): near **1.35 m**, far **4.5 m**, hold **0.75 s**,
+      settle **6 poses**, hysteresis 5 cm. Published from `AppBootstrap`'s Inspector
+      (`Operating Volume (F-48)` header), so it is inspectable and tunable — not a constant.
+- [x] **`OperatingVolumeGate`**, one per consumer. Judges `|root.z|` — the figure the TRUST HUD already
+      prints — into `InVolume / TooNear / TooFar / RootInvalid / NoRoot`, and into an admission:
+      **Outside** (hold), **Settling** (draw, don't learn), **Trusted**.
+- [x] **Wired into all three consumers** that run the humanize chain: `TrackedStage` (every experience),
+      `SkeletonShowBootstrap`, `AppBootstrap` (avatar). Outside the volume the last good body is HELD for
+      0.75 s, the walk-follow does not move and its neutral is never captured, and calibration learns
+      nothing; after the hold the stage withholds the body and says why. **No clamping** — see ADR-084.
+- [x] **A person standing too close is not an empty room**: `TrackedStage` skips the attract figure when
+      `live` is true, so the synthetic loop never appears over somebody who is merely out of range.
+- [x] Receive telemetry is untouched. The gate counts **poses, not render frames**, so a 190 fps loop
+      cannot report a rejection rate that belongs to the display.
+
+### DONE — Stage B: calibration only learns from trustworthy evidence
+
+- [x] **Measured-depth provenance** reaches the humanize layer through the existing trust channel —
+      `HumanizedSkeleton.Process(frame, dt, TrackingTelemetry, PoseAdmission)` reads
+      `TrackingTelemetry.DepthMeasured(joint)`. No parallel source of truth; the old two-argument
+      `Process` is kept and means "provenance unknown".
+- [x] A bone is observed only if both endpoints are valid **and** both measured **and** the pose is
+      `Trusted`. Inferred joints are still output, rebuilt and held exactly as before — the rule gates
+      learning, not output.
+- [x] **Per-bone anatomical bands** replace the 0.01-0.80 m global one (`HumanBodyModel.MinBoneLengthM` /
+      `MaxBoneLengthM`, one band per bone, adult 1st-99th percentile widened for landmark-vs-joint
+      offsets). A 55 cm forearm used to pass.
+- [x] **A bad side cannot pollute the good side**: left/right are averaged only when their medians agree
+      to 20 %; otherwise each keeps its own. One validated side still serves an occluded other.
+- [x] **Re-entry**: a held gap drops the temporal memory (`DropTemporalMemory`), so a subject who walks
+      back in is not velocity-clamped against where they stood seconds earlier (mutation-tested: without
+      it a walk back in is clamped 10 times as a "teleport").
+
+### DONE — Stage C: the correction layer is legible
+
+- [x] New counters: `CalibSamplesAccepted`, `CalibRejectedUnmeasured`, `CalibRejectedVolume`,
+      `CalibRejectedImplausible`, `FramesHeldOutOfVolume`. Unit = one bone sample.
+- [x] `HumanizedStats.ToHud(...)`: five short lines (calibration `n/24 bones ready`, trunk+head length,
+      `maxCorrection`, `maxBoneError`, every rejection reason). Worst case with 8-digit counters is
+      **<= 130 characters per line** (asserted).
+- [x] `TrunkAndHeadLength()` is now shown. It earns its place as a tape-measure check: it is the sum of
+      two bands, so a value outside ~0.42-1.10 m says calibration converged on something that is not a person.
+- [x] HUD layout: every label is the **screen's** width, the SkeletonShow block is anchored to the bottom
+      and its height is counted, and the mode panel is clamped to the room left of the buttons.
+      `ExperienceBase` gains a `VOLUME ...` line and a large TOO CLOSE / TOO FAR warning.
+- [x] The avatar app logs and reports (`DiagnosticsHudPanel`) every volume transition.
+
+### DONE — Stage D: hand safety
+
+- [x] **Per-landmark validation** in `HandPose`: every landmark within 2.8 palms and 0.30 m of the hand's own
+      wrist, thumb-index within 3.0 palms, non-finite refused. The SR7 hand (palm 147 mm, thumb-index
+      2273 mm = 15.5 palms) is refused; **each hand is judged on its own landmarks**, so a bad left leaves a
+      good right usable.
+- [x] `HandRange` (`NotTracked / Ok / TooFar / TooCloseOrUnreliable`), plus `RejectedPalmFrames`,
+      `RejectedLandmarkFrames` and `WorstReachPalms` per hand, counted per datagram.
+- [x] `HandRangeAdvice`: only a palm too SMALL says "move closer". A palm too large, or a fingertip that has left
+      the hand, says "TOO CLOSE or depth unreliable - hold your hand further from the camera". A too-near
+      body outranks any hand and says "step back". Air Graffiti and the HANDS HUD use it.
+
+### MEASURED — verification, and what it does and does not prove
+
+Run headlessly (the Editor holds the project lock; no batch mode):
+
+| check | result |
+|---|---|
+| `dotnet build VirtualMirror.Tests.csproj` / `VirtualMirror.App.csproj` | 0 errors |
+| Unity's own recompile (Editor open) | `Library/ScriptAssemblies` refreshed, no `error CS` in `Editor.log` |
+| `NearFieldSafetyF48Tests` (60 tests) on real UnityEngine | **47 pass, 13 fail** — the 13 all reach `Quaternion.LookRotation` inside `HumanizedSkeleton.Process`, a native ECall |
+| same 60 under a managed stand-in for `Vector3/Quaternion/Mathf` | **60 / 60 pass**, including two end-to-end `TrackedStage` tests over a real UDP socket |
+| existing `HumanizedSkeletonSelfTest` (F-27) under the stand-in | **32 / 32 pass** — the layer's old behaviour is intact |
+| full suite on real UnityEngine | 261 pass, 33 fail = **13 mine (above) + 19 ECall + 1 missing `AnimationModule`** — the last 20 are pre-existing, in code F-48 does not touch |
+| mutation: disable the measured-depth rule | 3 tests fail (`Expected 30, was 90`) |
+| mutation: let near-field frames drive the follow position | the end-to-end test fails with the figure at **z = -1.28 m**, ~1.9 m toward the lens — SR7's camera-rush, reproduced |
+| mutation: keep temporal memory across the gap | the recovery test fails (`VelocityClamped` 0 -> 10) |
+
+The 13 that need the stand-in are **real tests** that will run in the Editor Test Runner as written;
+they cannot run on the bare .NET runner for the same reason the project's own `ArmAimSolverTests` cannot.
+The stand-in is a scratch tool, not part of the project, and self-checks its quaternion algebra
+(`LookRotation`, `AngleAxis`, `Inverse`, `RotateTowards`, `Slerp`) before any result is read.
+
+The baseline you quoted (~208 passing, 9 known infrastructure failures) came from a different runner; the
+absolute counts here are not comparable to it. What is comparable is the **set**: every failure outside
+`NearFieldSafetyF48Tests` is an `ECall` or a missing engine module.
+
+### NOT DONE — open, and said plainly
+
+- [ ] **The on-camera acceptance recording was not made.** It needs a person and the camera. Nothing above
+      is camera-verified. Protocol is in `F46_DEMO_RUN_OF_SHOW.md` §6; the four things to read off it are
+      the VOLUME line, the `rejected unmeasured-depth / out-of-volume` counters, `calibration n/24`, and
+      whether the figure rushes the lens at the boundary.
+- [ ] **1.35 m and 4.5 m are derived, not measured.** Near comes from F-44's 1.4 m edge and SR7's
+      degradation; far is F-44's pixels-on-target arithmetic, which F-44 itself lists as not a capture. The
+      3-4 m take is what confirms or moves them. They are Inspector fields precisely so that is cheap.
+- [ ] **This changes the product at 0.90 m.** F-43's setup table and F-46's run of show both say a single person
+      stands at 0.90 m. That is now `TOO CLOSE` and the avatar holds, then stops being driven. If 0.90 m is
+      still wanted as the Mirror's operating point, F-44's 800p change needs a capture AT 0.90 m, and the near
+      limit becomes a per-scene setting. **This is a product decision, not a bug**, and it is flagged rather
+      than decided.
+- [ ] **Crowd bodies are not volume-gated.** Only the primary person's root is judged; the crowd path
+      (`UpdateCrowd`) is unchanged. A crowd member too close is not held.
+- [ ] **The avatar's own finger curls and palm rotation are not covered by Stage D.** `OakDUdpPoseProvider.ParseHands`
+      still feeds `HandFrame` (curls, `PalmRotation`) from the raw `lh`/`rh`. Curls are angle-based and the palm is
+      already rate-limited, but a blown-up fingertip can still reach them. Stage D protects `HandPose`
+      (experiences, SkeletonShow), not the avatar retarget.
+- [ ] **HUD layout is verified by counting characters, not on a screen.** IMGUI wrap behaviour at 1100 px has not
+      been looked at in the Editor.
+- [ ] **`AppBootstrap` integration is verified by compile only.** It needs the avatar scene and a camera.
+- [ ] **A hand is not checked against the body's wrist.** `HandPose` bounds landmarks against the hand's own wrist;
+      comparing that wrist to landmark 15/16 would also catch a whole hand placed wrongly.
+- [ ] **Stage E / ADR-083 / F-21 is untouched and still open.** `target_ownership.py` was not edited and nothing here
+      tests ownership. SR7 does not show it fixed.
+
+---
+
+## F-49 — RUN THE SAME TRACKING ON A VIDEO: A LINK AND A TICKBOX (2026-10-09)
+
+Decision: **ADR-085**. Status: **IMPLEMENTED; verified end to end headlessly; NOT yet seen in the Editor.**
+
+Wanted: give Unity a video link and tick a boolean, and have everything — the skeleton show, every
+experience, the VRM avatar — run exactly as it does live, with inference on the video instead of the
+OAK-D feed.
+
+### DONE
+
+- [x] **`tools/video/video_udp_sender.py`** — the production single-person pipeline (RTMW3D, production
+      landmark builders, P1-1 states) on a video, sending the **identical datagram**, so nothing in Unity
+      changes. Source may be a local path, a **direct** http(s) link (downloaded once, cached, atomic via
+      `.part`, 2 GiB cap) or a page via `yt-dlp` **if installed** (it is not in the venv). Loops forever by
+      default; after a finite `--loop` it idles instead of exiting, because the supervisor would restart it.
+      Every frame is paced to the clip's own clock — including skipped ones, which the first run showed
+      racing ahead on a clip that opens on an empty room.
+- [x] **Supervised, not direct.** `sidecar_supervisor.py` gained a `video` sender kind (`SENDER_BY_SCRIPT`),
+      with its own flags; none of the camera flags are forwarded to it (and `--show` is not, it has no
+      window). The sender prints the supervisor's readiness markers and a 2 s heartbeat, **including while
+      downloading and loading the model**, or the 10 s watchdog would kill a slow download.
+- [x] **`AppBootstrap > Video Test Source (F-49)`**: `Track From Video` (the boolean), `Video Source`
+      (link, absolute path, or project-relative `Assets/Games/video/SR7.mp4`), `Video Loop`,
+      `Video Assume Measured Depth`, `Video Subject Height Metres`, `Video Horizontal Fov Degrees`,
+      `Video Clamp Depth` + range. Applied at boot **and live**: edit a field in Play mode and the sidecar
+      restarts a second after the typing stops (the model reloads, ~10 s). A sidecar Unity did not start
+      is never restarted.
+- [x] **`VideoSourceSpec`** validates the Inspector text in Unity first — http/https or an existing file, no
+      quotes, no control characters, bounded length — so a typo is one clear console line, not a Python
+      traceback in a log. The sender re-validates independently.
+- [x] One sender for every scene: crossing the single/crowd columns does **not** trigger the 15–20 s sender
+      swap, because there is no crowd video sender.
+- [x] The HUD/launcher footer names the source: `VIDEO SR7.mp4 (UDP sidecar, no stereo)`.
+
+### MEASURED
+
+| check | result |
+|---|---|
+| `tests/test_video_source.py` (classification, loopback-HTTP download, cache, `.part` cleanup, size cap, yt-dlp-absent message, supervisor command vs the sender's own argparse) | **46 / 46** |
+| `VideoSourceF49Tests` (Inspector rules + the C#-built command line, incl. a `de-DE` culture check) | **13 / 13** |
+| full C# suite under the managed stand-in | **276 pass, 31 fail** — the same 31 stand-in-gap failures as before F-49 (`Color`, `Vector2`, `MonoBehaviour`…); +13 is exactly the new fixture |
+| real RTMW3D on `SR7.mp4`, DirectML, through the real supervisor | wire correct: monotonic `seq`, one `sid`, `lm lh rh xyz src st lat`; every `src` = 0 |
+| **full chain**: supervisor → video sender → Unity's real `OakDUdpPoseProvider` + `TrackedStage` over UDP, 85 s | 1930 datagrams, **parseErr 0**; body live on 2234/2994 ticks (the first ~19 s of SR7 is an empty room); hands read; F-48 gate `TRUSTED` |
+| same chain, default (depth labelled inferred) | `measured 0/33`, calibration **0/24**, 40 128 `unmeasured-depth` refusals — the F-48 rule working as designed on a source with no stereo |
+| same chain, `--assume-measured` | `measured 33/33`, calibration **18/24 bones**, trunk+head **0.73 m** (plausible), `impossible-length` 2133 refusals (the per-bone band doing its job on monocular noise) |
+| hand gate on the video stream | both hands `ok` most of the time, refused at moments: L palm 278 / landmark 111, R palm 314 / landmark 154 refusals over 85 s — **monocular hand depth is noisy and F-48's gate is catching it**, which is a finding about the source, not a defect |
+
+### NOT DONE — open
+
+- [ ] **Not run inside the Editor.** Everything above ran on the real Unity assemblies plus a managed stand-in for
+      `Vector3/Quaternion/Mathf`, driving `TrackedStage` directly. `AppBootstrap`'s new fields, the
+      live-restart watcher and the launcher flow were compiled (`dotnet build VirtualMirror.App.csproj`, 0 errors) but
+      not exercised, and Unity's own recompile of the new `Tracking` file had not happened yet when this was written.
+- [ ] **No crowd.** The multi-person detector is an OAK-D VPU blob; there is no host-side copy. A crowd scene fed from
+      video sees one person. A host-side detector (ONNX) would be the next step if that is wanted.
+- [ ] **No stereo, so no real depth.** Hip depth is `subject height × fy / pixel span`. The default clamp (1.6–4.0 m)
+      keeps a clip inside the F-48 volume; SR7's raw estimate was 3.7–6 m and would have read TOO FAR. Untick the
+      clamp to test the volume against a clip.
+- [ ] **A page link (YouTube etc.) is untested** — yt-dlp is not installed, by design. The code path and its
+      absent-yt-dlp message are tested; the happy path is not.
+- [ ] **A direct link was tested against a loopback server, not the internet.** Redirects, auth and CDNs are as
+      `urllib` handles them.
+- [ ] A finite loop cannot be told to "stop and show the last frame"; it goes stale. Deliberate (ADR-085) but unconfirmed as the
+      behaviour you want.
+- [ ] The scratch tools used to verify this (the Unity stand-in, the reflection runner, `StageRun`) are not in the repo.

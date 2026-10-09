@@ -88,6 +88,8 @@ namespace VirtualMirror.SkeletonShow {
         private readonly HandPose leftHand = new HandPose();
         private readonly HandPose rightHand = new HandPose();
         private readonly PresenceGate presence = new PresenceGate();
+        // F-48: the same operating-volume gate every tracked consumer uses.
+        private readonly OperatingVolumeGate volume = new OperatingVolumeGate();
         private AttractSkeleton attract;
         private bool hasTelemetry;
         private float endToEndLatencyMs;
@@ -182,6 +184,10 @@ namespace VirtualMirror.SkeletonShow {
             PoseFrame frame;
             bool live = provider.TryGetLatestFrame(out frame) && frame != null && frame.IsValid;
             presence.Update(live, dt);
+            if (presence.Changed && !presence.Present) {
+                // The room emptied: the next visitor is an arrival, not a continuation.
+                volume.Reset();
+            }
             if (presence.Changed) {
                 log.Log(LogLevel.Info, presence.Present
                         ? "F-29 attract: person acquired - going live."
@@ -201,8 +207,16 @@ namespace VirtualMirror.SkeletonShow {
                 endToEndLatencyMs = telemetry.AgeSeconds * 1000f;
             }
 
-            if (live) {
+            // F-48: judged on the frame about to be drawn. `live` stays "a person is in frame";
+            // `usable` is "may they drive the body" - false once they have been outside the working
+            // volume for longer than the hold. See TrackedStage for the full reasoning; this scene
+            // keeps its own copy of the chain, so it keeps its own copy of the rule.
+            volume.Update(live ? frame : null, dt);
+            bool usable = live && !volume.Expired;
+
+            if (usable) {
                 everTracked = true;
+                bool holding = volume.Admission == PoseAdmission.Outside;
                 PoseFrame shown = frame;
                 if (useHumanizedSkeleton) {
                     // Same rule the mirror app uses: advance the layer's temporal state ONCE per pose,
@@ -216,14 +230,19 @@ namespace VirtualMirror.SkeletonShow {
                         if (poseDelta <= 0f || poseDelta > 0.5f) {
                             poseDelta = dt;
                         }
-                        humanizedFrame = humanized.Process(frame, poseDelta);
+                        humanizedFrame = humanized.Process(frame, poseDelta,
+                                                           hasTelemetry ? telemetry : null,
+                                                           volume.Admission);
                         lastPoseTimestamp = ts;
                     }
                     shown = humanizedFrame;
                 }
-                pose.Fill(shown, StagingOrigin(), bodyScale, dt);
+                // Humanize off: not filling IS the hold (the pose keeps what it was last given).
+                if (useHumanizedSkeleton || !holding) {
+                    pose.Fill(shown, StagingOrigin(), bodyScale, dt);
+                }
                 pose.Telemetry = hasTelemetry ? telemetry : null;
-            } else if (attractEnabled && !presence.Present) {
+            } else if (!live && attractEnabled && !presence.Present) {
                 // Attract drives the SAME path a person does, so whichever mode is active performs
                 // its real behaviour on a synthetic body. Telemetry is deliberately cleared: these
                 // joints were never tracked and a HUD must not report a state for them.
@@ -459,17 +478,32 @@ namespace VirtualMirror.SkeletonShow {
 
             // Status lives at the BOTTOM of the screen: the first live capture put it across the
             // subject's chest, which is exactly where the thing being judged is.
-            float y = Screen.height - 96f;
+            //
+            // LAYOUT, F-48. Every rect is the SCREEN's width and the block's height is counted, not
+            // guessed: the old fixed 1600 px rects ran off the edge of SR7's 1100 px capture and took
+            // maxCorr and the bone error - the correction layer's own verdict - with them. The block
+            // is anchored to the bottom edge so adding a line moves it up instead of off the screen.
+            float lineWidth = Screen.width - 32f;
+            const float lineHeight = 21f;
+            int humanizeLines = useHumanizedSkeleton ? 5 : 0;
+            float blockHeight = lineHeight * (4 + humanizeLines);
+            float y = Screen.height - blockHeight - 10f;
+            float blockTop = y;
             if (activeMode >= 0) {
-                GUI.Label(new Rect(16f, y, 1200f, 22f), modes[activeMode].Description, hudStyle);
+                GUI.Label(new Rect(16f, y, lineWidth, lineHeight), modes[activeMode].Description, hudStyle);
             }
-            y = y + 22f;
-            GUI.Label(new Rect(16f, y, 1200f, 22f),
+            y = y + lineHeight;
+            GUI.Label(new Rect(16f, y, lineWidth, lineHeight),
                       "1-5 or TAB switch mode      H humanized      A attract      G ground-to-floor", hudStyle);
-            y = y + 22f;
+            y = y + lineHeight;
             string tracking;
+            string volumeShort = volume.ShortMessage();
             if (!everTracked) {
                 tracking = "WAITING for the sidecar on UDP " + udpPort + " - no pose has arrived yet";
+            } else if (volumeShort != null && volume.Admission == PoseAdmission.Outside) {
+                // The reason, not just the symptom: a frozen or vanished body with a healthy stream is
+                // exactly what SR7 looked like, and was misread as a tracking fault.
+                tracking = volumeShort + (volume.Expired ? " - body withheld" : " - holding last body");
             } else if (!presence.Present && attractEnabled) {
                 // Named explicitly. An operator seeing a moving figure must never have to wonder
                 // whether it is a person being tracked or the demonstration loop.
@@ -479,23 +513,24 @@ namespace VirtualMirror.SkeletonShow {
             } else {
                 tracking = "NO BODY IN FRAME";
             }
-            GUI.Label(new Rect(16f, y, 1600f, 22f),
+            GUI.Label(new Rect(16f, y, lineWidth, lineHeight),
                       tracking + "      humanized: " + (useHumanizedSkeleton ? "ON" : "OFF")
                       + "      attract: " + (attractEnabled ? "ON" : "OFF")
                       + "      " + smoothedFps.ToString("F0") + " fps",
                       hudStyle);
+            y = y + lineHeight;
+            GUI.Label(new Rect(16f, y, lineWidth, lineHeight), "F-48  " + volume.Summary(), hudStyle);
             if (useHumanizedSkeleton) {
-                y = y + 22f;
-                HumanizedStats s = humanized.Stats;
-                GUI.Label(new Rect(16f, y, 1600f, 22f), "F-27  " + s.ToString(), hudStyle);
+                y = y + lineHeight;
+                GUI.Label(new Rect(16f, y, lineWidth, lineHeight * humanizeLines), humanized.HudText(), hudStyle);
             }
-            DrawModePanel();
+            DrawModePanel(blockTop - 8f);
         }
 
         // F-29: the two new modes carry a numeric panel of their own. Drawn here rather than in the
         // modes because one place owning every GUI call is what keeps the modes free of layout, and
         // because a panel drawn top-right cannot collide with the switcher on the left.
-        private void DrawModePanel() {
+        private void DrawModePanel(float bottomLimit) {
             if (activeMode < 0) {
                 return;
             }
@@ -508,9 +543,11 @@ namespace VirtualMirror.SkeletonShow {
             if (text == null) {
                 return;
             }
-            const float panelWidth = 640f;
+            // Never wider than the room left of the mode buttons, and never taller than the space above
+            // the status block, so a panel cannot be cut off by either screen edge or overdraw it.
+            float panelWidth = Mathf.Min(640f, Screen.width - 250f - 48f);
             float x = Screen.width - panelWidth - 16f;
-            GUI.Label(new Rect(x, 16f, panelWidth, 320f), text, hudStyle);
+            GUI.Label(new Rect(x, 16f, panelWidth, Mathf.Max(120f, bottomLimit - 16f)), text, hudStyle);
         }
 
         // The legend is permanent in the trust HUD, not a help overlay: this mode inverts the show's

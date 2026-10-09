@@ -309,10 +309,28 @@ namespace VirtualMirror.SkeletonShow {
                 return;
             }
             if (hand.Implausible) {
-                readout.Append("REJECTED - palm ").Append((hand.PalmMetres * 1000f).ToString("F0"));
-                readout.Append(" mm is outside ").Append((HandPose.MinPalmMetres * 1000f).ToString("F0"));
-                readout.Append("-").Append((HandPose.MaxPalmMetres * 1000f).ToString("F0"));
-                readout.Append(" mm; this is out of range, not a gesture");
+                // Three different refusals, said differently because they need different advice. The
+                // old single line told every one of them "out of range", which for a hand that was
+                // too CLOSE (or whose depth had blown up) was the wrong direction to move.
+                float palmMm = hand.PalmMetres * 1000f;
+                if (hand.Range == HandRange.TooFar) {
+                    readout.Append("TOO FAR - palm ").Append(palmMm.ToString("F0"));
+                    readout.Append(" mm is below ").Append((HandPose.MinPalmMetres * 1000f).ToString("F0"));
+                    readout.Append(" mm; move closer");
+                } else if (hand.PalmMetres >= HandPose.MinPalmMetres
+                           && hand.PalmMetres <= HandPose.MaxPalmMetres) {
+                    readout.Append("REJECTED - palm ").Append(palmMm.ToString("F0"));
+                    readout.Append(" mm is fine but a landmark is ");
+                    readout.Append(hand.WorstReachPalms.ToString("F1"));
+                    readout.Append(" palms from the wrist (limit ");
+                    readout.Append(HandPose.MaxReachPalms.ToString("F1")).Append("): depth unreliable");
+                } else {
+                    readout.Append("TOO CLOSE or depth unreliable - palm ").Append(palmMm.ToString("F0"));
+                    readout.Append(" mm is above ").Append((HandPose.MaxPalmMetres * 1000f).ToString("F0"));
+                    readout.Append(" mm; do not step closer");
+                }
+                readout.Append("   refused palm ").Append(hand.RejectedPalmFrames);
+                readout.Append(" landmark ").Append(hand.RejectedLandmarkFrames);
                 return;
             }
             readout.Append("palm ").Append((hand.PalmMetres * 1000f).ToString("F0")).Append(" mm");

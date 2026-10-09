@@ -183,8 +183,18 @@ MonoBehaviour:
   sidecarMultiPersonPortrait: 0
   sidecarPortraitDirection: ccw
   sidecarSubpixelBits: 3
+  sidecarMonoResolution: 800p
+  sidecarRgbIspScale: 1/1
   useVideoSource: 0
   useMediaPipeTracking: 1
+  trackFromVideo: 1
+  videoSource: Assets\Games\video\456.webm
+  videoLoop: 1
+  videoAssumeMeasuredDepth: 0
+  videoSubjectHeightMetres: 1.7
+  videoHorizontalFovDegrees: 60
+  videoClampDepth: 1
+  videoDepthRangeMetres: {x: 1.6, y: 4}
   useKalidokitBody: 1
   kalidokitBodyFlipQuat: 2
   kalidokitBodyEulerSigns: {x: 1, y: 1, z: 1}
@@ -208,9 +218,15 @@ MonoBehaviour:
   humanizeVelocity: 1
   humanizeBoneLengths: 1
   humanizeAngles: 1
+  useOperatingVolume: 1
+  volumeNearMetres: 1.35
+  volumeFarMetres: 4.5
+  volumeHoldSeconds: 0.75
+  volumeSettlePoses: 6
   poseFlipX: 0
   poseFlipY: 1
   poseFlipZ: 0
+  cameraTiltDegrees: 6
   useFaceTracking: 1
   useHandTracking: 1
   wristRotationWeight: 0

@@ -1,7 +1,102 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-17 (ADR-075..078: detector geometry, scene picks the sender, sub-pixel depth, mirror + mount + walk)
+Last updated: 2026-10-09 (F-48 / ADR-084: operating volume, measured-depth calibration, hand safety — see the F-48 section directly below)
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## 🔷 F-49 — test against a VIDEO instead of the OAK-D (2026-10-09)
+
+Full record: [`tasks.md`](tasks.md) F-49, [`decisions.md`](decisions.md) **ADR-085**.
+
+**To use it:** `AppBootstrap` (in `Bootstrap.unity`) → `Video Test Source (F-49)`: tick **Track From Video**, set
+**Video Source** (an http(s) link to a video file, an absolute path, or `Assets/Games/video/SR7.mp4`), press Play.
+Edit any field while playing and the sidecar restarts a second after you stop typing (~10 s model load). Every
+scene, the skeleton show and the VRM avatar then run on the video through the normal flow.
+
+How it works: `python-sidecar~/tools/video/video_udp_sender.py` is a *producer* that sends the production datagram, run by
+the supervisor like the camera senders. Unity code is unchanged downstream. **Know its limits before quoting a result:**
+no stereo (TRUST HUD reads 0/33 measured, F-48 calibration 0/24 — correct), one person only, depth estimated from
+`Video Subject Height`, F-21 off. `Video Assume Measured Depth` relabels `src` so calibration can run (18/24 on SR7) —
+label only, never evidence about the sensor. `Video Clamp Depth` (on) keeps the clip inside the F-48 volume; untick it to
+test the volume against the clip. Page links (YouTube) need `yt-dlp` in the sidecar venv — **not installed**; direct
+`.mp4/.webm/...` links and local paths work with nothing extra.
+
+Not yet run inside the Editor (see tasks.md F-49 NOT DONE). Files: `video_udp_sender.py`, `sidecar_supervisor.py`,
+`tests/test_video_source.py` (sidecar repo); `VideoSourceSpec.cs`, `SidecarProcessLauncher.cs`, `AppBootstrap.cs`,
+`Tests/EditMode/VideoSourceF49Tests.cs` (Unity).
+
+---
+
+## 🔶 F-48 — SR7: bad near-field input poisoned the calibration (2026-10-09) — START HERE
+
+Full record: [`tasks.md`](tasks.md) F-48, [`decisions.md`](decisions.md) **ADR-084**. SR7 is `Assets/Games/video/SR7.mp4`.
+
+**The state in four sentences.** Transport is fine (SR7, `--no-ownership`: 8-31 ms packet age, ~40 ms end to
+end, 29 fps sender) and F-21 is **still broken and untouched** — `--no-ownership` bypasses it, so SR7 proves
+nothing about it. What was wrong was the INPUT: the subject stood at 0.66-1.28 m, below F-44's 1.4-4.5 m, and the
+calibration, the follow-position and the hand gestures all consumed it. F-48 refuses out-of-range poses (never
+clamps), teaches the calibration only from stereo-measured joints, bounds each bone by its own anatomy, and
+validates every hand landmark. **It is implemented and tested but has NOT been filmed.**
+
+### What to carry forward
+
+1. **`OperatingVolume` + `OperatingVolumeGate`** (`Runtime/Core/Humanize/`). Limits are Inspector fields on
+   `AppBootstrap` (`Operating Volume (F-48)`): near 1.35 m, far 4.5 m, hold 0.75 s, settle 6. The judged number is
+   `|root.z|`. One gate per consumer; all three humanize consumers use it (`TrackedStage`,
+   `SkeletonShowBootstrap`, `AppBootstrap`).
+2. **`HumanizedSkeleton.Process(frame, dt, TrackingTelemetry, PoseAdmission)`** is the provenance path.
+   `Outside` returns the previous body untouched; `Settling` draws but never learns; `Trusted` learns.
+   The two-argument overload still exists and means "provenance unknown" (treated as measured).
+3. **Where to look when a bone will not calibrate:** the HUD says which gate refused — `unmeasured-depth`,
+   `out-of-volume`, or `impossible-length`. Do not widen the bands first.
+4. **The 0.90 m conflict.** F-43/F-46 put one person at 0.90 m; that is now TOO CLOSE. This is a PRODUCT
+   decision (ADR-084 Consequences), not a bug. Do not "fix" it by lowering the near limit without a capture at 0.90 m.
+5. **Not covered:** crowd bodies, the avatar's finger curls/palm rotation (`ParseHands` -> `HandFrame`), and F-21.
+
+### Files modified (F-48)
+
+```text
+Runtime/Core/Humanize/OperatingVolume.cs          NEW  limits, verdicts, admission, Classify (static)
+Runtime/Core/Humanize/OperatingVolumeGate.cs      NEW  per-consumer state, hold/settle, counters, messages
+Runtime/Core/Humanize/HumanBodyModel.cs           +    per-bone anatomical bands
+Runtime/Core/Humanize/BoneLengthCalibrator.cs     +    per-bone gate, mirror-agreement guard, rejection count
+Runtime/Core/Humanize/HumanizedSkeleton.cs        +    provenance + admission Process overload, DropTemporalMemory, HudText
+Runtime/Core/Humanize/HumanizedStats.cs           +    calibration counters, ToHud()
+Runtime/SkeletonShow/TrackedStage.cs              +    Volume gate, follow/hold/expire, StatusLine, HumanizedLayer
+Runtime/SkeletonShow/SkeletonShowBootstrap.cs     +    same gate; HUD laid out to the screen's width
+Runtime/Bootstrap/AppBootstrap.cs                 +    Inspector fields, gate, provenance, root-follow guard, transition log
+Runtime/SkeletonShow/HandPose.cs                  +    per-landmark validation, HandRange, HandRangeAdvice, counters
+Runtime/SkeletonShow/HandsMode.cs                 +    three distinct refusal readouts + counters
+Runtime/Experiences/ExperienceBase.cs             +    VOLUME line, TOO CLOSE warning, screen-width rects
+Runtime/Experiences/AirGraffitiExperience.cs      +    advice via HandRangeAdvice
+Tests/EditMode/NearFieldSafetyF48Tests.cs         NEW  60 tests incl. 2 end-to-end TrackedStage tests over UDP
+docs/tasks.md, docs/decisions.md, docs/ai_handoff.md, docs/F46_DEMO_RUN_OF_SHOW.md, CHANGELOG.md
+```
+
+New `.cs` files were added by hand to the generated `VirtualMirror.Core.csproj` / `VirtualMirror.Tests.csproj`
+(explicit file lists; gitignored). Unity regenerates them.
+
+### How it was verified, so you can repeat it
+
+Editor open, no batch mode: `dotnet build VirtualMirror.Tests.csproj`, then a reflection runner. 47 of the 60 run on
+the bare .NET runtime; the other 13 hit `Quaternion.LookRotation` (a native ECall) inside `Process`, so they were
+run against a managed stand-in for `Vector3/Quaternion/Mathf` (60/60) and are written to pass unchanged in the Editor
+Test Runner. The stand-in is a scratch tool and is NOT in the repo: a ~300-line net9.0 class library named
+`UnityEngine.CoreModule` implementing `Vector3`, `Quaternion` and `Mathf` in managed code, dropped over the real one in
+the runner's folder. It must self-check its quaternion algebra (`LookRotation`, `AngleAxis`, `Inverse`, `RotateTowards`,
+`Slerp`) before any result under it is believed. `ArmAimSolverTests` fail on the bare runtime for the same ECall reason.
+
+### Next recommended task (in this order)
+
+1. **Film the acceptance take** — protocol in `F46_DEMO_RUN_OF_SHOW.md` §6. Read the VOLUME line, the three rejection
+   counters and `calibration n/24 bones ready` at 1.0 m, 1.6-2.0 m, 3-4 m and across the boundary. This is what turns
+   1.35 m / 4.5 m from derived into measured.
+2. **Decide the 0.90 m question** (ADR-084 Consequences) before the product Mirror ships on these defaults.
+3. **Stage E — F-21 production fix (ADR-083).** Capture the `[wb] TARGET ... reason=` events with
+   `--ownership-log-dir` FIRST, then update/decay `owner_pos` toward a plausible rejected observation. Do not just
+   raise `SWITCH_MARGIN_M`. Separate task; test it with ownership ENABLED.
+4. Gate the crowd bodies and the avatar's finger curls the same way, if the acceptance take shows they matter.
 
 **This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
 (OAK-D wall-probe sweeps, portrait, F-19 production validation, F-20A session/stale recovery, F-20B

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 using VirtualMirror.Core;
+using VirtualMirror.Core.Humanize;
 using VirtualMirror.SkeletonShow;
 
 namespace VirtualMirror.Experiences {
@@ -182,21 +183,26 @@ namespace VirtualMirror.Experiences {
         }
 
         protected override string StatusText() {
-            string left = HandState(Stage.Left, "LEFT");
-            string right = HandState(Stage.Right, "RIGHT");
+            VolumeVerdict body = Stage.Volume.Verdict;
+            string left = HandState(Stage.Left, "LEFT", body);
+            string right = HandState(Stage.Right, "RIGHT", body);
             return left + "\n" + right + "\nstrokes " + strokes.Count + " / " + MaxStrokes;
         }
 
-        private static string HandState(HandPose hand, string label) {
-            if (hand == null || (!hand.Valid && !hand.Implausible)) {
-                return label + "   no hand tracked";
+        /// <summary>
+        /// One hand's line. <paramref name="body"/> is the operating-volume verdict for the whole body,
+        /// which outranks anything the hand says: a subject who is too close has hands the camera
+        /// cannot read, and "step closer" - the old answer to every refusal - made that worse.
+        /// </summary>
+        public static string HandState(HandPose hand, string label, VolumeVerdict body) {
+            // Named rather than hidden, and named for what it IS: only a palm too small to resolve means
+            // "step closer". See HandRangeAdvice.
+            string advice = HandRangeAdvice.Describe(hand, body);
+            if (advice != null) {
+                return label + "   " + advice;
             }
-            if (hand.Implausible) {
-                // Named rather than hidden. Roughly 40% of hand observations fail this gate on the
-                // crowded regression clip (F-32), and some fraction will at genuine distance too;
-                // either way "step closer" is a far more useful thing to tell a visitor than a hand
-                // that simply never draws.
-                return label + "   OUT OF RANGE - step closer to the camera";
+            if (hand == null || !hand.Valid) {
+                return label + "   no hand tracked";
             }
             return label + "   " + (hand.Pinching ? "DRAWING" : "ready - pinch to draw")
                    + "   pinch " + hand.PinchNormalised.ToString("F2");

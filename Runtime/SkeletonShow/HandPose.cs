@@ -1,8 +1,50 @@
 using UnityEngine;
 
 using VirtualMirror.Core;
+using VirtualMirror.Core.Humanize;
 
 namespace VirtualMirror.SkeletonShow {
+    /// <summary>Why a hand is, or is not, usable - phrased as what the person should DO about it.</summary>
+    public enum HandRange {
+        /// <summary>The sidecar sent no such hand. Not an error: it omits a hand below its gate.</summary>
+        NotTracked = 0,
+        /// <summary>Palm and every landmark are plausible.</summary>
+        Ok = 1,
+        /// <summary>The palm is smaller than a hand can be: the hand is too far for its fingers to be
+        /// resolved. The one case where "move closer" is the right advice.</summary>
+        TooFar = 2,
+        /// <summary>The palm is larger than a hand can be, or a landmark has left the hand. Either the
+        /// hand is too close or its depth is unreliable - and in both, moving closer makes it worse.</summary>
+        TooCloseOrUnreliable = 3,
+    }
+
+    /// <summary>
+    /// F-48 — what to TELL a person about their hand. A static class on pure data, so the wording that
+    /// SR7 got wrong (every refusal read "OUT OF RANGE - step closer") can be asserted rather than
+    /// eyeballed, and so every experience says the same thing.
+    /// </summary>
+    public static class HandRangeAdvice {
+        /// <summary>
+        /// Advice for one hand, or null when it is usable (or simply not sent) and there is nothing to say.
+        /// <paramref name="body"/> is the whole-body operating-volume verdict and OUTRANKS the hand: a
+        /// subject who is too close has hands the camera cannot read, whatever each hand reports.
+        /// NEVER returns "step closer" for a hand that is too near or whose depth has blown up - that is
+        /// the one instruction that makes both of those worse.
+        /// </summary>
+        public static string Describe(HandPose hand, VolumeVerdict body) {
+            if (body == VolumeVerdict.TooNear) {
+                return "TOO CLOSE - step back so the camera can read your hands";
+            }
+            if (hand == null || !hand.Implausible) {
+                return null;
+            }
+            if (hand.Range == HandRange.TooFar) {
+                return "TOO FAR - move your hand closer to the camera";
+            }
+            return "TOO CLOSE or depth unreliable - hold your hand further from the camera";
+        }
+    }
+
     /// <summary>
     /// F-29 — one hand in world space, plus the gestures read from it. The hand equivalent of
     /// <see cref="SkeletonPose"/>, and separate for the same reason: derive once, here, so every mode
@@ -42,6 +84,27 @@ namespace VirtualMirror.SkeletonShow {
         public const float MinPalmMetres = 0.05f;
         public const float MaxPalmMetres = 0.16f;
 
+        // ---- PER-LANDMARK VALIDATION (F-48) ---------------------------------------------------------
+        // The palm gate checks ONE segment, wrist to middle knuckle. SR7 showed that is not enough: at
+        // ~48 s a left hand reported a 147 mm palm - inside the band - while its thumb-index gap was
+        // 2273 mm (15.45 palms). Depth is per keypoint, so one fingertip can be metres from a hand
+        // whose palm is perfect, and the scale-invariant pinch maths only divides the error by the
+        // (good) palm; it does not make it small. Every landmark is therefore also bounded against the
+        // hand's OWN wrist, in palms, so the test follows the hand's size instead of a fixed number.
+
+        /// <summary>No landmark of a real hand is further than this many palm lengths from the wrist.
+        /// A fully open hand's wrist-to-fingertip is ~1.9-2.2 palms and the thumb tip is nearer, so
+        /// 2.8 leaves ~30 % for tracker noise while rejecting a tip that has left the hand.</summary>
+        public const float MaxReachPalms = 2.8f;
+
+        /// <summary>The absolute backstop to <see cref="MaxReachPalms"/>: no adult hand reaches 30 cm
+        /// from its own wrist. It catches a blown-up palm that scales its own limit up with it.</summary>
+        public const float MaxReachMetres = 0.30f;
+
+        /// <summary>Thumb tip to index tip, in palms. An abducted thumb against an extended index is
+        /// ~1.5-2 palms; past 3.0 the two tips are not on the same hand.</summary>
+        public const float MaxThumbIndexPalms = 3.0f;
+
         // Pinch, as thumb-index tip gap divided by palm length. The measured median of an ordinary
         // (non-pinching) hand is 0.52 and the 5th percentile is 0.25, so the closed end of the range
         // sits below ~0.3. Enter at 0.35 and release at 0.48: without the gap between them a hand
@@ -62,6 +125,29 @@ namespace VirtualMirror.SkeletonShow {
         /// <summary>True when the sidecar sent this hand but its shape was rejected. Distinct from
         /// simply absent: it means hand tracking is failing here, which is worth showing.</summary>
         public bool Implausible;
+
+        /// <summary>
+        /// WHY the hand is or is not usable, in terms a person can act on. Distinct from
+        /// <see cref="Implausible"/>, which only says "sent but refused": the two refusals need
+        /// OPPOSITE advice, and SR7's Air Graffiti told a too-close user to step closer.
+        /// </summary>
+        public HandRange Range = HandRange.NotTracked;
+
+        /// <summary>Hand frames (one per datagram, not per render frame) refused because the palm was
+        /// outside <see cref="MinPalmMetres"/>-<see cref="MaxPalmMetres"/>.</summary>
+        public long RejectedPalmFrames;
+
+        /// <summary>Hand frames refused although the palm passed: a landmark was too far from the
+        /// wrist, or the two pinch tips too far apart. The SR7 failure.</summary>
+        public long RejectedLandmarkFrames;
+
+        /// <summary>Largest wrist-to-landmark distance on the most recent frame, in palms. Kept so a
+        /// recording can show how far past <see cref="MaxReachPalms"/> a refused hand was.</summary>
+        public float WorstReachPalms;
+
+        // Timestamp of the last datagram counted, so a 190 fps render loop does not report a refusal
+        // rate that belongs to the display. NaN until the first frame.
+        private double lastCountedTimestamp = double.NaN;
 
         public bool IsLeft;
 
@@ -118,8 +204,12 @@ namespace VirtualMirror.SkeletonShow {
             if (!tracked) {
                 Valid = false;
                 Implausible = false;
+                Range = HandRange.NotTracked;
                 return;
             }
+            bool newDatagram = double.IsNaN(lastCountedTimestamp)
+                               || frame.TimestampSeconds != lastCountedTimestamp;
+            lastCountedTimestamp = frame.TimestampSeconds;
 
             int i = 0;
             while (i < RawHandFrame.LandmarkCount) {
@@ -136,13 +226,68 @@ namespace VirtualMirror.SkeletonShow {
                 Implausible = true;
                 Pinching = false;
                 FingerCount = 0;
+                // A small palm is a far hand. A large one is a near hand OR a depth blow-up, and the
+                // palm alone cannot say which - so it is not claimed to be "too close" without the
+                // caveat, and the advice never tells that person to step closer.
+                Range = PalmMetres < MinPalmMetres ? HandRange.TooFar : HandRange.TooCloseOrUnreliable;
+                if (newDatagram) {
+                    RejectedPalmFrames = RejectedPalmFrames + 1L;
+                }
+                return;
+            }
+            if (!LandmarksPlausible(scale)) {
+                // The palm is a hand; something ELSE on it is not. Refuse the frame as a whole - a
+                // pinch read from a tip that is metres away is worse than no pinch - and do it per
+                // hand, so the other hand, judged on its own landmarks, stays usable.
+                Valid = false;
+                Implausible = true;
+                Pinching = false;
+                FingerCount = 0;
+                Range = HandRange.TooCloseOrUnreliable;
+                if (newDatagram) {
+                    RejectedLandmarkFrames = RejectedLandmarkFrames + 1L;
+                }
                 return;
             }
             Implausible = false;
             Valid = true;
+            Range = HandRange.Ok;
 
             UpdateOrientation();
             UpdateGestures(scale);
+        }
+
+        // Every landmark against the hand's own wrist, in palms and in absolute metres, plus the pinch
+        // pair against each other. Distances are taken in WORLD units and divided back by scale, like
+        // the palm, so staging the show at half size changes nothing.
+        private bool LandmarksPlausible(float scale) {
+            float safeScale = Mathf.Max(1e-4f, scale);
+            float palm = Mathf.Max(1e-4f, PalmMetres);
+            Vector3 wrist = World[RawHandFrame.Wrist];
+            float worst = 0f;
+            bool ok = true;
+            int i = 1;
+            while (i < RawHandFrame.LandmarkCount) {
+                Vector3 p = World[i];
+                float reachMetres = Vector3.Distance(wrist, p) / safeScale;
+                if (float.IsNaN(reachMetres) || float.IsInfinity(reachMetres)) {
+                    reachMetres = float.MaxValue;
+                }
+                float reachPalms = reachMetres / palm;
+                if (reachPalms > worst) {
+                    worst = reachPalms;
+                }
+                if (reachPalms > MaxReachPalms || reachMetres > MaxReachMetres) {
+                    ok = false;
+                }
+                i = i + 1;
+            }
+            WorstReachPalms = worst;
+            float pinchPalms = Vector3.Distance(World[4], World[8]) / safeScale / palm;
+            if (float.IsNaN(pinchPalms) || pinchPalms > MaxThumbIndexPalms) {
+                ok = false;
+            }
+            return ok;
         }
 
         private void UpdateOrientation() {

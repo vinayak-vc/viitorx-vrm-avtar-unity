@@ -9,6 +9,7 @@ using UniVRM10;
 using VirtualMirror.Avatar.Vrm;
 using VirtualMirror.Camera;
 using VirtualMirror.Core;
+using VirtualMirror.Core.Humanize;
 using VirtualMirror.Diagnostics;
 using VirtualMirror.IK;
 using VirtualMirror.IO;
@@ -80,6 +81,44 @@ namespace VirtualMirror.App {
         [SerializeField] private bool useVideoSource = false;
         [Tooltip("MediaPipe pose on the webcam/video (CPU). Fallback when OAK/Sentis are off.")]
         [SerializeField] private bool useMediaPipeTracking = true;
+
+        [Header("Video Test Source (F-49)")]
+        [Tooltip("RUN THE SAME TRACKING ON A VIDEO INSTEAD OF THE OAK-D. Tick this, paste a link or path " +
+                 "into 'Video Source', press Play. Nothing downstream changes: the sidecar sends the " +
+                 "same UDP datagrams, so every scene, the skeleton show and the VRM avatar run exactly " +
+                 "as they do live. Unrelated to 'Use Video Source' above, which feeds MediaPipe on a " +
+                 "webcam path and is ignored on the OAK-D path.\n\n" +
+                 "Changing any field below while playing restarts the sidecar after a second (the model " +
+                 "reloads, ~10 s). Needs 'Use Oak Udp Tracking' and 'Auto Start Sidecar' on.\n\n" +
+                 "ONE PERSON ONLY: the crowd detector runs on the OAK-D, so crowd scenes see a crowd of one. " +
+                 "NO STEREO: depth is estimated, so the TRUST HUD reads 0/33 measured and the calibration " +
+                 "never becomes ready unless 'Video Assume Measured Depth' is on.")]
+        [SerializeField] private bool trackFromVideo = false;
+        [Tooltip("An http(s) link to a video file (.mp4 .webm .mov .mkv .avi .m4v - downloaded once and " +
+                 "cached), a page link (needs yt-dlp installed in the sidecar venv), an absolute path, or a " +
+                 "path relative to the project folder such as Assets/Games/video/SR7.mp4.")]
+        [SerializeField] private string videoSource = "Assets/Games/video/SR7.mp4";
+        [Tooltip("Replay the clip forever. Off: it plays once and then the sidecar idles, so tracking " +
+                 "goes stale rather than the clip restarting.")]
+        [SerializeField] private bool videoLoop = true;
+        [Tooltip("Label every joint's depth as MEASURED on the wire. LABEL ONLY - no coordinate changes. " +
+                 "Lets the F-48 calibration run on a source with no stereo. The TRUST HUD will then say " +
+                 "33/33 MEASURED about a video, so do not quote a recording made with this on as evidence " +
+                 "about the sensor.")]
+        [SerializeField] private bool videoAssumeMeasuredDepth = false;
+        [Tooltip("Assumed height of the person in the clip, metres. The hip depth is estimated from how tall " +
+                 "they look in the frame, so this moves the clip nearer or further and decides whether the " +
+                 "F-48 operating volume calls it too close.")]
+        [SerializeField] private float videoSubjectHeightMetres = 1.7f;
+        [Tooltip("Assumed horizontal field of view of the camera that shot the clip, degrees. Unknown for " +
+                 "an arbitrary clip; only scales the pose.")]
+        [SerializeField] private float videoHorizontalFovDegrees = 60f;
+        [Tooltip("Clamp the estimated hip depth into the range below. ON by default so a clip's own framing " +
+                 "does not read as TOO CLOSE / TOO FAR and hide the body. Turn OFF to test the F-48 " +
+                 "operating volume against the clip.")]
+        [SerializeField] private bool videoClampDepth = true;
+        [Tooltip("Min and max hip depth, metres, when clamping. Keep inside the operating volume (1.35-4.5).")]
+        [SerializeField] private Vector2 videoDepthRangeMetres = new Vector2(1.6f, 4.0f);
 
         [Header("Kalidokit Body — active whole-body retarget (ADR-022/023)")]
         [Tooltip("Drive the whole skeleton via the VRM normalized control rig. MUST be set BEFORE Play (the control rig is generated at load).")]
@@ -154,6 +193,26 @@ namespace VirtualMirror.App {
                  "torso twist, knees not bending forwards).")]
         [SerializeField] private bool humanizeAngles = true;
 
+        [Header("Operating Volume (F-48)")]
+        [Tooltip("F-48: judge every pose by its camera-to-hip distance and refuse the ones outside the " +
+                 "range the camera can measure. Outside the range the last good body is held, the " +
+                 "avatar does not follow the hip and the calibration learns nothing; after the hold " +
+                 "the avatar stays where it was and the state is reported. Off = the pre-F-48 " +
+                 "behaviour (every pose is used), kept as the A/B baseline.\n\n" +
+                 "WHY: SR7 spent minutes at 0.9-1.3 m, below F-44's usable 1.4-4.5 m. Nothing in the " +
+                 "transport was wrong; the depth behind the pose was.")]
+        [SerializeField] private bool useOperatingVolume = true;
+        [Tooltip("Nearest hip distance, metres, at which depth is trusted. F-44 measured the usable " +
+                 "band as ~1.4-4.5 m; 1.35 m leaves a 5 cm margin.")]
+        [SerializeField] private float volumeNearMetres = OperatingVolume.DefaultNearLimitMetres;
+        [Tooltip("Furthest hip distance, metres, at which depth is trusted. F-44's 4.5 m is " +
+                 "arithmetic (pixels on target), not a capture - the 3-4 m recording is what confirms it.")]
+        [SerializeField] private float volumeFarMetres = OperatingVolume.DefaultFarLimitMetres;
+        [Tooltip("Seconds the last good body is held after the subject leaves the range.")]
+        [SerializeField] private float volumeHoldSeconds = OperatingVolume.DefaultHoldSeconds;
+        [Tooltip("Consecutive in-range poses required before the calibration may learn again.")]
+        [SerializeField] private int volumeSettlePoses = OperatingVolume.DefaultSettlePoses;
+
         [Header("Pose Mapping")]
         [SerializeField] private bool poseFlipX = false;
         [SerializeField] private bool poseFlipY = true;
@@ -225,6 +284,29 @@ namespace VirtualMirror.App {
         [HideInInspector] [SerializeField] private float sentisFilterBeta = 0.6f;
         [HideInInspector] [SerializeField] private float sentisFilterMinCutoff = 1.5f;
 
+        /// <summary>F-49: the video sender, relative to the sidecar root. It lives under tools/ because
+        /// it is a harness-grade sender (ADR-065 keeps the root for the camera path); the supervisor
+        /// selects its command shape from the basename.</summary>
+        private const string VideoSenderScript = "tools/video/video_udp_sender.py";
+
+        /// <summary>How long the video fields must sit unchanged before the sidecar is restarted for
+        /// them. The URL is edited a keystroke at a time and every keystroke is a field change; a
+        /// restart costs ~10 s of model load, so it waits for the typing to stop.</summary>
+        private const float VideoApplyDelaySeconds = 1.0f;
+
+        // F-49: what the RUNNING sidecar was launched with, so a live edit is noticed. Compared field
+        // by field rather than building a key string, because this runs every frame.
+        private bool appliedTrackFromVideo;
+        private string appliedVideoSource = string.Empty;
+        private bool appliedVideoLoop;
+        private bool appliedVideoAssumeMeasured;
+        private float appliedVideoSubjectHeight;
+        private float appliedVideoFov;
+        private bool appliedVideoClamp;
+        private Vector2 appliedVideoRange;
+        private float videoChangeSeconds;
+        private string videoStatus = string.Empty;
+
         private ServiceRegistry services;
         private LogService logService;
         private SettingsStore settingsStore;
@@ -247,6 +329,20 @@ namespace VirtualMirror.App {
         private VirtualMirror.Core.Humanize.HumanizedSkeleton humanizedSkeleton;
         private PoseFrame lastHumanizedFrame;
         private double lastHumanizeTimestamp;
+        // F-48: the operating-volume verdict for the avatar path, and the per-joint depth provenance
+        // the humanize layer needs to decide what the calibration may learn from.
+        private readonly OperatingVolumeGate volumeGate = new OperatingVolumeGate();
+        private readonly TrackingTelemetry humanizeTelemetry = new TrackingTelemetry();
+        private bool hasHumanizeTelemetry;
+        private bool volumeWasOutside;
+        private bool volumeWasExpired;
+
+        /// <summary>F-48 diagnostics: why the avatar is or is not following the subject. Read-only.</summary>
+        public VirtualMirror.Core.Humanize.OperatingVolumeGate VolumeGate {
+            get {
+                return volumeGate;
+            }
+        }
 
         /// <summary>
         /// DIAG-ONLY (F-27): called once per applied frame with (raw filtered pose, humanized pose, dt).
@@ -324,6 +420,11 @@ namespace VirtualMirror.App {
             // runs before InitializeServices and before the first scene load. Setting it any later
             // would leave a scene-launched converter silently level while this one is tilted.
             CameraMount.TiltDegrees = cameraTiltDegrees;
+            // F-48: published for the same reason - every tracked consumer in the process builds its
+            // own gate, and they must all read one definition of the working range.
+            OperatingVolume.Enabled = useOperatingVolume;
+            OperatingVolume.Configure(volumeNearMetres, volumeFarMetres, volumeHoldSeconds,
+                                      volumeSettlePoses);
             InitializeServices();
         }
 
@@ -357,6 +458,7 @@ namespace VirtualMirror.App {
         }
 
         private void Update() {
+            WatchVideoSettings(Time.unscaledDeltaTime);
             // O = "I just turned the camera". AppBootstrap survives scene loads, so this works from
             // every scene rather than needing a binding in each one. Guarded on owning a sidecar:
             // there is nothing to restart otherwise, and one we merely attached to is not ours.
@@ -433,6 +535,7 @@ namespace VirtualMirror.App {
                         // person in the last person's bone lengths.
                         humanizedSkeleton.Reset();
                         lastHumanizedFrame = null;
+                        volumeGate.Reset();
                     }
                     logService.Log(LogLevel.Warning,
                         "F-20A: tracking stream stale beyond the failsafe threshold - releasing the avatar "
@@ -530,6 +633,17 @@ namespace VirtualMirror.App {
                 // and destroy the only independent reference this project has.
                 RenderDebugSkeleton(filtered);
 
+                // ---- F-48 OPERATING VOLUME ---------------------------------------------------------
+                // Is the subject inside the range the camera can measure? The debug skeleton above
+                // is deliberately drawn BEFORE this and from the raw pose: what the tracker said is
+                // exactly what has to stay visible when the answer is "do not use it". Everything
+                // below - the humanized layer, the retarget and the root follow - obeys the verdict.
+                volumeGate.Update(frame, deltaSeconds);
+                hasHumanizeTelemetry = bodyProvider is OakDUdpPoseProvider
+                    && ((OakDUdpPoseProvider)bodyProvider).TryGetTelemetry(humanizeTelemetry);
+                ReportVolumeTransitions();
+                bool volumeHold = volumeGate.Admission == PoseAdmission.Outside;
+
                 // ---- F-27 HUMANIZED SKELETON -------------------------------------------------------
                 // tracking -> filtering -> [HERE] -> retarget. Fixed bone lengths, anatomical joint
                 // limits, teleport rejection, per-joint hold in LOCAL space and a smooth re-acquire.
@@ -558,9 +672,10 @@ namespace VirtualMirror.App {
                         }
                         humanizedSkeleton.SetTuning(humanizedConfidenceFloor, humanizedRecoverSeconds);
                         humanizedSkeleton.SetStages(humanizeVelocity, humanizeBoneLengths, humanizeAngles);
-                        lastHumanizedFrame = humanizedSkeleton.Process(filtered, poseDelta);
+                        lastHumanizedFrame = humanizedSkeleton.Process(filtered, poseDelta,
+                            hasHumanizeTelemetry ? humanizeTelemetry : null, volumeGate.Admission);
                         lastHumanizeTimestamp = poseTimestamp;
-                        if (HumanizeTap != null) {
+                        if (HumanizeTap != null && !volumeHold) {
                             // Tapped inside the new-pose branch on purpose: a recording keyed to render
                             // frames would count the same pose several times and report a jump rate
                             // that belongs to the display, not the tracker.
@@ -569,6 +684,14 @@ namespace VirtualMirror.App {
                     }
                     humanized = lastHumanizedFrame;
                 }
+                // May this pose drive the avatar? Not once the subject has been out of range longer
+                // than the hold: the avatar then stays exactly where it last was, which is the honest
+                // answer, rather than being posed from data the camera cannot supply. Inside the hold
+                // it is fed the humanized layer's held body (re-applying an unchanged pose is a
+                // no-op); with humanize OFF there is no layer to hold, so the raw pose must not be
+                // applied at all.
+                bool applyBody = !volumeGate.Expired
+                    && (!volumeHold || (useHumanizedSkeleton && humanizedSkeleton != null));
                 if (kalidokitBodyActive) {
                     // ADR-022 whole-body: the normalized control rig owns the entire skeleton, so release
                     // FK + IK (they must not write raw bones the control rig would overwrite each Process).
@@ -577,7 +700,7 @@ namespace VirtualMirror.App {
                     if (ikSolver != null && ikSolver.IsBound) {
                         ikSolver.SetActive(false);
                     }
-                    if (!IsPoseStale(humanized)) {
+                    if (applyBody && !IsPoseStale(humanized)) {
                         kalidokitControlRig.SetTuning(kalidokitBodyEulerSigns, kalidokitBodyFlipQuat, kalidokitBodyLerp, kalidokitBodyLegs, kalidokitBodyMirror, kalidokitBodyTorsoRoll);
                         kalidokitControlRig.SetSpineBend(kalidokitSpineBendScale);
                         kalidokitControlRig.SetSpineBendDynamics(kalidokitSpineBendBaselineTau);
@@ -605,7 +728,7 @@ namespace VirtualMirror.App {
                     if (ikSolver != null && ikSolver.IsBound) {
                         ikSolver.SetActive(useIkDriver);
                     }
-                    if (!IsPoseStale(humanized)) {
+                    if (applyBody && !IsPoseStale(humanized)) {
                         retargeter.Apply(humanized, retargetMinConfidence, retargetExitConfidence);
                         if (ikActive) {
                             ikSolver.Apply(humanized, retargetMinConfidence);
@@ -615,7 +738,12 @@ namespace VirtualMirror.App {
                 // Physical movement (walk/jump): drive the avatar ROOT from the OAK measured hip xyz on BOTH
                 // retarget paths. This used to live only in the FK else-branch, so the Kalidokit body path
                 // never translated (Milestone-2 fix). Runs whenever a frame carries a measured root position.
-                ApplyRootPosition(frame, deltaSeconds);
+                // F-48: ONLY from an in-range pose. A 0.66 m hip drove the avatar toward the camera in
+                // SR7; the offset is neutral-relative, so a single out-of-range sample would also
+                // have been smoothed in and then slowly walked back, which reads as a lurch.
+                if (!volumeHold) {
+                    ApplyRootPosition(frame, deltaSeconds);
+                }
             }
 
             if (useFaceTracking && faceProvider != null && expressionRetargeter != null) {
@@ -708,6 +836,34 @@ namespace VirtualMirror.App {
                 debugSkeleton.gameObject.SetActive(true);
             }
             debugSkeleton.Render(frame);
+        }
+
+        // F-48: say so, once per change, in the log AND on the diagnostics overlay. A held or withheld
+        // avatar beside a perfectly healthy UDP stream looks exactly like a broken tracker, so the
+        // reason has to be on screen and in the log at the moment it begins - never only in a counter.
+        private void ReportVolumeTransitions() {
+            bool outside = volumeGate.Admission == PoseAdmission.Outside;
+            bool expired = volumeGate.Expired;
+            if (outside == volumeWasOutside && expired == volumeWasExpired) {
+                return;
+            }
+            volumeWasOutside = outside;
+            volumeWasExpired = expired;
+            string message = outside ? volumeGate.Message() : null;
+            if (logService != null) {
+                if (outside) {
+                    logService.Log(LogLevel.Warning, "F-48 operating volume: " + message
+                        + (expired ? " - hold ran out, the avatar is no longer driven."
+                                   : " - holding the last good body; no follow, no calibration."));
+                } else {
+                    logService.Log(LogLevel.Info,
+                        "F-48 operating volume: back in range - " + volumeGate.Summary());
+                }
+            }
+            if (diagnosticsHud != null) {
+                diagnosticsHud.SetTrackingStatus(DescribeActiveTracking()
+                    + (message != null ? "  |  " + message : string.Empty));
+            }
         }
 
         // Physical movement: translate the avatar root by the OAK-measured mid-hip position (neutral-relative,
@@ -921,9 +1077,11 @@ namespace VirtualMirror.App {
             services = new ServiceRegistry(pathProvider, logService, settingsStore, avatarLoader);
             performanceMonitor = new PerformanceMonitor(); // H1: was never instantiated → HUD FPS stayed blank
             VirtualMirror.SkeletonShow.SidecarBootstrap.ExternalStatusProvider = () => {
-                return (sidecarLauncher != null && !string.IsNullOrEmpty(sidecarLauncher.StatusLine))
-                    ? "sidecar: " + sidecarLauncher.StatusLine
-                    : null;
+                string video = string.IsNullOrEmpty(videoStatus) ? string.Empty : videoStatus + "  |  ";
+                if (sidecarLauncher != null && !string.IsNullOrEmpty(sidecarLauncher.StatusLine)) {
+                    return video + "sidecar: " + sidecarLauncher.StatusLine;
+                }
+                return string.IsNullOrEmpty(video) ? null : video.TrimEnd(' ', '|');
             };
             if (useOakUdpTracking && autoStartSidecar) {
                 StartSidecar();
@@ -1004,6 +1162,11 @@ namespace VirtualMirror.App {
             string wanted = need == SceneLauncher.TrackingNeed.MultiPerson
                 ? sidecarMultiPersonSender
                 : sidecarSinglePersonSender;
+            if (trackFromVideo) {
+                // F-49: one sender for every scene. There is no crowd video sender, so a crowd scene
+                // does not trigger the 15-20 s restart that crossing columns costs on the camera.
+                wanted = VideoSenderScript;
+            }
             if (string.IsNullOrEmpty(wanted)) {
                 return;
             }
@@ -1053,6 +1216,11 @@ namespace VirtualMirror.App {
         /// software to agree, without stopping play mode to tick a box.
         /// </summary>
         private void ToggleSidecarOrientation() {
+            if (trackFromVideo) {
+                logService.Log(LogLevel.Info, "O (camera orientation) does nothing while tracking a video: "
+                        + "there is no camera to turn.");
+                return;
+            }
             bool multi = string.Equals(activeSenderScript, sidecarMultiPersonSender,
                                        StringComparison.Ordinal);
             bool now;
@@ -1100,9 +1268,28 @@ namespace VirtualMirror.App {
             if (sidecarLauncher != null && (sidecarLauncher.IsOwnedProcessAlive || sidecarLauncher.State == SidecarLaunchState.AttachedExternal)) {
                 return;
             }
+            // F-49: resolve the video BEFORE anything is spawned, so a typo is one clear console line at
+            // Play rather than a Python traceback in a log nobody opens.
+            string resolvedVideo = string.Empty;
+            if (trackFromVideo) {
+                string videoError;
+                if (!VideoSourceSpec.TryResolve(videoSource, VideoProjectRoot(), out resolvedVideo,
+                                                out videoError)) {
+                    videoStatus = "VIDEO ERROR: " + videoError;
+                    logService.Log(LogLevel.Error, "Video test source: " + videoError
+                            + ". The sidecar was NOT started - fix 'Video Source' on AppBootstrap.");
+                    SnapshotVideoSettings();
+                    return;
+                }
+                senderScript = VideoSenderScript;
+            }
             if (ProducerAlreadyRunning(oakUdpPort)) {
-                logService.Log(LogLevel.Info, "Something is already sending poses on UDP " + oakUdpPort
-                        + "; attaching to it instead of starting a second sidecar.");
+                logService.Log(trackFromVideo ? LogLevel.Warning : LogLevel.Info,
+                        "Something is already sending poses on UDP " + oakUdpPort
+                        + "; attaching to it instead of starting a second sidecar."
+                        + (trackFromVideo ? " The VIDEO source was requested but is NOT running - the "
+                                            + "existing producer's feed is what you are seeing." : string.Empty));
+                SnapshotVideoSettings();
                 return;
             }
             SidecarLaunchOptions launchOptions = new SidecarLaunchOptions {
@@ -1128,11 +1315,99 @@ namespace VirtualMirror.App {
                 MaxPoses = sidecarMaxPoses,
                 MonoResolution = sidecarMonoResolution,
                 RgbIspScale = sidecarRgbIspScale,
-                ExtraArguments = sidecarShowPreview ? "--show" : string.Empty
+                // The video sender has no preview window, and the supervisor does not forward --show to it.
+                ExtraArguments = (sidecarShowPreview && !trackFromVideo) ? "--show" : string.Empty,
+                VideoSource = resolvedVideo,
+                VideoLoopCount = videoLoop ? 0 : 1,
+                VideoAssumeMeasuredDepth = videoAssumeMeasuredDepth,
+                VideoSubjectHeightMetres = Mathf.Clamp(videoSubjectHeightMetres, 0.5f, 2.5f),
+                VideoHorizontalFovDegrees = Mathf.Clamp(videoHorizontalFovDegrees, 20f, 140f),
+                VideoDepthMinMetres = videoClampDepth ? videoDepthRangeMetres.x : 0f,
+                VideoDepthMaxMetres = videoClampDepth ? videoDepthRangeMetres.y : 0f
             };
             sidecarLauncher = new SidecarProcessLauncher(logService, launchOptions);
             sidecarLauncher.Start(SidecarLocator.Resolve(sidecarModelPathOverride));
             activeSenderScript = senderScript;
+            videoStatus = trackFromVideo
+                ? "VIDEO " + VideoSourceSpec.DisplayName(resolvedVideo)
+                : string.Empty;
+            if (trackFromVideo) {
+                logService.Log(LogLevel.Info, "Video test source: tracking " + resolvedVideo
+                        + " instead of the OAK-D camera. Estimated depth; one person; "
+                        + (videoAssumeMeasuredDepth ? "depth labelled MEASURED." : "depth labelled inferred."));
+            }
+            SnapshotVideoSettings();
+        }
+
+        // ---- F-49 video source: live edits ------------------------------------------------------
+
+        /// <summary>The folder that contains Assets. Relative video paths resolve against it, so
+        /// Assets/Games/video/SR7.mp4 means what it says in the Project window.</summary>
+        private static string VideoProjectRoot() {
+            return Path.GetDirectoryName(Application.dataPath);
+        }
+
+        private void SnapshotVideoSettings() {
+            appliedTrackFromVideo = trackFromVideo;
+            appliedVideoSource = videoSource;
+            appliedVideoLoop = videoLoop;
+            appliedVideoAssumeMeasured = videoAssumeMeasuredDepth;
+            appliedVideoSubjectHeight = videoSubjectHeightMetres;
+            appliedVideoFov = videoHorizontalFovDegrees;
+            appliedVideoClamp = videoClampDepth;
+            appliedVideoRange = videoDepthRangeMetres;
+            videoChangeSeconds = 0f;
+        }
+
+        private bool VideoSettingsDiffer() {
+            return appliedTrackFromVideo != trackFromVideo
+                || !string.Equals(appliedVideoSource, videoSource, StringComparison.Ordinal)
+                || appliedVideoLoop != videoLoop
+                || appliedVideoAssumeMeasured != videoAssumeMeasuredDepth
+                || appliedVideoSubjectHeight != videoSubjectHeightMetres
+                || appliedVideoFov != videoHorizontalFovDegrees
+                || appliedVideoClamp != videoClampDepth
+                || appliedVideoRange != videoDepthRangeMetres;
+        }
+
+        /// <summary>
+        /// Notices an Inspector edit to the video fields during Play and restarts the sidecar for it
+        /// once the value has been stable for <see cref="VideoApplyDelaySeconds"/>. Without it the
+        /// boolean would only be read at boot, and "tick it and watch" would silently do nothing.
+        /// A sidecar somebody else owns is never restarted - the same rule scene switching follows.
+        /// </summary>
+        private void WatchVideoSettings(float deltaSeconds) {
+            if (!useOakUdpTracking || !autoStartSidecar || logService == null) {
+                return;
+            }
+            if (!VideoSettingsDiffer()) {
+                videoChangeSeconds = 0f;
+                return;
+            }
+            videoChangeSeconds = videoChangeSeconds + deltaSeconds;
+            if (videoChangeSeconds < VideoApplyDelaySeconds) {
+                return;
+            }
+            if (sidecarLauncher != null && sidecarLauncher.State == SidecarLaunchState.AttachedExternal) {
+                logService.Log(LogLevel.Info, "Video settings changed, but the running sidecar is not ours; "
+                        + "leaving it alone.");
+                SnapshotVideoSettings();
+                return;
+            }
+            logService.Log(LogLevel.Info, "Video settings changed - restarting the sidecar "
+                    + "(tracking will be absent for ~10 s while the model loads).");
+            StopSidecar();
+            if (trackFromVideo) {
+                StartSidecar(VideoSenderScript);
+                return;
+            }
+            string sceneName = SceneManager.GetActiveScene().name;
+            if (SceneLauncher.TrackingNeedFor(sceneName) == SceneLauncher.TrackingNeed.Unspecified) {
+                StartSidecar(sidecarSinglePersonSender);
+            } else {
+                EnsureSidecarForScene(sceneName);
+            }
+            SnapshotVideoSettings();
         }
 
         private void StartTracking() {
@@ -1355,7 +1630,11 @@ namespace VirtualMirror.App {
 
         private string DescribeActiveTracking() {
             if (bodyProvider is OakDUdpPoseProvider) {
-                return "OAK-D 3D (UDP sidecar)";
+                // Same provider, same wire; only the producer differs. Say which, because a video that
+                // looks like a person at a mirror is otherwise indistinguishable from the camera.
+                return trackFromVideo && !string.IsNullOrEmpty(videoStatus)
+                    ? videoStatus + " (UDP sidecar, no stereo)"
+                    : "OAK-D 3D (UDP sidecar)";
             }
             if (bodyProvider is SentisPoseProvider) {
                 return "Sentis RTMW3D (GPU)";

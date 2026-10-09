@@ -30,6 +30,21 @@ namespace VirtualMirror.Core.Humanize {
         public long KneeUnbent;            // knees caught bending the wrong way
         public long TwistClamped;          // shoulder-vs-hip differential rotation past any spine
 
+        // --- calibration evidence (F-48). Unit: ONE BONE SAMPLE, i.e. one bone on one pose. ----------
+        /// <summary>Samples the calibration took: both endpoints valid, both measured by stereo, and
+        /// the subject inside the operating volume and settled.</summary>
+        public long CalibSamplesAccepted;
+        /// <summary>Refused because an endpoint's depth was INFERRED (hip plane or the model's
+        /// monocular estimate) rather than measured. The SR7 near-field failure, counted.</summary>
+        public long CalibRejectedUnmeasured;
+        /// <summary>Refused because the subject was outside the operating volume, or inside it but not
+        /// yet settled after arriving.</summary>
+        public long CalibRejectedVolume;
+        /// <summary>Refused by the per-bone anatomical band (the length is not possible for that bone).</summary>
+        public long CalibRejectedImplausible;
+        /// <summary>Poses held on the last good body because the root depth was out of volume.</summary>
+        public long FramesHeldOutOfVolume;
+
         // --- the latency proxy ---------------------------------------------------------------
         public long FramesProcessed;
         public long FramesUntouched;       // frames in which NOTHING above fired: a pure pass-through
@@ -71,6 +86,11 @@ namespace VirtualMirror.Core.Humanize {
             ConeClamped = 0L;
             KneeUnbent = 0L;
             TwistClamped = 0L;
+            CalibSamplesAccepted = 0L;
+            CalibRejectedUnmeasured = 0L;
+            CalibRejectedVolume = 0L;
+            CalibRejectedImplausible = 0L;
+            FramesHeldOutOfVolume = 0L;
             FramesProcessed = 0L;
             FramesUntouched = 0L;
             FramesOnlyBoneLength = 0L;
@@ -93,6 +113,34 @@ namespace VirtualMirror.Core.Humanize {
                  + " rej(nan/org/far/conf)=" + RejectedNonFinite + "/" + RejectedOrigin
                  + "/" + RejectedOutOfBody + "/" + RejectedLowConfidence
                  + " maxCorr=" + MaxCorrectionM.ToString("F3", ci) + "m";
+        }
+
+        /// <summary>
+        /// The same facts as <see cref="ToString"/>, split into short lines for a HUD. The single-line
+        /// form is ~220 characters and ran off the edge of an 1100 px evidence capture, which is why
+        /// <c>maxCorr</c> and the bone error - the two numbers that say whether the correction layer is
+        /// working or distorting - were the ones missing from SR7. Every line here is under ~100
+        /// characters, and the figures that matter most are on the first two.
+        /// </summary>
+        public string ToHud(int calibratedBones, int totalBones, float trunkAndHeadMetres) {
+            System.Globalization.CultureInfo ci = System.Globalization.CultureInfo.InvariantCulture;
+            return "F-27  frames " + FramesProcessed
+                 + "  untouched " + (100f * UntouchedFraction).ToString("F1", ci) + "%"
+                 + "  held-out-of-volume " + FramesHeldOutOfVolume
+                 + "\nF-27  maxCorrection " + MaxCorrectionM.ToString("F3", ci)
+                 + " m   maxBoneError " + MaxBoneErrorM.ToString("F3", ci) + " m"
+                 + "   bone-corrected " + BoneLengthCorrected
+                 + "\nF-27  calibration " + calibratedBones + "/" + totalBones + " bones ready"
+                 + "  trunk+head " + trunkAndHeadMetres.ToString("F2", ci) + " m"
+                 + "  samples " + CalibSamplesAccepted
+                 + "\nF-27  rejected  unmeasured-depth " + CalibRejectedUnmeasured
+                 + "  out-of-volume " + CalibRejectedVolume
+                 + "  impossible-length " + CalibRejectedImplausible
+                 + "\nF-27  held " + HeldJointFrames + "  vclamp " + VelocityClamped
+                 + "  hinge " + HingeClamped + "  cone " + ConeClamped
+                 + "  knee " + KneeUnbent + "  twist " + TwistClamped
+                 + "  rej(nan/org/far/conf) " + RejectedNonFinite + "/" + RejectedOrigin
+                 + "/" + RejectedOutOfBody + "/" + RejectedLowConfidence;
         }
     }
 }

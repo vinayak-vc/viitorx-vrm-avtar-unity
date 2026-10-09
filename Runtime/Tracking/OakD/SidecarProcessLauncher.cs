@@ -244,6 +244,24 @@ namespace VirtualMirror.Tracking.OakD {
             // probe binds that port to look for a stale producer, so it reads our healthy listener
             // as "port in use" and refuses to launch. This flag exists for exactly this case.
             sb.Append(" --allow-port-listener");
+            // F-49. Only when a video is the source. The supervisor forwards these to the video sender
+            // alone and ignores them for the camera senders, so adding them here cannot change what a
+            // camera session is launched with.
+            if (!string.IsNullOrEmpty(options.VideoSource)) {
+                System.Globalization.CultureInfo ci = System.Globalization.CultureInfo.InvariantCulture;
+                sb.Append(" --video ").Append(Quote(options.VideoSource));
+                sb.Append(" --video-loop ").Append(Math.Max(0, options.VideoLoopCount));
+                sb.Append(" --video-subject-height ").Append(options.VideoSubjectHeightMetres.ToString("F2", ci));
+                sb.Append(" --video-hfov ").Append(options.VideoHorizontalFovDegrees.ToString("F1", ci));
+                if (options.VideoDepthMinMetres > 0f && options.VideoDepthMaxMetres > options.VideoDepthMinMetres) {
+                    sb.Append(" --video-depth-range ")
+                      .Append(options.VideoDepthMinMetres.ToString("F2", ci)).Append(' ')
+                      .Append(options.VideoDepthMaxMetres.ToString("F2", ci));
+                }
+                if (options.VideoAssumeMeasuredDepth) {
+                    sb.Append(" --video-assume-measured");
+                }
+            }
             if (!string.IsNullOrEmpty(options.ExtraArguments)) {
                 sb.Append(" ").Append(options.ExtraArguments);
             }
@@ -661,5 +679,24 @@ namespace VirtualMirror.Tracking.OakD {
         public string DirectArguments = string.Empty;
         /// <summary>Overrides the model location; empty means use the packaged path.</summary>
         public string ModelPathOverride = string.Empty;
+
+        // ---- F-49: a video in place of the camera ------------------------------------------------
+        // Empty VideoSource means the camera, exactly as before. When set it must already have been
+        // through VideoSourceSpec.TryResolve, and SupervisedSenderScript must name the video sender.
+
+        /// <summary>The clip: an http(s) link or an absolute path. Validated by
+        /// <see cref="VideoSourceSpec"/> before it gets here.</summary>
+        public string VideoSource = string.Empty;
+        /// <summary>Replays; 0 loops forever.</summary>
+        public int VideoLoopCount;
+        /// <summary>Label every joint's depth as measured (label only; see video_udp_sender.py).</summary>
+        public bool VideoAssumeMeasuredDepth;
+        /// <summary>Assumed subject height, metres. Sets the estimated hip depth.</summary>
+        public float VideoSubjectHeightMetres = 1.70f;
+        /// <summary>Assumed horizontal FOV of the clip's camera, degrees.</summary>
+        public float VideoHorizontalFovDegrees = 60f;
+        /// <summary>Clamp the estimated hip depth to [min, max] metres. Either 0 disables the clamp.</summary>
+        public float VideoDepthMinMetres;
+        public float VideoDepthMaxMetres;
     }
 }

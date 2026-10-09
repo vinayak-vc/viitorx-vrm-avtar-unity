@@ -80,6 +80,28 @@ namespace VirtualMirror.SkeletonShow {
         public readonly HandPose Left = new HandPose();
         public readonly HandPose Right = new HandPose();
 
+        /// <summary>
+        /// F-48 — is the subject inside the range the camera can measure, and if not, why. While they
+        /// are outside it the last good body is HELD for <see cref="OperatingVolume.HoldSeconds"/>, the
+        /// walk-following does not move and the calibration learns nothing; after that the stage shows
+        /// no body and <see cref="StatusLine"/> says why. Read its counters to tell a subject standing
+        /// too close from a stream that has stopped - the two look identical on screen otherwise.
+        /// </summary>
+        public readonly OperatingVolumeGate Volume = new OperatingVolumeGate();
+
+        /// <summary>The F-27 layer, for its calibration and counters. Null before <see cref="Start"/>.
+        /// Read-only: nothing outside this class may feed it, or its once-per-pose rule breaks.</summary>
+        public HumanizedSkeleton HumanizedLayer {
+            get {
+                return humanized;
+            }
+        }
+
+        /// <summary>The correction layer's HUD text, or an empty string before <see cref="Start"/>.</summary>
+        public string HumanizeHud() {
+            return humanized != null ? humanized.HudText() : string.Empty;
+        }
+
         /// <summary>Where the mid-hip is placed before grounding.</summary>
         public Vector3 BodyOrigin = new Vector3(0f, 0.95f, 0f);
 
@@ -223,21 +245,34 @@ namespace VirtualMirror.SkeletonShow {
                     // it: a new visitor is a fresh acquisition and gets the snap, not a slide.
                     ResetFollow();
                     ResetGrounding();
+                    Volume.Reset();
                 }
             }
 
             hasTelemetry = provider.TryGetTelemetry(telemetry);
             LatencyMs = hasTelemetry ? telemetry.AgeSeconds * 1000f : -1f;
 
-            IsLive = live;
+            // F-48. Judged on the very frame that is about to be used. `live` stays the answer to "is a
+            // person in frame" - presence, hands and the attract rule all keep reading it - while
+            // `usable` is the answer to "may that person drive the body": false once they have been
+            // outside the working volume for longer than the hold. A subject standing too close is
+            // therefore still PRESENT (the figure does not become the attract loop, which would read as
+            // somebody else being tracked) but is not drawn, and StatusLine says why.
+            Volume.Update(live ? frame : null, deltaSeconds);
+            bool usable = live && !Volume.Expired;
+
+            IsLive = usable;
             IsAttract = false;
-            liveFor = live ? liveFor + deltaSeconds : 0f;
+            liveFor = usable ? liveFor + deltaSeconds : 0f;
             // BEFORE the fills below, all of which read StagingOrigin(). Grounding runs at the end
             // of Tick and so lands one frame later, which is fine for a slow floor estimate and
-            // would not be for a walking person.
-            UpdateFollow(frame, live, deltaSeconds);
-            if (live) {
+            // would not be for a walking person. Outside the volume the walk is NOT followed: a hip
+            // at 0.66 m walked the figure into the lens (SR7), and the neutral that later walks are
+            // measured against must never be captured from such a frame either.
+            UpdateFollow(frame, usable && Volume.AllowsMotion, deltaSeconds);
+            if (usable) {
                 EverTracked = true;
+                bool holding = Volume.Admission == PoseAdmission.Outside;
                 PoseFrame shown = frame;
                 if (UseHumanized) {
                     // Once per POSE, with the inter-pose delta - not once per render frame. Running
@@ -249,14 +284,23 @@ namespace VirtualMirror.SkeletonShow {
                         if (poseDelta <= 0f || poseDelta > 0.5f) {
                             poseDelta = deltaSeconds;
                         }
-                        humanizedFrame = humanized.Process(frame, poseDelta);
+                        humanizedFrame = humanized.Process(frame, poseDelta,
+                                                           hasTelemetry ? telemetry : null,
+                                                           Volume.Admission);
                         lastPoseTimestamp = ts;
                     }
                     shown = humanizedFrame;
                 }
-                Pose.Fill(shown, StagingOrigin(), BodyScale, deltaSeconds);
+                // Humanize off, so there is no layer to hold the last good body: not filling IS the
+                // hold, because the pose keeps what it was given last. Filling would draw the very
+                // out-of-volume frame this branch exists to refuse.
+                if (UseHumanized || !holding) {
+                    Pose.Fill(shown, StagingOrigin(), BodyScale, deltaSeconds);
+                }
                 Pose.Telemetry = hasTelemetry ? telemetry : null;
-            } else if (AttractEnabled && !presence.Present) {
+            } else if (!live && AttractEnabled && !presence.Present) {
+                // `!live`: a person who is in frame but out of the volume is not an empty room, and
+                // showing the synthetic figure over them would read as somebody else being tracked.
                 IsAttract = true;
                 Pose.Fill(attract.Tick(deltaSeconds), StagingOrigin(), BodyScale, deltaSeconds);
                 // Never telemetry on a synthetic body: nothing was tracked, so there is nothing to
@@ -472,10 +516,24 @@ namespace VirtualMirror.SkeletonShow {
             if (IsAttract) {
                 return "ATTRACT - synthetic figure, nobody tracked";
             }
+            string volumeMessage = Volume.ShortMessage();
+            if (volumeMessage != null && Volume.Admission == PoseAdmission.Outside) {
+                // Held for the first moments, then withheld; either way the reason is on screen,
+                // because an installation that silently freezes or vanishes reads as broken.
+                return Volume.Expired ? volumeMessage + " - body withheld"
+                                      : volumeMessage + " - holding last body";
+            }
             if (IsLive) {
                 return "TRACKING";
             }
             return "NO BODY IN FRAME";
+        }
+
+        /// <summary>One line of operating-volume state and counters, for an experience's HUD. Separate
+        /// from <see cref="StatusLine"/> because that one is a sentence for a visitor and this one is
+        /// evidence for whoever is reviewing the recording.</summary>
+        public string VolumeLine() {
+            return Volume.Summary();
         }
     }
 }

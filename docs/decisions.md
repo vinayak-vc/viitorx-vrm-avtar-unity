@@ -3986,3 +3986,303 @@ removes far more jitter than it adds.
   (F-19, F-33) was produced on numpy 1.x. It was pinned back to 1.26.4, and the converter still runs
   there; `ml-dtypes` warns that it wants numpy ≥ 2 and can be ignored. **Do not let a model-tooling
   install move numpy under the capture path.**
+
+---
+
+## ADR-083 — F-21 ownership gates the WIRE, and it cannot tell "my subject walked" from "a different person"
+
+**Date:** 2026-09-18 · **Status:** Accepted (diagnosis; the production fix is specified and DEFERRED)
+· **Extends:** F-21 (target ownership), ADR-052/057/061 · **Provoked by:** F-40 `FollowPosition`,
+F-44 working volume, F-46's run of show
+
+### Context — SR6
+
+Three symptoms, reported together: tracking quality degrading over a session; **Unity not reacting
+while the sidecar preview tracked perfectly**; and the sidecar sometimes losing the subject entirely.
+
+The middle one is the diagnostic one, and it is not a tracking failure at all. In
+`wholebody_udp_sender.py`:
+
+```python
+if not should_emit:
+    if args.show:
+        _preview(frame, uv, conf, ...)   # <- the preview still draws the pose
+        ...
+    # the sendto block is skipped entirely  ->  Unity receives nothing
+```
+
+**The preview is drawn whether or not the packet is sent.** A perfect preview and a frozen Unity is
+the expected appearance of a withheld frame, not a contradiction.
+
+Measured from `Assets/Games/video/SR6.mp4`, one person, one room, six minutes:
+
+| t | sidecar HUD | Unity HUD |
+|---|---|---|
+| 0:10 | — | `rx=2`, ATTRACT synthetic figure |
+| 2:30 | `F-21 NO TARGET owner=None` | `packetAgeMs=994.0 clampNewest=2048` |
+| 5:20 | `F-21 LOCKED owner=13 switches=12` | partial skeleton, wrong limbs |
+| 6:15 | `F-21 NO TARGET owner=None switches=13` | skeleton collapsed |
+
+**Thirteen ownership switches with one person in the room**, and an interpolator that had run dry
+2048 times.
+
+### The mechanism
+
+In `LOCKED`, `_matches_owner()` rejects an observation when the hip has moved more than
+`SWITCH_MARGIN_M = 0.35` from the owner's last accepted position (`position_jump`), or the torso
+scale differs by more than `SCALE_MARGIN_RATIO = 0.45` (`scale_mismatch`).
+
+The trap is what happens on rejection: **`owner_pos` is not updated.** So once the subject is outside
+the margin they remain outside it, every subsequent frame is rejected the same way, and after
+`RELEASE_TIMEOUT_S = 4.0` the machine releases and re-acquires them as a NEW owner. That is one
+`switch`, preceded by up to four seconds of a frozen Unity. It is a positive-feedback trap, not a
+threshold that is merely set too tight.
+
+And symptom 3 falls out of the same state: on `NO_TARGET`/`RELEASED` the sender resets the crop to
+`R.center_bbox(rgb_w, rgb_h)`. If the subject is not centre-frame, the pose model then runs on a crop
+that does not contain them — so the **preview** loses them too, which reads as the camera failing.
+
+Symptom 1 is simply these accumulating over a session.
+
+### Why this surfaced now, and it is our own doing
+
+F-21 was designed and measured for a subject **standing at 0.90 m in front of a mirror**, where
+0.35 m of hip travel genuinely does mean somebody else. Three changes in one week made walking the
+normal case:
+
+* **F-40** added `FollowPosition`, so the staged body tracks the subject in X/Z at all.
+* **F-44** took the usable band from ~1.4–2.5 m to ~1.4–4.5 m, roughly 3–4x the floor area.
+* **F-46's run of show** instructs the subject, in writing, to *"walk left, right, toward the camera,
+  away"* and to *"walk out to the 4 m mark and back."*
+
+The demonstration script is what triggers the defect. Nothing about F-21 changed; what changed is
+that the subject is now expected to move, and F-21's core assumption is that they do not.
+
+### Decision
+
+1. **For the demonstration shoot: `--no-ownership`.** A solo shoot contains no second person, so
+   F-21 is defending against a risk that cannot occur while actively breaking the take. The
+   supervisor **deliberately refuses to forward** `--ownership` (SS31: a supervised process that
+   accepts arbitrary flags is no longer the configuration under test), so the sender is started by
+   hand and `SidecarBootstrap` attaches to it — the documented "something is already sending poses
+   on UDP 8899" path. Uncheck `Auto Start Sidecar` first to remove the spawn race.
+2. **Middle path, if the protection must stay: `--ownership-switch-margin 1.2`.** 0.35 m is about one
+   step. 1.2 m tolerates walking while still refusing somebody across the room. Less proven, but the
+   right shape.
+3. **The production fix is DEFERRED and specified below.** It is not made here because it is a
+   behavioural change to a layer that exists to prevent a measured F-19 failure, and it deserves its
+   own evidence rather than being tacked onto a demo unblock.
+
+### The production fix, when it is done
+
+`position_jump` conflates two different questions — *"did my subject move?"* and *"is this somebody
+else?"* — and answers both with one absolute distance. Candidates, in preference order:
+
+* **Update `owner_pos` on a rejected-but-plausible observation**, or decay it toward the candidate,
+  so a single fast movement cannot strand the owner outside its own margin permanently. This closes
+  the feedback trap without widening the gate at all, and is the smallest correct change.
+* **Make the margin velocity-aware** — scale it by the owner's recent speed and the time since the
+  last accepted frame, rather than a fixed metre count. ADR-061's own note already observes that a
+  per-frame distance cannot separate a walk from a hand-over; the converse is also true.
+* **Do not** simply raise `SWITCH_MARGIN_M`. ADR-061 measured a real migration at 0.015 m/frame,
+  23x under the existing margin; widening it makes that case worse while only partly helping this
+  one.
+
+### DO NOT REVERT / how to tune
+
+* **Do not delete F-21.** F-19 §19 measured the failure it prevents: with a second person in frame
+  the tracker moved to them after ~25 s and **never came back**. For an unattended installation that
+  is disqualifying.
+* **`--no-ownership` is a SHOOT setting, not a production one.** Anything filmed with it demonstrates
+  tracking, not target ownership.
+* The sender already logs the reason (`[wb] TARGET ... reason=...`) and `--ownership-log-dir` writes
+  it per event. **Capture that before re-tuning** — this ADR establishes the mechanism, not which of
+  `position_jump` / `scale_mismatch` dominates in practice.
+
+---
+
+## ADR-084 — Out-of-range data is REFUSED, never clamped; calibration learns only from MEASURED depth
+
+**Date:** 2026-10-09 · **Status:** Accepted · **Extends:** F-27 (humanized skeleton), F-29 (trust
+channel), F-40 (`FollowPosition`), F-44 (working volume) · **Provoked by:** SR7 · **Does NOT touch:**
+ADR-083 / F-21 (still open)
+
+### Context — SR7
+
+`SR7.mp4` (200.6 s, one person) was shot with `--no-ownership`, so SR6's failure — F-21 gating the UDP
+send — is bypassed, and with it out of the way the transport was healthy: `packetAgeMs` 8-31 ms, ~40 ms
+end to end, `parseErr=0`, sender 29.0-29.6 fps, Unity 163-194 fps. (Quoted from the SR7 analysis in the
+task brief, not re-extracted.) **SR7 therefore proves the workaround, not F-21.**
+
+The bad frames were not late; they were out of range. The subject spent minutes at 0.91 m, 1.07-1.28 m
+and finally 0.66 m, against F-44's usable ~1.4-4.5 m. The TRUST HUD read 17-21 of 33 joints measured.
+Every stage downstream treated that as ordinary input:
+
+* **`LearnBoneLengths`** accepted a bone whenever both endpoints were *valid* (finite, non-zero
+  confidence, inside the body radius). Validity says nothing about where a joint's depth came from, so a
+  joint placed on the hip plane or at the model's monocular guess produced a distance that is a DEPTH
+  error, and it entered the median as a bone.
+* **The calibration band was 0.01-0.80 m for every bone.** A 0.55 m forearm — longer than any human one —
+  was inside it. Left and right were averaged, so a bad side moved its mirror.
+* **The avatar and the staged figure followed the hip.** `ApplyRootPosition` and
+  `TrackedStage.UpdateFollow` read `RootPositionMetres` unconditionally; at 0.66 m the figure walked
+  toward the lens.
+* **`HandPose` validated one segment.** A 147 mm palm passed while the thumb-index gap was 2273 mm.
+* **The HUD that would have shown any of it ran off the edge** of an 1100 px capture, which is why
+  `maxCorr` and the bone error were missing from the evidence.
+
+Transport latency was never the cause: `HumanizedSkeleton` rebuilds each bone at a fixed calibrated
+length and does no temporal smoothing of it.
+
+### Decision
+
+1. **There is ONE definition of the working range, and it is configurable.** `OperatingVolume`
+   (static, the `CameraMount` shape for the same reason) holds near 1.35 m, far 4.5 m, hold 0.75 s,
+   settle 6 poses; `AppBootstrap` publishes them from the Inspector. The judged quantity is `|root.z|`,
+   the figure the TRUST HUD already prints.
+2. **Outside the range a pose is REFUSED. It is never clamped.** Pinning a 0.66 m hip to 1.35 m
+   invents motion the subject did not make and hides a camera fault behind a plausible picture.
+   Instead: the last good body is held for a bounded 0.75 s, the walk-follow does not move and never
+   captures its neutral from such a frame, the calibration learns nothing, and after the hold the stage
+   withholds the body and says why (`TOO CLOSE - step back`).
+3. **A subject who is too close is still PRESENT.** The attract figure is suppressed while `live`, so a
+   synthetic body never appears over a real person who is merely out of range.
+4. **The gate counts POSES, not render frames, and does not look at the transport.** The counters
+   (`near`, `far`, `invalid`, `held`, `expired`) exist so the next recording can tell "too close" from
+   starvation without guessing.
+5. **Provenance goes through the existing trust channel.** `HumanizedSkeleton.Process(frame, dt,
+   TrackingTelemetry, PoseAdmission)` reads `TrackingTelemetry.DepthMeasured(joint)`; no second source
+   of truth was created. A bone is learned only when both endpoints are valid AND measured AND the pose
+   is `Trusted`. **Inferred joints are still output, rebuilt and held exactly as before** — the rule
+   gates learning, not output. The two-argument `Process` is kept and means *provenance unknown*.
+6. **Unknown provenance is treated as measured.** A stream with no depth channel (the deprecated body-only
+   sender) cannot report what it does not know, and refusing to calibrate on it would be a regression to
+   guard against a fault it cannot exhibit. A stream that reports the channel with nothing measured (a
+   video file) correctly never calibrates and passes the tracker's own lengths through.
+7. **Per-bone anatomical bands** (`HumanBodyModel.MinBoneLengthM/MaxBoneLengthM`) replace the global one,
+   with the sources in the table next to them. The global constants stay as the outer backstop.
+8. **Mirror averaging requires agreement.** Left/right medians are averaged only within 20 %; otherwise each
+   keeps its own. One validated side still serves an occluded other, as before.
+9. **Re-entry drops the temporal memory** of the held gap, so walking back in is not velocity-clamped as a
+   teleport, and re-arms the 0.15 s re-acquire blend so the return does not snap. Calibration additionally
+   waits `SettlePoses` consecutive in-range poses before it may learn again.
+10. **Hands are validated per landmark against their own wrist** (2.8 palms and 0.30 m; thumb-index 3.0
+    palms), per hand, counted per datagram. Advice distinguishes TOO FAR (palm too small — move closer)
+    from TOO CLOSE or depth unreliable (palm too large, or a landmark has left the hand — never "step
+    closer").
+
+### Consequences
+
+* **The product's 0.90 m operating point is now outside the volume.** F-43 and F-46 both say a single person
+  stands at 0.90 m. With the near limit at 1.35 m the Mirror holds and then stops being driven there. If
+  0.90 m is still wanted, F-44's 800p/ISP 1:1 change needs a capture at 0.90 m and the near limit becomes a
+  per-scene setting. Flagged, not decided.
+* 1.35 m and 4.5 m are DERIVED (F-44's 1.4 m edge plus SR7's degradation; F-44's pixels-on-target
+  arithmetic for the far edge, which F-44 itself marks as not a capture). They are fields, so moving them
+  after the 3-4 m take costs nothing.
+* A monocular source never calibrates. Acceptable: its lengths are the tracker's own either way.
+* Crowd bodies (`UpdateCrowd`) are not gated; only the primary person's root is judged.
+* The avatar's finger curls / palm rotation (`ParseHands` -> `HandFrame`) are not covered by the hand
+  validation, which protects `HandPose`.
+* `OperatingVolume.Enabled = false` restores the pre-F-48 behaviour for A/B; it does NOT disable rule 5,
+  which has its own reason.
+
+### Evidence
+
+60 tests in `NearFieldSafetyF48Tests`; 47 run on the bare runtime and 13 need `Quaternion.LookRotation`, a
+native call, so they were run under a managed stand-in for `Vector3/Quaternion/Mathf` (60/60) and are
+written to run unchanged in the Editor Test Runner. Three mutations were each caught: disabling the
+measured-depth rule (calibration samples 30 -> 90); letting near-field frames drive the follow position
+(the figure reaches **z = -1.28 m**, SR7's camera-rush); keeping temporal memory across the gap
+(`VelocityClamped` 0 -> 10). The F-27 `HumanizedSkeletonSelfTest` still passes 32/32. **Not camera-verified.**
+
+### DO NOT REVERT / how to tune
+
+* **Do not clamp the root to the near limit**, and do not "smooth" an out-of-range pose into range. That
+  is the failure this ADR exists to prevent.
+* **Do not run `Process` on an `Outside` pose as if it were admitted.** The layer returns the previous body
+  untouched for that admission; feeding it the bad frame re-creates SR7 inside the correction layer.
+* **Do not widen the per-bone bands back toward 0.01-0.80 m to "make more bones calibrate".** If bones do not
+  calibrate, read `rejected unmeasured-depth / out-of-volume / impossible-length` on the HUD first — they say
+  which gate refused, and each has a different fix.
+* **Do not treat unknown provenance as inferred** (decision 6) without first deciding what the deprecated
+  sender's users are to do instead.
+* **Do not remove `DropTemporalMemory`.** The recovery test fails without it (mutation-checked).
+* **Do not make `HandRangeAdvice` say "step closer" for a large palm or a blown-up landmark.** Moving closer
+  makes both worse; that was SR7's wording.
+* **To tune the range:** the four `Operating Volume (F-48)` fields on `AppBootstrap`. Read the VOLUME line
+  (`hip 1.62m [1.35-4.50] near 3 far 0 invalid 0 held 3 expired 0`) from a recording at each marked distance.
+* **ADR-083 is still open.** This ADR does not make F-21 work and a recording shot with `--no-ownership` is
+  not evidence about it.
+
+---
+
+## ADR-085 — A video is a PRODUCER, not a provider: test against it by making the sidecar send the same wire
+
+**Date:** 2026-10-09 · **Status:** Accepted · **Extends:** ADR-064 (Unity owns the sidecar), ADR-075/076
+(supervised senders, the scene picks the sender) · **Relates to:** F-23, F-32 (the evidence tools this grew from)
+
+### Context
+
+The request: give Unity a video link and a boolean, and have the skeleton scene, any experience and the VRM
+avatar run exactly as they do live. Three designs were possible:
+
+1. A second **tracking provider inside Unity** that decodes a video and runs a model in-process. Rejected:
+   Unity already has `SentisPoseProvider` and a MediaPipe path, and neither is the production pipeline — the
+   production pipeline is the Python sidecar, and a Unity-side model would test a *different* tracker.
+2. Pointing the **existing evidence tools** (`f23_video_to_unity.py`, `f32_multiperson_video.py`) at Unity.
+   Rejected as the product answer: neither is supervised, neither prints the readiness markers, neither loops, and
+   `f32` needs the OAK-D's VPU for its detector, so it cannot run without a camera at all.
+3. **Make the sidecar's producer a video** and leave everything after the datagram untouched. Chosen.
+
+### Decision
+
+1. **`tools/video/video_udp_sender.py` is a producer**, not a Unity component. It emits the production datagram
+   (`lm lh rh xyz src st lat seq sid t`), so the pose buffer, F-48 gate, humanize layer, every scene and the VRM
+   avatar run unchanged. The wire contract is NOT changed — hence no cross-repo ADR is required.
+2. **It is supervised.** `sidecar_supervisor.py` selects a third command shape from the script's basename, forwarding
+   only flags the video sender defines (the same rule as ADR-075; a camera flag would make Python exit before the
+   clip opens). It prints the readiness markers and a heartbeat — through a download and a model load too — because
+   the supervisor kills a child whose stdout stops growing for 10 s.
+3. **One boolean, applied live.** `AppBootstrap.trackFromVideo` is read at boot and watched in Play mode; a change
+   restarts the sidecar after the value has been stable for 1 s (the URL changes per keystroke). It reuses the
+   existing `EnsureSidecarForScene` rule: a sidecar Unity did not spawn is never restarted.
+4. **The label stays honest.** The sender has no stereo, so every `src` flag is 0 and the TRUST HUD reads 0/33
+   measured. `--assume-measured` exists so the F-48 calibration path can be exercised, but it changes the LABEL only
+   and is OFF by default; a recording made with it on is not evidence about the sensor.
+5. **The Inspector text is untrusted.** It is validated in Unity (`VideoSourceSpec`) and again in Python: http/https
+   or an existing file, nothing else; no quote or control character; bounded length; downloads are atomic, bounded
+   to 2 GiB and never run through a shell; yt-dlp is invoked with an argv list.
+6. **One person.** There is no host-side person detector, so crowd scenes see a crowd of one, and a video never
+   triggers the 15–20 s sender swap between the single and crowd columns.
+7. **F-21 ownership is OFF and the hip depth is estimated.** A walking subject in a clip is ADR-083's exact failure,
+   and a video has no second person to defend against. Depth comes from the subject's apparent height; a clamp keeps
+   it inside the F-48 volume by default and can be turned off to test the volume against the clip.
+
+### Consequences
+
+* Everything downstream is genuinely the production code, so a bug found against a video is a bug in production code.
+  What is NOT production is the *input*: monocular depth, one camera, an assumed field of view.
+* On the default settings the calibration never becomes ready (0/24), because F-48 refuses unmeasured joints. That
+  is correct and visible (`unmeasured-depth` counter); tick `Video Assume Measured Depth` to see it calibrate
+  (18/24, trunk+head 0.73 m on SR7).
+* Monocular hand depth is noisy; F-48's hand gate refused ~20 % (left) and ~24 % (right) of hand frames on SR7 (389 and 468 of 1930 datagrams). That describes
+  the source, not the gate.
+* The download cache lives in the OS temp folder; nothing is added to the project tree.
+
+### DO NOT REVERT / how to tune
+
+* **Do not move this into Unity as a tracking provider** (option 1). It would test a different tracker from the one
+  that ships.
+* **Do not forward camera flags to the video sender**, and do not add `--show` to it through the supervisor.
+* **Do not let the sender exit when the clip ends.** The supervisor restarts an exited child, so "play once" would
+  become "play forever"; it idles with a heartbeat instead.
+* **Do not turn `--assume-measured` on by default** to make the HUD look healthier. It makes a video read 33/33
+  measured.
+* **Do not pace only the frames that produce a pose.** A clip that opens on an empty room otherwise runs at inference
+  speed and arrives at the subject far ahead of the wall clock (seen on SR7's first 19 s).
+* **To use it:** `AppBootstrap > Video Test Source`: tick `Track From Video`, set `Video Source`, press Play (or edit
+  while playing). To test F-48's volume against a clip, untick `Video Clamp Depth` and change
+  `Video Subject Height Metres`.
+
+---

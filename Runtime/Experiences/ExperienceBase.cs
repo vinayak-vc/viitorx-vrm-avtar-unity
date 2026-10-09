@@ -1,6 +1,7 @@
 using UnityEngine;
 
 using VirtualMirror.Core;
+using VirtualMirror.Core.Humanize;
 using VirtualMirror.SkeletonShow;
 
 namespace VirtualMirror.Experiences {
@@ -78,6 +79,7 @@ namespace VirtualMirror.Experiences {
 
         private GUIStyle hudStyle;
         private GUIStyle titleStyle;
+        private GUIStyle warnStyle;
         private float smoothedFps = 60f;
 
         /// <summary>Shown top-left. Two or three words.</summary>
@@ -272,6 +274,10 @@ namespace VirtualMirror.Experiences {
                 titleStyle.fontSize = 26;
                 titleStyle.fontStyle = FontStyle.Bold;
                 titleStyle.normal.textColor = new Color(0.55f, 0.95f, 1f, 1f);
+                warnStyle = new GUIStyle(GUI.skin.label);
+                warnStyle.fontSize = 24;
+                warnStyle.fontStyle = FontStyle.Bold;
+                warnStyle.normal.textColor = new Color(1f, 0.72f, 0.2f, 1f);
             }
 
             GUI.Label(new Rect(16f, 12f, 900f, 34f), Title, titleStyle);
@@ -284,8 +290,18 @@ namespace VirtualMirror.Experiences {
 
             // Bottom of the screen on purpose: F-28's first live capture put the status across the
             // subject's chest, which is exactly where the thing being judged is.
+            //
+            // Rects are the SCREEN's width, not a fixed 1600: a label wider than the screen is simply
+            // cut off, and SR7's 1100 px capture lost the right-hand end of every line - including the
+            // fields that said whether the correction layer was working.
+            float lineWidth = Screen.width - 32f;
             float y = Screen.height - 52f;
-            GUI.Label(new Rect(16f, y, 1600f, 22f),
+            string volumeWarning = Stage.Volume.Admission == PoseAdmission.Outside ? Stage.Volume.Message() : null;
+            if (volumeWarning != null) {
+                GUI.Label(new Rect(16f, y - 70f, lineWidth, 34f), volumeWarning, warnStyle);
+            }
+            GUI.Label(new Rect(16f, y - 24f, lineWidth, 22f), Stage.VolumeLine(), hudStyle);
+            GUI.Label(new Rect(16f, y, lineWidth, 22f),
                       Stage.StatusLine()
                       + "      humanized " + (useHumanizedSkeleton ? "ON" : "OFF")
                       + "      attract " + (attractEnabled ? "ON" : "OFF")
@@ -293,7 +309,7 @@ namespace VirtualMirror.Experiences {
                       + "      sound " + (soundEnabled ? "ON" : "OFF")
                       + "      " + smoothedFps.ToString("F0") + " fps",
                       hudStyle);
-            GUI.Label(new Rect(16f, y + 22f, 1600f, 22f),
+            GUI.Label(new Rect(16f, y + 22f, lineWidth, 22f),
                       "R reset      H humanized      A attract      G ground      M mute"
                       + ExtraKeyHelp() + LauncherScene.KeyHelp(),
                       hudStyle);
