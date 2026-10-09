@@ -188,7 +188,7 @@ MonoBehaviour:
   useVideoSource: 0
   useMediaPipeTracking: 1
   trackFromVideo: 1
-  videoSource: Assets\Games\video\456.webm
+  videoSource: Assets\Games\video\video.webm
   videoLoop: 1
   videoAssumeMeasuredDepth: 0
   videoSubjectHeightMetres: 1.7

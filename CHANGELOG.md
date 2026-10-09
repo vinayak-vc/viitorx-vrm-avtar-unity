@@ -12,6 +12,12 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Added
 
+- **A phone or webcam as the camera.** `Video Source` now also takes `camera:N` (a phone exposed as a Windows webcam by an
+  app such as DroidCam, Iriun or Camo), `http://<phone-ip>:8080/video` (an IP-camera app over Wi-Fi), `rtsp://…`, plus
+  rotate/mirror fields for a sideways portrait phone or a selfie camera. Live sources process only the newest frame (lag
+  cannot build up), reconnect on loss, and never log credentials. Verified against a local MJPEG stream and through the
+  full chain; **not tried with a real phone or app.**
+
 - **Run the whole thing on a video instead of the OAK-D (F-49 / ADR-085).** `AppBootstrap > Video Test
   Source`: tick **Track From Video**, give it a link or a path, press Play. A new supervised sender,
   `tools/video/video_udp_sender.py`, runs the production single-person pipeline on the clip and sends the

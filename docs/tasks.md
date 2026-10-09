@@ -2168,3 +2168,78 @@ OAK-D feed.
 - [ ] A finite loop cannot be told to "stop and show the last frame"; it goes stale. Deliberate (ADR-085) but unconfirmed as the
       behaviour you want.
 - [ ] The scratch tools used to verify this (the Unity stand-in, the reflection runner, `StageRun`) are not in the repo.
+
+### ADDED 2026-10-09 — PHONE / WEBCAM / LIVE STREAM SOURCES (same field, same sender)
+
+`Video Source` now also takes **`camera:N`** (a webcam; a phone becomes one when an app such as DroidCam, Iriun or
+Camo exposes it to Windows), **`rtsp://…`**, **`http://192.168.x.x:PORT/video`** (a phone "IP camera" app over Wi-Fi;
+an http link to a LAN address is a camera, not a page) and **`stream:<url>`** to force it. New fields:
+`Video Rotate Degrees`, `Video Flip Horizontal`, `Video Camera Size`.
+
+- [x] **`LatestFrameReader`**: a reader thread keeps only the NEWEST frame and counts what it dropped, so a slow GPU cannot
+      build lag behind a live source (a 100 ms-late phone would otherwise be seconds late after minutes). It also
+      **reconnects with backoff forever**, so a phone that leaves Wi-Fi comes back without a restart. `lat` on the wire is
+      measured from the frame's GRAB time, so queueing is counted.
+- [x] **Rotate / mirror before inference**, because the model reads the image: a portrait phone arrives sideways and a
+      front camera arrives mirrored. Measured: a stream served 90° sideways reads a **96.7°** trunk lean uncorrected and
+      **5.6°** with `--rotate 270`, against **5.3°** for the same clip upright.
+- [x] `--list-cameras` prints which indices open and at what size, for finding the phone.
+- [x] Credentials in a link are **never printed** (sender, supervisor log/events, Unity log and HUD all redact
+      `user:pass@`). The scheme allowlist is http, https, rtsp, rtsps; `stream:` cannot smuggle another scheme.
+- [x] Webcam open tries DirectShow, Media Foundation, then OpenCV's default, each guarded (a virtual-camera driver on this
+      machine **raises** instead of returning False), requests MJPG at 1280×720×30 and buffer size 1.
+
+| check | result |
+|---|---|
+| `tests/test_video_source.py` (adds camera/stream classification, redaction, orientation, reader with a fake capture incl. drop-to-newest and reconnect, real MJPEG server) | **95 / 95** |
+| `VideoSourceF49Tests` (adds camera, stream, LAN detection, redaction, rotate/flip/size flags) | **23 / 23** |
+| real RTMW3D on a live MJPEG stream of `123.webm` (portrait phone clip, 60 fps source) | 925 packets, monotonic `seq`, ~40 fps; **100 stale frames dropped, not queued** |
+| full chain: supervisor → live sideways stream (`--video-rotate 270`) → Unity's real `TrackedStage` | 1497 datagrams, **parseErr 0**, live 1305/1369 ticks, hands read, F-48 gate `TRUSTED` |
+
+**NOT DONE / UNTESTED for this addition:**
+- [ ] **No real phone, webcam or phone app was used.** This machine exposes no usable camera (a virtual device fails to open).
+      The camera path (`open_camera`) is exercised only through a fake capture; the stream path was tested against a local
+      MJPEG server speaking the same protocol, not against IP Webcam/DroidCam/Iriun/Camo themselves.
+- [ ] Latency of a real phone app (typically 100–300 ms; the OAK-D is ~40 ms) is **unmeasured**.
+- [ ] **SR7.mp4 is a screen recording** (Unity on the left, the sidecar preview with the person in a corner on the right). It is a poor
+      test clip; my earlier SR7 numbers in this section tracked it only by luck of the crop. `123.webm` (portrait, single dancer)
+      is the better regression clip. The F-49 numbers above that used SR7 describe plumbing, not tracking quality.
+- [ ] Live sources are not paced, so a 60 fps source is processed at inference speed (~40 fps here) and sent at that rate.
+
+### FINDING — logged 2026-10-09 (user observation in the Editor; NOT measured by an agent)
+
+**Single-person tracking from VIDEO looks excellent — noticeably better than the live OAK-D feed.** The same
+Unity scenes, the same RTMW3D model and the same pose-xy back-projection are used in both, so the difference is
+upstream of Unity. With several people in the clip only ONE skeleton appears and it glitches.
+
+* **The OAK-D is not involved in the video path.** `video_udp_sender.py` never creates a `dai.Device` or pipeline. It
+  imports the `depthai` *library* (via `wholebody_udp_sender`, for the landmark builders) but touches no hardware;
+  the supervisor's start-up check is `import depthai`, also no device.
+* **Multi-person glitching is the expected behaviour of the single-person sender, not a new bug.** It keeps ONE crop
+  (`bbox_from_keypoints` blended 0.7/0.3 into the previous box, falling back to `center_bbox` when the body
+  confidence drops), so with several people the crop hops between them. Crowds need the multi-person sender's
+  detector, which is an OAK-D VPU blob (ADR-085). Consistent with the code; not measured.
+* **Why video may beat live — HYPOTHESES, ranked by how directly the code supports them, none yet tested:**
+  1. **Depth source.** Video places every joint from the model's own root-relative z (`_fallback_point`, `zrel`) against
+     ONE hip depth per frame: anatomically coherent by construction. Live samples stereo depth per joint, and the
+     repo has already documented that this produces holes (~63 % of keypoints measured, RETARGET_AUDIT 2026-08-11),
+     quantisation (`Δz ≈ z²/f·B`), surface bleed onto background and clothing, and — SR7 — stretched bones from
+     inferred/measured mixing (ADR-084). One measured-per-joint z beside an inferred one is a bone-length error.
+  2. **Fewer stages after the model.** Live runs P0 `KeypointSmoother` on 3-D xyz, P1-1 with geometry write-back, F-22
+     pose validation and F-21 ownership; the video sender runs the model, a One-Euro on z, and P1-1 for *states only*.
+     More stages is more places to add lag or a wrong correction (F-21 alone withheld frames in SR6).
+  3. **Image and framing.** A phone clip is ~1918×1078, well exposed, subject fully in frame at a comfortable
+     distance. The live feed is a 1280×800 global-shutter sensor at 0.9–2 m, in the room's lighting — and SR7's live
+     take sat below the 1.4 m usable band.
+  4. **Frame delivery.** A file is decoded in order with no dropped or stale frames; the live path has a camera queue,
+     staleness handling and an interpolation delay.
+* **THE DECISIVE TEST (not run): same pixels, different depth.** Record the live RGB frames (and the live wire) in one
+  session, replay those exact frames through `video_udp_sender.py`, and compare the two outputs. Anything that differs is
+  caused by the depth/stage path and nothing else, which separates hypothesis 1–2 from 3–4. The live sender cannot
+  currently save its RGB stream; adding that is the first step.
+* **A cheap live experiment that already exists:** `wholebody_udp_sender.py` has `--zrel-fallback` (default on), which only
+  governs depth *holes*. Forcing every joint onto the model-z path in the live sender would be a new flag, but it is
+  small, and it directly tests "model z + OAK hip root" against "stereo per joint".
+* **Direction (proposed, NOT decided):** if the A/B confirms it, the live pipeline should take limb/torso geometry from
+  the model's z and use stereo only for the root position, the floor and as a sanity check — which is also what F-48
+  already enforces for calibration. Do not change the live path on this finding alone; it is one observer, one clip.

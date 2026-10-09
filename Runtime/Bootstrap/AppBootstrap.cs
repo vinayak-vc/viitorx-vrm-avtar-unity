@@ -94,13 +94,33 @@ namespace VirtualMirror.App {
                  "NO STEREO: depth is estimated, so the TRUST HUD reads 0/33 measured and the calibration " +
                  "never becomes ready unless 'Video Assume Measured Depth' is on.")]
         [SerializeField] private bool trackFromVideo = false;
-        [Tooltip("An http(s) link to a video file (.mp4 .webm .mov .mkv .avi .m4v - downloaded once and " +
-                 "cached), a page link (needs yt-dlp installed in the sidecar venv), an absolute path, or a " +
-                 "path relative to the project folder such as Assets/Games/video/SR7.mp4.")]
+        [Tooltip("WHAT TO TRACK. One of:\n" +
+                 "  * a path - absolute, or relative to the project folder: Assets/Games/video/SR7.mp4\n" +
+                 "  * a direct http(s) link to a video file (.mp4 .webm .mov .mkv .avi .m4v) - downloaded once, cached\n" +
+                 "  * camera:0 (or just 0) - a WEBCAM. A phone appears here when an app such as DroidCam, " +
+                 "Iriun or Camo exposes it to Windows. Try camera:1, camera:2 if 0 is your laptop camera.\n" +
+                 "  * http://192.168.1.5:8080/video - a phone 'IP camera' app over Wi-Fi (MJPEG). An http link " +
+                 "to a private/LAN address is read as a live camera, not a web page.\n" +
+                 "  * rtsp://user:pass@host/stream - an IP camera. Credentials are never logged.\n" +
+                 "  * a web page link (YouTube...) - needs yt-dlp in the sidecar venv, which is not installed.\n" +
+                 "Live sources (camera, stream) process only the NEWEST frame, so lag cannot build up, and " +
+                 "reconnect on their own if the phone drops off.")]
         [SerializeField] private string videoSource = "Assets/Games/video/SR7.mp4";
-        [Tooltip("Replay the clip forever. Off: it plays once and then the sidecar idles, so tracking " +
-                 "goes stale rather than the clip restarting.")]
+        [Tooltip("FILES ONLY. Replay the clip forever. Off: it plays once and then the sidecar idles, so " +
+                 "tracking goes stale rather than the clip restarting. A camera or stream has no end.")]
         [SerializeField] private bool videoLoop = true;
+        [Tooltip("Rotate each frame CLOCKWISE before tracking. A phone held upright is often delivered as a " +
+                 "sideways frame by webcam apps; the model reads the image, so it must be turned upright " +
+                 "here. 0, 90, 180 or 270.")]
+        [SerializeField] private int videoRotateDegrees = 0;
+        [Tooltip("Mirror each frame left-right before tracking. A FRONT (selfie) camera usually arrives " +
+                 "mirrored, which swaps the person's left and right. Note this is separate from the scenes' " +
+                 "own mirror setting, which is a display choice.")]
+        [SerializeField] private bool videoFlipHorizontal = false;
+        [Tooltip("Requested webcam resolution. 1280x720 is plenty: the pose model resizes its crop of the " +
+                 "body to 288x384, so more pixels add nothing and cost bandwidth. 0 keeps the default. " +
+                 "Ignored for files and streams.")]
+        [SerializeField] private Vector2Int videoCameraSize = new Vector2Int(1280, 720);
         [Tooltip("Label every joint's depth as MEASURED on the wire. LABEL ONLY - no coordinate changes. " +
                  "Lets the F-48 calibration run on a source with no stereo. The TRUST HUD will then say " +
                  "33/33 MEASURED about a video, so do not quote a recording made with this on as evidence " +
@@ -304,6 +324,9 @@ namespace VirtualMirror.App {
         private float appliedVideoFov;
         private bool appliedVideoClamp;
         private Vector2 appliedVideoRange;
+        private int appliedVideoRotate;
+        private bool appliedVideoFlip;
+        private Vector2Int appliedVideoCameraSize;
         private float videoChangeSeconds;
         private string videoStatus = string.Empty;
 
@@ -1320,6 +1343,10 @@ namespace VirtualMirror.App {
                 VideoSource = resolvedVideo,
                 VideoLoopCount = videoLoop ? 0 : 1,
                 VideoAssumeMeasuredDepth = videoAssumeMeasuredDepth,
+                VideoRotateDegrees = videoRotateDegrees,
+                VideoFlipHorizontal = videoFlipHorizontal,
+                VideoCameraWidth = videoCameraSize.x,
+                VideoCameraHeight = videoCameraSize.y,
                 VideoSubjectHeightMetres = Mathf.Clamp(videoSubjectHeightMetres, 0.5f, 2.5f),
                 VideoHorizontalFovDegrees = Mathf.Clamp(videoHorizontalFovDegrees, 20f, 140f),
                 VideoDepthMinMetres = videoClampDepth ? videoDepthRangeMetres.x : 0f,
@@ -1329,11 +1356,14 @@ namespace VirtualMirror.App {
             sidecarLauncher.Start(SidecarLocator.Resolve(sidecarModelPathOverride));
             activeSenderScript = senderScript;
             videoStatus = trackFromVideo
-                ? "VIDEO " + VideoSourceSpec.DisplayName(resolvedVideo)
+                ? (VideoSourceSpec.IsLive(resolvedVideo) ? "LIVE " : "VIDEO ")
+                  + VideoSourceSpec.DisplayName(resolvedVideo)
                 : string.Empty;
             if (trackFromVideo) {
-                logService.Log(LogLevel.Info, "Video test source: tracking " + resolvedVideo
-                        + " instead of the OAK-D camera. Estimated depth; one person; "
+                logService.Log(LogLevel.Info, "Video test source: tracking "
+                        + VideoSourceSpec.Redact(resolvedVideo) + " ("
+                        + VideoSourceSpec.KindOf(resolvedVideo) + ") instead of the OAK-D camera. "
+                        + "Estimated depth; one person; "
                         + (videoAssumeMeasuredDepth ? "depth labelled MEASURED." : "depth labelled inferred."));
             }
             SnapshotVideoSettings();
@@ -1356,6 +1386,9 @@ namespace VirtualMirror.App {
             appliedVideoFov = videoHorizontalFovDegrees;
             appliedVideoClamp = videoClampDepth;
             appliedVideoRange = videoDepthRangeMetres;
+            appliedVideoRotate = videoRotateDegrees;
+            appliedVideoFlip = videoFlipHorizontal;
+            appliedVideoCameraSize = videoCameraSize;
             videoChangeSeconds = 0f;
         }
 
@@ -1367,7 +1400,10 @@ namespace VirtualMirror.App {
                 || appliedVideoSubjectHeight != videoSubjectHeightMetres
                 || appliedVideoFov != videoHorizontalFovDegrees
                 || appliedVideoClamp != videoClampDepth
-                || appliedVideoRange != videoDepthRangeMetres;
+                || appliedVideoRange != videoDepthRangeMetres
+                || appliedVideoRotate != videoRotateDegrees
+                || appliedVideoFlip != videoFlipHorizontal
+                || appliedVideoCameraSize != videoCameraSize;
         }
 
         /// <summary>

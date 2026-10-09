@@ -258,6 +258,18 @@ namespace VirtualMirror.Tracking.OakD {
                       .Append(options.VideoDepthMinMetres.ToString("F2", ci)).Append(' ')
                       .Append(options.VideoDepthMaxMetres.ToString("F2", ci));
                 }
+                // 0/180/270 only; anything else was never meant and is dropped rather than forwarded.
+                if (options.VideoRotateDegrees == 90 || options.VideoRotateDegrees == 180
+                    || options.VideoRotateDegrees == 270) {
+                    sb.Append(" --video-rotate ").Append(options.VideoRotateDegrees);
+                }
+                if (options.VideoFlipHorizontal) {
+                    sb.Append(" --video-flip");
+                }
+                if (options.VideoCameraWidth >= 160 && options.VideoCameraHeight >= 120) {
+                    sb.Append(" --video-camera-size ").Append(options.VideoCameraWidth).Append(' ')
+                      .Append(options.VideoCameraHeight);
+                }
                 if (options.VideoAssumeMeasuredDepth) {
                     sb.Append(" --video-assume-measured");
                 }
@@ -691,6 +703,14 @@ namespace VirtualMirror.Tracking.OakD {
         public int VideoLoopCount;
         /// <summary>Label every joint's depth as measured (label only; see video_udp_sender.py).</summary>
         public bool VideoAssumeMeasuredDepth;
+        /// <summary>Rotate each frame clockwise before inference: a portrait phone arrives sideways.
+        /// 0, 90, 180 or 270; anything else is ignored.</summary>
+        public int VideoRotateDegrees;
+        /// <summary>Mirror each frame horizontally before inference: a front camera swaps left and right.</summary>
+        public bool VideoFlipHorizontal;
+        /// <summary>Requested webcam resolution; 0 leaves the sender's 1280x720. Ignored by files and streams.</summary>
+        public int VideoCameraWidth;
+        public int VideoCameraHeight;
         /// <summary>Assumed subject height, metres. Sets the estimated hip depth.</summary>
         public float VideoSubjectHeightMetres = 1.70f;
         /// <summary>Assumed horizontal FOV of the clip's camera, degrees.</summary>

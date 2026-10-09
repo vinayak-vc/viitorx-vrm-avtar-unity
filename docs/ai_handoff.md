@@ -22,6 +22,21 @@ label only, never evidence about the sensor. `Video Clamp Depth` (on) keeps the 
 test the volume against the clip. Page links (YouTube) need `yt-dlp` in the sidecar venv — **not installed**; direct
 `.mp4/.webm/...` links and local paths work with nothing extra.
 
+**Phone / webcam / stream sources (added same day):** `Video Source` also accepts `camera:0` (a phone exposed as a webcam by
+DroidCam/Iriun/Camo), `http://<phone-ip>:8080/video` (IP-camera app, MJPEG), `rtsp://…`, with `Video Rotate Degrees` and
+`Video Flip Horizontal` for a sideways portrait phone / selfie camera. Live sources process the newest frame only and reconnect.
+**No real phone or webcam has been tried** (none usable on the dev machine); the stream path was tested against a local MJPEG
+server and the camera path against a fake capture. First thing to do with a real phone: run
+`python-sidecar~/.venv/Scripts/python.exe tools/video/video_udp_sender.py --list-cameras`.
+Use `123.webm` (portrait, single person) as the regression clip, **not** `SR7.mp4`, which is a screen recording.
+
+**FINDING (user, 2026-10-09): single-person tracking from video looks much better than the live OAK-D feed** — same model and
+scenes, so the difference is upstream: stereo-per-joint depth plus extra stages versus the model's own coherent z. Four ranked,
+UNTESTED hypotheses and the decisive same-pixels A/B (record live RGB, replay it through the video sender) are in tasks.md F-49
+FINDING. Possible new direction: model-z geometry + stereo only for root/floor. Multi-person video shows one glitching skeleton
+because the single-person sender holds one crop; that is by design, crowds need the OAK-D detector. Not decided; do not change
+the live path on this alone.
+
 Not yet run inside the Editor (see tasks.md F-49 NOT DONE). Files: `video_udp_sender.py`, `sidecar_supervisor.py`,
 `tests/test_video_source.py` (sidecar repo); `VideoSourceSpec.cs`, `SidecarProcessLauncher.cs`, `AppBootstrap.cs`,
 `Tests/EditMode/VideoSourceF49Tests.cs` (Unity).

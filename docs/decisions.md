@@ -4259,6 +4259,20 @@ avatar run exactly as they do live. Three designs were possible:
    and a video has no second person to defend against. Depth comes from the subject's apparent height; a clamp keeps
    it inside the F-48 volume by default and can be turned off to test the volume against the clip.
 
+### Addendum — live sources (phone, webcam, stream), same day
+
+A phone is just a producer of RGB frames, so it is the same sender with a live source: `camera:N`, `rtsp://…`, an http link
+to a LAN address (read as a stream, not a page) or `stream:<url>`. Three rules came with it:
+
+* **A live source is processed newest-frame-only**, on a reader thread, and reconnects forever. Reading a camera's queue in
+  order turns every moment the model is slower than the camera into lag that never drains.
+* **The image is oriented BEFORE the model** (`--rotate`, `--flip`): the model reads pixels, so a sideways portrait phone or a
+  mirrored selfie camera cannot be repaired afterwards. This is separate from the scenes' `flipX`, which is a display mirror.
+* **Credentials never leave the process in clear.** IP-camera links carry logins; every printed or logged link is redacted.
+
+**DO NOT** read a LAN `http://` link as a page for yt-dlp (it is a camera), do not pace a live source (the camera is the clock),
+and do not queue frames to "avoid drops" — a dropped frame is the correct response to a slow consumer.
+
 ### Consequences
 
 * Everything downstream is genuinely the production code, so a bug found against a video is a bug in production code.

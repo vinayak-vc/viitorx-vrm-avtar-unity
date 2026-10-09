@@ -128,6 +128,91 @@ namespace VirtualMirror.Tests {
             Assert.AreEqual(string.Empty, VideoSourceSpec.DisplayName(null));
         }
 
+        // ---------------------------------------------------------------- phones, webcams and streams
+
+        [Test]
+        public void ACameraIsNamedByIndexAndCanonicalised() {
+            string error;
+            Assert.AreEqual("camera:0", Resolve("camera:0", out error), error);
+            Assert.AreEqual("camera:3", Resolve("CAM: 3", out error), "case and a space are tolerated");
+            Assert.AreEqual("camera:2", Resolve("2", out error), "a bare digit is a camera");
+            Assert.IsNull(Resolve("camera:99", out error));
+            StringAssert.Contains("out of range", error);
+        }
+
+        [Test]
+        public void ABareDigitThatNamesARealFileIsStillAFile() {
+            string error;
+            File.WriteAllBytes(Path.Combine(root, "7"), new byte[] { 1 });
+            string resolved = Resolve("7", out error);
+            Assert.IsNotNull(resolved, error);
+            Assert.AreNotEqual("camera:7", resolved);
+        }
+
+        [Test]
+        public void StreamLinksAreAcceptedOnTheirOwnSchemesOnly() {
+            string error;
+            Assert.AreEqual("rtsp://192.168.1.20:554/live", Resolve("rtsp://192.168.1.20:554/live", out error), error);
+            Assert.AreEqual("http://192.168.1.5:8080/video", Resolve("http://192.168.1.5:8080/video", out error), error);
+            Assert.AreEqual("stream:https://cam.example.com/live", Resolve("stream:https://cam.example.com/live", out error), error);
+            Assert.IsNull(Resolve("stream:file:///C:/x", out error), "stream: cannot smuggle another scheme");
+            Assert.IsNull(Resolve("stream:ftp://x/y", out error));
+            Assert.IsNull(Resolve("rtmp://host/live", out error));
+            StringAssert.Contains("rtsp", error);
+        }
+
+        [Test]
+        public void AClassifiedSourceKnowsWhetherItIsLive() {
+            Assert.AreEqual(VideoSourceKind.Camera, VideoSourceSpec.KindOf("camera:1"));
+            Assert.AreEqual(VideoSourceKind.Stream, VideoSourceSpec.KindOf("rtsp://10.0.0.5/ch1"));
+            Assert.AreEqual(VideoSourceKind.Stream, VideoSourceSpec.KindOf("stream:https://cam.example.com/live"));
+            Assert.AreEqual(VideoSourceKind.Stream, VideoSourceSpec.KindOf("http://192.168.1.5:8080/video"),
+                            "an http link to a LAN address is a phone, not a web page");
+            Assert.AreEqual(VideoSourceKind.Link, VideoSourceSpec.KindOf("http://8.8.8.8/video"),
+                            "a PUBLIC address is still a link");
+            Assert.AreEqual(VideoSourceKind.Link, VideoSourceSpec.KindOf("http://192.168.1.5/clips/a.mp4"),
+                            "a LAN link that names a video FILE is downloaded, not streamed");
+            Assert.AreEqual(VideoSourceKind.File, VideoSourceSpec.KindOf("D:/a/clip.mp4"));
+            Assert.IsTrue(VideoSourceSpec.IsLive("camera:0"));
+            Assert.IsFalse(VideoSourceSpec.IsLive("D:/a/clip.mp4"));
+        }
+
+        [Test]
+        public void LanAddressesAreRecognised() {
+            Assert.IsTrue(VideoSourceSpec.IsLanHost("192.168.0.9"));
+            Assert.IsTrue(VideoSourceSpec.IsLanHost("10.1.2.3"));
+            Assert.IsTrue(VideoSourceSpec.IsLanHost("172.16.0.1"));
+            Assert.IsTrue(VideoSourceSpec.IsLanHost("172.31.255.1"));
+            Assert.IsTrue(VideoSourceSpec.IsLanHost("127.0.0.1"));
+            Assert.IsTrue(VideoSourceSpec.IsLanHost("localhost"));
+            Assert.IsTrue(VideoSourceSpec.IsLanHost("myphone.local"));
+            Assert.IsFalse(VideoSourceSpec.IsLanHost("172.32.0.1"), "172.32 is public");
+            Assert.IsFalse(VideoSourceSpec.IsLanHost("8.8.8.8"));
+            Assert.IsFalse(VideoSourceSpec.IsLanHost("example.com"));
+            Assert.IsFalse(VideoSourceSpec.IsLanHost(string.Empty));
+        }
+
+        [Test]
+        public void CredentialsInALinkAreNeverShown() {
+            Assert.AreEqual("rtsp://***@10.0.0.5/ch1", VideoSourceSpec.Redact("rtsp://admin:s3cret@10.0.0.5/ch1"));
+            Assert.AreEqual("http://example.com/a?b=c@d", VideoSourceSpec.Redact("http://example.com/a?b=c@d"),
+                            "an @ in a query string is not a login");
+            Assert.AreEqual(string.Empty, VideoSourceSpec.Redact(null));
+            string name = VideoSourceSpec.DisplayName("rtsp://admin:s3cret@10.0.0.5:8554/ch1");
+            StringAssert.DoesNotContain("s3cret", name);
+            StringAssert.DoesNotContain("admin", name);
+            Assert.AreEqual("stream 10.0.0.5:8554", name);
+            string error;
+            Assert.IsNull(Resolve("stream:ftp://u:s3cret@x/y", out error));
+            StringAssert.DoesNotContain("s3cret", error);
+        }
+
+        [Test]
+        public void TheHudNamesLiveSourcesPlainly() {
+            Assert.AreEqual("camera 2", VideoSourceSpec.DisplayName("camera:2"));
+            Assert.AreEqual("stream 192.168.1.5:8080", VideoSourceSpec.DisplayName("http://192.168.1.5:8080/video"));
+        }
+
         // ---------------------------------------------------------------- the command line
 
         private static string BuildArguments(SidecarLaunchOptions options) {
@@ -181,6 +266,45 @@ namespace VirtualMirror.Tests {
             options.VideoDepthMaxMetres = 4f;
             options.VideoAssumeMeasuredDepth = false;
             StringAssert.DoesNotContain("--video-assume-measured", BuildArguments(options));
+        }
+
+        [Test]
+        public void ARotatedMirroredWebcamCarriesItsOrientationAndSize() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "camera:1";
+            options.VideoRotateDegrees = 90;
+            options.VideoFlipHorizontal = true;
+            options.VideoCameraWidth = 1920;
+            options.VideoCameraHeight = 1080;
+            string args = BuildArguments(options);
+            StringAssert.Contains("--video \"camera:1\"", args);
+            StringAssert.Contains("--video-rotate 90", args);
+            StringAssert.Contains("--video-flip", args);
+            StringAssert.Contains("--video-camera-size 1920 1080", args);
+        }
+
+        [Test]
+        public void NoRotationNoMirrorAndNoSizeSendsNoneOfThem() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "camera:0";
+            string args = BuildArguments(options);
+            StringAssert.DoesNotContain("--video-rotate", args);
+            StringAssert.DoesNotContain("--video-flip", args);
+            StringAssert.DoesNotContain("--video-camera-size", args);
+        }
+
+        [Test]
+        public void AnInvalidRotationOrSizeIsDroppedNotForwarded() {
+            // The sender's argparse accepts 0/90/180/270 only; anything else would make Python exit
+            // before the camera opens.
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "camera:0";
+            options.VideoRotateDegrees = 45;
+            options.VideoCameraWidth = 5;
+            options.VideoCameraHeight = 5;
+            string args = BuildArguments(options);
+            StringAssert.DoesNotContain("--video-rotate", args);
+            StringAssert.DoesNotContain("--video-camera-size", args);
         }
 
         [Test]
