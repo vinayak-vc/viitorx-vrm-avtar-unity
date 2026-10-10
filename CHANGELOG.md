@@ -12,6 +12,19 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Added
 
+- **Status lights: see that the sidecar, its watchdog, the source, the model and the tracking are up (F-51 / ADR-087).** The sidecar
+  still has no window; five lights top right in every scene (F8 hides) and one console line per change now say whether the process is
+  alive, the supervisor is watching, the camera or phone is connected, the model has loaded and is consuming frames, and a person is
+  actually being tracked (frames moving while nothing is sent reads "no person found yet"). Driven by the sender's heartbeat, which the
+  supervisor now copies into its state file. Rules tested and run on a real state file; **drawing not yet seen in the Editor.**
+
+- **A phone over WebRTC, from a link (F-50 / ADR-086).** Run the LAN Camera Streaming server, open its sender page on the
+  phone, and paste the **viewer** link (`…/viewer?room=…`) into `AppBootstrap > Video Source`; the sidecar joins the room over
+  WebRTC and tracks the phone like a webcam. The server's access PIN is its own masked field, `Lan Camera Pin`, and reaches the
+  sidecar through its environment, never the link or a command line (a link carrying a PIN is refused). Newest frame only,
+  rejoins on loss, copes with a mid-stream resolution change. Verified against the real Node server, the real model and the
+  real supervisor with a synthetic phone on loopback; **not tried with a real phone or in the Editor.**
+
 - **A phone or webcam as the camera.** `Video Source` now also takes `camera:N` (a phone exposed as a Windows webcam by an
   app such as DroidCam, Iriun or Camo), `http://<phone-ip>:8080/video` (an IP-camera app over Wi-Fi), `rtsp://…`, plus
   rotate/mirror fields for a sideways portrait phone or a selfie camera. Live sources process only the newest frame (lag

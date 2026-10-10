@@ -2243,3 +2243,161 @@ upstream of Unity. With several people in the clip only ONE skeleton appears and
 * **Direction (proposed, NOT decided):** if the A/B confirms it, the live pipeline should take limb/torso geometry from
   the model's z and use stereo only for the root position, the floor and as a sanity check — which is also what F-48
   already enforces for calibration. Do not change the live path on this finding alone; it is one observer, one clip.
+
+
+---
+
+## F-50 — A PHONE OVER WEBRTC: PASTE THE LAN CAMERA VIEWER LINK, TYPE THE PIN (2026-10-10)
+
+Decision: **ADR-086**. Status: **IMPLEMENTED; verified end to end against the real Node server and the real model; NOT yet
+seen in the Editor; NEVER tried with a real phone.**
+
+Wanted: run the LAN Camera Streaming server, open its sender page on the phone, paste the **viewer link** into
+`AppBootstrap > Video Source`, press start, and have the sidecar join over WebRTC and track the phone like a webcam.
+
+### DONE
+
+- [x] **`python-sidecar~/tools/video/lan_camera.py`** — a UTILITY (frames in, frames out), with the same surface as
+      `LatestFrameReader` (`start/stop/read`, `frames_read/dropped/reconnects/connected`). It speaks the server's own
+      protocol: `GET /api/config` (ICE servers) -> Socket.IO -> `room:join` on **every** connect (the server drops
+      membership on disconnect) -> a NEW `RTCPeerConnection` per `webrtc:offer` -> `webrtc:answer`; trickled candidates are
+      queued until the offer is applied; `peer:left` closes the connection and waits for the next offer.
+      Lazy imports, so every other source works without `aiortc`.
+- [x] **`video_udp_sender.py`**: a new source kind `lan` (`http(s)://host/viewer?room=ID` or `lan:<url>`), classified BEFORE
+      the generic http rule (which would call it an MJPEG stream or a yt-dlp page). The frame loop is otherwise untouched,
+      plus two guards: a **fatal** LAN error exits 2 with one line, and a **frame-size change** re-derives the crop box,
+      intrinsics and per-person state (a WebRTC sender adapts resolution to the bandwidth).
+- [x] **The PIN is a separate field and never touches a command line.** `AppBootstrap > Lan Camera Pin` (masked in the
+      Inspector by the new `[MaskedString]` attribute + `MaskedStringDrawer`) -> `SidecarLaunchOptions.LanCameraPin` ->
+      set in the child's **environment** as `CAMERA_PIN` for exactly the duration of `NativeProcess.Start()`, then restored.
+      Only a LAN camera source is handed one. A link that carries `pin=` is **refused** (Unity and Python both).
+      Empty field + `CAMERA_PIN` already set on the machine also works; the field wins.
+- [x] **`VideoSourceSpec`**: `VideoSourceKind.LanCamera`, `IsLanCameraLink`, `TryParseLanCamera`; the HUD names it
+      `LIVE lan camera <host>/<room>`. The rule exists twice (Unity and Python) and both test suites pin the SAME examples.
+- [x] **No PIN, no sidecar.** A LAN source with an empty field and no `CAMERA_PIN` is one console error at Play, not a
+      sidecar that exits and is restarted by the watchdog forever.
+- [x] Editing the PIN or the link while playing restarts the sidecar after a second, like every other video field.
+- [x] `requirements.txt` + `requirements.lock.txt` (27 exact pins). **`pip freeze` was diffed before/after: nothing existing
+      moved** (numpy 1.26.4, opencv 4.11.0.86, onnxruntime-directml 1.23.0, protobuf, DirectML provider all unchanged).
+
+### MEASURED
+
+| check | result |
+|---|---|
+| `tests/test_lan_camera.py`, no server (link rules, PIN rules, candidate parsing/queueing, newest-frame slot, offer->answer against a real aiortc peer with candidates arriving **before** the offer, new peer connection per offer, malformed offers ignored) | **78 / 78** |
+| same, with `CAMERA_SERVER_DIR` = the real `lan-camera-streaming` Node server + a fake phone on aiortc | **103 / 103** (100/100 on two earlier runs, before the resolution-change phase was added) |
+| - viewer joins first / phone joins first | >30 frames, BGR `(480,640,3)` uint8 both ways |
+| - phone leaves and rejoins | fresh offer, new peer connection, frames resume, `reconnects` = 1 |
+| - wrong PIN | `LanCameraError` "Invalid access PIN" in 0.0 s, **PIN never in the message** |
+| - a second viewer in an occupied room | not fatal; retried; gets in and streams when the first leaves |
+| - consumer 12x slower than the phone | max frame age **45 ms**, 90 frames counted as dropped, none queued |
+| - `stop()` | the phone receives `peer:left` (room:leave was sent) |
+| **full chain**: real `video_udp_sender.py`, viewer link in `--video`, PIN only in the environment, fake phone playing `123.webm` | 40 production datagrams (33 landmarks, `sid`, `seq`), `src` all 0, `[lan] joined room` + `frames=` in the log, **PIN absent from all output** |
+| same chain, phone switches 360x640 -> 288x512 mid-run | "frame size changed" logged, 40 more datagrams, **one** `sid` (no restart) |
+| same chain **through the real `sidecar_supervisor.py`** (PIN only in the supervisor's environment) | `SIDECAR READY`; PIN absent from the command line, supervisor log and events; 400 datagrams |
+| sender's own latency on that chain (`lat`: frame published -> datagram sent) | mean **23 ms**, median 22, p95 32, max 48; packet age at the receiver 0.2 ms |
+| `tests/test_video_source.py` (existing) | still **95 / 95** |
+| `VideoSourceF49Tests` | **30 / 30** (the previous 23 + 7 new: viewer links, PIN refusal, PIN scoped to a LAN source, PIN not on the command line) |
+| `dotnet build VirtualMirror.Tests.csproj` and `VirtualMirror.Editor.csproj` | 0 errors |
+| **NativeProcess really passes the environment** (a probe against the project's own `StartExternalProcess.cs`) | child sees the PIN during `Start()`, not before, not after; Unity's own value restored |
+| mutation checks (break it, watch it fail, restore) | Python: drop queued candidates, skip LAN classification, accept a PIN in a link, queue frames instead of newest-only, disable the resize guard — **all caught**. C#: PIN to a non-LAN child, PIN in a link, LAN rule after the generic one — **all caught** |
+
+### FOUND ALONG THE WAY
+
+- **aiortc answers a garbage SDP with an empty answer** instead of failing, so offers are shape-checked first.
+- **`RTCPeerConnection.close()` can hang.** Reproduced three times in one test: with ICE still `checking` and DTLS still `new`
+  it did not return in >30 s (aiortc 1.15.0 / aioice 0.10.2, Windows Proactor loop); a simplified replica never hung, so the
+  trigger is timing. Unbounded it would sit inside the offer lock and freeze the receiver on every later offer — exactly the
+  state a phone that cannot reach us leaves behind. Now bounded at 3 s (`PEER_CLOSE_TIMEOUT_SECONDS`); **root cause not found.**
+- The server emits `peer:joined` only to whoever was already in the room, so a sender that joins second learns the viewer is
+  there from `hasPeer` in its join ack. (My first fake phone got this wrong; the real sender page does it correctly.)
+
+### NOT DONE — open
+
+- [ ] **No real phone, browser or network was involved.** The "phone" is an aiortc process on this machine, on loopback.
+      Real Chrome/Safari sender pages, real Wi-Fi, router client isolation, the firewall prompt for `python.exe`, and a zrok
+      tunnel are all **untested**. WebRTC media is peer-to-peer on the LAN; through zrok only the signaling goes via the
+      tunnel, and a phone on another network needs a TURN entry on the server.
+- [ ] **Orientation of a real portrait phone is unknown.** aiortc ignores the video-orientation header, so a phone may
+      arrive sideways; `Video Rotate Degrees` 90/270 is the existing answer. Not seen with a real device.
+- [ ] **End-to-end latency is unmeasured.** The 23 ms above starts when the frame reaches the sidecar and excludes the
+      phone's capture, its encode, the network and aiortc's decode. A real phone will be slower; expect the 100-300 ms of
+      the other phone sources as a guess, not a number.
+- [ ] **Throughput:** the chain ran at **~20 datagrams/s**, but the fake phone's VP8 encoder, Node and the model shared
+      this CPU, so that is a loopback artefact, not the sidecar's ceiling (~31 ms/frame DirectML).
+- [ ] **Not run inside the Editor.** `AppBootstrap`'s new field, the masked drawer, the start-up PIN check and the live
+      restart were compiled (`dotnet build`, 0 errors) but not exercised. `MaskedStringAttribute.cs` and
+      `MaskedStringDrawer.cs` have no `.meta` yet — Unity creates them when the Editor next refreshes; commit them with the
+      `.cs` files.
+- [ ] The effect of the resize guard on pose QUALITY is not measured; the test proves it is noticed and the stream
+      continues, not that the output improves.
+- [ ] No MJPEG / tunnel-relay fallback when WebRTC cannot connect (the standalone receiver had them). An MJPEG route for a
+      LAN phone exists via `stream:`; the relay modes spend zrok quota and were left out until needed.
+- [ ] The PIN field is masked but still saved into the scene as plain text. For a PIN that must not live in the project,
+      leave it empty and set `CAMERA_PIN` on the machine.
+- [ ] `D:\Unity\cam-receiver` (the standalone receiver this was ported from, 54 tests) still exists and is now redundant;
+      delete it once you agree.
+
+
+---
+
+## F-51 — STATUS LIGHTS: SEE THAT THE SIDECAR, ITS WATCHDOG, THE SOURCE, THE MODEL AND THE TRACKING ARE UP (2026-10-10)
+
+Decision: **ADR-087**. Status: **IMPLEMENTED; the rules are tested and ran on a real supervisor state file; the on-screen drawing has NOT been seen in the Editor.**
+
+Reported by the user after F-50: the phone worked, but Unity showed nothing — the sidecar has no window (deliberately), so a healthy
+system and a silently failed one looked identical, and there was no way to know whether the supervisor, the watcher or the inference
+had started. Wanted: keep the sidecar windowless and put lights in the Unity scene.
+
+### DONE
+
+- [x] **Five lights, top right, in every scene (F8 hides):** `SIDECAR` (did Unity start the process, is it alive), `WATCHDOG` (is the
+      supervisor running and still reporting; restarts, crash loops), `SOURCE` (camera/phone connected), `MODEL` (loaded and consuming
+      frames), `TRACKING` (a person is being found and sent). Green = healthy, pulsing amber = in progress, red = needs a person, blue =
+      an external sidecar, grey = off. Each change of a light is also logged once to the Unity console (`[SidecarStatus] MODEL: running`).
+- [x] **`SidecarStatusModel`** (`Runtime/Tracking/OakD/`, pure and Unity-free like `VideoSourceSpec`): the launcher state plus the
+      supervisor's state file in, five lights out. A counter counts as **moving** if it changed within 6 s and needs TWO observations
+      (a stalled sender's last heartbeat must not read as healthy); the first seconds after attaching read `checking...`, never
+      `idle`. A state file not rewritten for 10 s means the supervisor is gone; the previous run's leftover file is ignored when nothing
+      of ours is running.
+- [x] **`SidecarStatusLights`** (`Runtime/SkeletonShow/`): polls once a second, draws with `OnGUI`, survives scene loads
+      (`DontDestroyOnLoad`), created by `SidecarBootstrap` and `AppBootstrap` (which attach their launcher). It listens on **no UDP
+      port** (every scene binds 8899 for itself; ADR-075).
+- [x] **Supervisor change (sidecar repo):** `supervisor_state.json` gained a `Child` object — the sender's latest heartbeat
+      (`Frames`, `Sent`, `Skipped`, `Live`, `Note`, `LineAgeSeconds`) — parsed from the end of the sender's log every ~2 s, for all
+      three senders. It changes nothing the supervisor decides, and cannot raise (`Child: null` when there is no log or heartbeat).
+- [x] **The signal that distinguishes the cases that looked the same:** frames moving while `sent` stands still is `TRACKING: no person
+      found yet` (exactly the earlier phone run: ~2000 frames, `sent=4`); `Live=n` is `SOURCE: waiting for the camera / phone`;
+      `Frames=0` with `loading RTMW3D` is `MODEL: loading`.
+
+### MEASURED
+
+| check | result |
+|---|---|
+| `tests/test_supervisor_state.py` (heartbeat parsing for the video, wholebody and multiperson formats; latest line wins; truncated tail; no log / empty / banner-only / vanished log -> `Child: null`; existing keys untouched; large log read from the tail) | **32 / 32** |
+| `SidecarStatusModelF51Tests` (parser incl. a null `Child`, garbage and half-written JSON; state-file path; every light in every situation: nothing started, starting, loading, healthy, no person, person lost, phone not connected, silent sender, restart, each launcher state, crash loop, stale file, stopped) | **23 / 23** |
+| a REAL `supervisor_state.json` captured 5 s apart from a live chain (fake phone + real model + real supervisor), fed through the real built C# model | 177/171 -> 296/210 frames/sent: first poll `MODEL: idle` (one observation), second poll all five **green** |
+| mutation checks | C#: first sighting counts as movement, stale file trusted, "person tracked" claimed on frames alone, a silent sender ignored — **all caught** |
+| `dotnet build VirtualMirror.Tests.csproj` (pulls in Tracking and SkeletonShow, so the `OnGUI` component compiles) | 0 errors |
+| existing suites | `test_video_source.py` 95/95, `test_lan_camera.py` 103/103 (unchanged), `VideoSourceF49Tests` 30/30 |
+
+### FOUND ALONG THE WAY
+
+- **`SidecarReady` does not mean the model is loaded.** The supervisor marks the sender READY at its first `frames=` line, which the
+  senders print *before* loading the model (a real run: READY at 1.5 s, "loading RTMW3D" on the line before). The old state file therefore
+  could not answer "has inference started"; the heartbeat can.
+- With the phone, the log showed the whole system healthy and **no person ever found** — which no light existed to say.
+
+### NOT DONE — open
+
+- [ ] **Never seen on screen.** The `OnGUI` layout, readability at other resolutions, overlap with a scene's own HUD, the pulse, the F8
+      toggle and survival across scene loads are untested. Compiles and passes the model tests only.
+- [ ] **Does not prove Unity RECEIVES the poses.** The lights report what the SENDER says it sent. A sixth light for "Unity is
+      receiving datagrams" needs a hook in the pose provider (a static counter), because the lights must not bind the port.
+- [ ] **The real OAK senders were not run for this.** Their heartbeat formats are covered by parser tests built from their print
+      statements, not by a live OAK-D run. `wholebody_udp_sender.py` prints a `frames=` line only in some states (idle lines keep the
+      marker alive); the light degrades to `-`/`checking` rather than guessing.
+- [ ] **A player build is assumed to lay the evidence folder out like the Editor** (`<sidecar root>/evidence/oak_v4/f20b`). Unverified;
+      `VIRTUAL_MIRROR_EVIDENCE_DIR` is honoured by both ends.
+- [ ] `SidecarStatusModel.cs`, `SidecarStatusLights.cs` and their test have no `.meta` yet (Unity creates them on refresh); commit them
+      with the sources.

@@ -111,6 +111,9 @@ namespace VirtualMirror.SkeletonShow {
         }
 
         private void Start() {
+            // F-51: the lights exist whether or not Unity starts the sidecar - "manual" and "external" are
+            // states worth seeing too.
+            SidecarStatusLights.Ensure();
             ILogService log = new BootLog();
             if (autoStart) {
                 StartSidecar(log);
@@ -155,6 +158,7 @@ namespace VirtualMirror.SkeletonShow {
             };
             launcher = new SidecarProcessLauncher(log, options);
             launcher.Start(SidecarLocator.Resolve(modelPathOverride));
+            SidecarStatusLights.Attach(launcher);
         }
 
         /// <summary>

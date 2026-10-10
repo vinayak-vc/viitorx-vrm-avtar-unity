@@ -213,6 +213,126 @@ namespace VirtualMirror.Tests {
             Assert.AreEqual("stream 192.168.1.5:8080", VideoSourceSpec.DisplayName("http://192.168.1.5:8080/video"));
         }
 
+        // ---------------------------------------------------------------- F-50: a phone over WebRTC
+        //
+        // These tables are the SAME ones python-sidecar~/tests/test_lan_camera.py asserts on the other
+        // side. The rule exists twice on purpose (Unity says "typo" in the console, Python is the
+        // authority), so the only protection against the two drifting apart is both being pinned to the
+        // same examples.
+
+        private static readonly string[] LanViewerLinks = {
+            "https://lan.shares.zrok.io/viewer?room=room-abc123",
+            "http://192.168.1.5:3000/viewer?room=abc",
+            "http://192.168.1.5:3000/viewer/?room=abc",
+            "HTTPS://Example.COM/VIEWER?room=abc#frag",
+            "http://[::1]:3000/viewer?room=abc",
+            "lan:http://host:3000?room=abc",
+            "lan: 192.168.1.5:3000?room=abc",
+        };
+
+        [Test]
+        public void AViewerLinkIsALanCameraNotAPageAndNotAnMjpegStream() {
+            foreach (string link in LanViewerLinks) {
+                Assert.IsTrue(VideoSourceSpec.IsLanCameraLink(link), link);
+                string error;
+                Assert.AreEqual(link, Resolve(link, out error), link + ": " + error);
+                Assert.AreEqual(VideoSourceKind.LanCamera, VideoSourceSpec.KindOf(link), link);
+                Assert.IsTrue(VideoSourceSpec.IsLive(link), link + " is live: no loop, no pacing");
+            }
+        }
+
+        [Test]
+        public void OtherLinksAreStillWhatTheyWere() {
+            Assert.AreEqual(VideoSourceKind.Stream, VideoSourceSpec.KindOf("http://192.168.1.5:8080/video"),
+                            "a phone MJPEG app is still a stream");
+            Assert.AreEqual(VideoSourceKind.Link, VideoSourceSpec.KindOf("https://www.youtube.com/watch?v=abc"));
+            Assert.AreEqual(VideoSourceKind.Link, VideoSourceSpec.KindOf("http://example.com/clip.mp4"));
+            string[] notLan = {
+                "http://192.168.1.5:3000/viewer",           // a viewer page with no room
+                "http://192.168.1.5:3000/sender?room=abc",  // the SENDER page is not a viewer
+                "rtsp://cam/viewer?room=abc",               // wrong scheme
+                "camera:0",
+                string.Empty,
+            };
+            foreach (string text in notLan) {
+                Assert.IsFalse(VideoSourceSpec.IsLanCameraLink(text), "not a LAN camera: " + text);
+            }
+        }
+
+        [Test]
+        public void ALanLinkIsParsedToItsServerAndRoomAndNeverShowsCredentials() {
+            string host;
+            string room;
+            string error;
+            Assert.IsTrue(VideoSourceSpec.TryParseLanCamera("http://192.168.1.5:3000/viewer?room=abc", out host, out room, out error), error);
+            Assert.AreEqual("192.168.1.5:3000", host);
+            Assert.AreEqual("abc", room);
+            Assert.IsTrue(VideoSourceSpec.TryParseLanCamera("https://lan.shares.zrok.io/viewer?room=room-abc123", out host, out room, out error), error);
+            Assert.AreEqual("lan.shares.zrok.io", host, "a default port is not shown");
+            Assert.AreEqual("room-abc123", room);
+            Assert.AreEqual("lan camera lan.shares.zrok.io/room-abc123",
+                            VideoSourceSpec.DisplayName("https://lan.shares.zrok.io/viewer?room=room-abc123"));
+            string name = VideoSourceSpec.DisplayName("http://user:s3cret@192.168.1.5:3000/viewer?room=abc");
+            StringAssert.DoesNotContain("s3cret", name);
+        }
+
+        [Test]
+        public void ALinkThatCarriesAPinIsRefusedNotUsed() {
+            string error;
+            Assert.IsNull(Resolve("http://h/viewer?room=abc&pin=123456", out error));
+            StringAssert.Contains("PIN", error);
+            StringAssert.DoesNotContain("123456", error, "the refusal must not echo the PIN it refuses");
+            Assert.IsNull(Resolve("lan:http://h?room=abc&pin=1", out error), "the lan: prefix does not bypass it");
+        }
+
+        [Test]
+        public void ABadRoomIsAConsoleLineNotARefusedJoin() {
+            string error;
+            Assert.IsNull(Resolve("lan:http://h:3000", out error));
+            StringAssert.Contains("no room", error);
+            Assert.IsNull(Resolve("http://h/viewer?room=ab", out error), "2 characters: the server needs 3-32");
+            StringAssert.Contains("not valid", error);
+            Assert.IsNull(Resolve("http://h/viewer?room=has%20space", out error));
+            Assert.IsNull(Resolve("lan:", out error));
+            Assert.IsNull(Resolve("lan:ftp://h?room=abc", out error));
+        }
+
+        // ---- the PIN's route to the sidecar: the environment, and ONLY for a LAN camera
+
+        [Test]
+        public void ThePinIsOnlyHandedToAChildThatReadsAViewerLink() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.LanCameraPin = " 123456 ";
+            options.VideoSource = "http://192.168.1.5:3000/viewer?room=abc";
+            Assert.AreEqual("123456", SidecarProcessLauncher.PinForChild(options), "trimmed");
+
+            options.VideoSource = "camera:0";
+            Assert.AreEqual(string.Empty, SidecarProcessLauncher.PinForChild(options),
+                            "a source with no use for the PIN is not handed it");
+            options.VideoSource = "D:/clip.mp4";
+            Assert.AreEqual(string.Empty, SidecarProcessLauncher.PinForChild(options));
+            options.VideoSource = string.Empty;
+            Assert.AreEqual(string.Empty, SidecarProcessLauncher.PinForChild(options), "no video: the camera");
+            options.VideoSource = "http://192.168.1.5:3000/viewer?room=abc";
+            options.LanCameraPin = string.Empty;
+            Assert.AreEqual(string.Empty, SidecarProcessLauncher.PinForChild(options));
+            Assert.AreEqual(string.Empty, SidecarProcessLauncher.PinForChild(null));
+        }
+
+        [Test]
+        public void ThePinIsNeverOnTheCommandLine() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.SupervisedSenderScript = "tools/video/video_udp_sender.py";
+            options.VideoSource = "http://192.168.1.5:3000/viewer?room=abc";
+            options.LanCameraPin = "s3cretPIN";
+            string args = BuildArguments(options);
+            StringAssert.Contains("--video \"http://192.168.1.5:3000/viewer?room=abc\"", args,
+                                  "the viewer link is one quoted argument");
+            StringAssert.DoesNotContain("s3cretPIN", args, "a command line is visible to every process on the machine");
+            Assert.AreEqual("CAMERA_PIN", SidecarProcessLauncher.LanCameraPinEnvironmentVariable,
+                            "must match lan_camera.PIN_ENV on the Python side");
+        }
+
         // ---------------------------------------------------------------- the command line
 
         private static string BuildArguments(SidecarLaunchOptions options) {

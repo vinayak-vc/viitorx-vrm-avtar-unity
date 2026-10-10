@@ -14,13 +14,17 @@ namespace VirtualMirror.Tracking.OakD {
         Camera = 2,
         /// <summary>A LIVE stream: an RTSP camera, or a phone "IP camera" app serving MJPEG over Wi-Fi.</summary>
         Stream = 3,
+        /// <summary>F-50: a LAN Camera Streaming viewer link. The phone's browser sender page streams over
+        /// WebRTC and the sidecar joins the room as the viewer. Needs an access PIN, which is never part
+        /// of the link.</summary>
+        LanCamera = 4,
     }
 
     /// <summary>
     /// F-49 — turns what somebody typed into the "Video Test Source" Inspector field into the one
     /// string the sidecar is given, or says why it cannot.
     ///
-    /// THE FIELD TAKES FIVE THINGS and nothing else:
+    /// THE FIELD TAKES SIX THINGS and nothing else:
     ///   * a link (http or https) to a video file, or to a page a downloader can resolve;
     ///   * an absolute path, or one relative to the Unity PROJECT folder (so
     ///     <c>Assets/Games/video/SR7.mp4</c> works the way it reads in the Project window);
@@ -29,6 +33,11 @@ namespace VirtualMirror.Tracking.OakD {
     ///   * <c>rtsp://...</c>: an IP camera;
     ///   * <c>http://192.168.x.x:PORT/video</c> or <c>stream:&lt;url&gt;</c>: a phone IP-camera app. An
     ///     http link to a private/LAN address is a CAMERA, not a web page, and is read as a live stream.
+    ///   * <c>http://host/viewer?room=ID</c> (or <c>lan:&lt;url&gt;</c>): F-50, a LAN Camera Streaming
+    ///     viewer link, received over WebRTC. Asked BEFORE the two rules above, because a viewer link is
+    ///     an http link to a LAN address or a public tunnel and would otherwise be read as an MJPEG stream
+    ///     or a page. The access PIN is NOT part of the link - a link that carries one is refused - it is
+    ///     a separate AppBootstrap field. Must agree with <c>lan_camera.py</c> (tests pin both sides).
     ///
     /// The value is later placed on a command line and, for a page link, handed to a downloader or to a
     /// video decoder, so it is checked here against an allowlist instead of being forwarded and hoped
@@ -49,6 +58,13 @@ namespace VirtualMirror.Tracking.OakD {
         public const int MaxCameraIndex = 15;
 
         private const string StreamPrefix = "stream:";
+        private const string LanPrefix = "lan:";
+        private const string ViewerPath = "/viewer";
+
+        // Mirrors RoomManager.validateRoomId in the LAN Camera Streaming server: 3-32 letters, digits,
+        // '-' or '_'. Checked here so a typo is a console line at Play, not a refused join later.
+        private static readonly Regex RoomPattern =
+            new Regex(@"^[a-zA-Z0-9_-]{3,32}$", RegexOptions.CultureInvariant);
 
         private static readonly Regex CameraPattern =
             new Regex(@"^(?:camera|cam):\s*(\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -123,6 +139,18 @@ namespace VirtualMirror.Tracking.OakD {
                 return true;
             }
 
+            // F-50: BEFORE the generic link rule below, which would take a viewer link for a page or an
+            // MJPEG stream and fail in a way that never mentions the real cause.
+            if (IsLanCameraLink(text)) {
+                string lanHost;
+                string lanRoom;
+                if (!TryParseLanCamera(text, out lanHost, out lanRoom, out error)) {
+                    return false;
+                }
+                resolved = text;
+                return true;
+            }
+
             if (LooksLikeUrl(text)) {
                 if (!TryAcceptLink(text, out error)) {
                     return false;
@@ -182,6 +210,9 @@ namespace VirtualMirror.Tracking.OakD {
             if (resolved.StartsWith(StreamPrefix, StringComparison.OrdinalIgnoreCase)) {
                 return VideoSourceKind.Stream;
             }
+            if (IsLanCameraLink(resolved)) {
+                return VideoSourceKind.LanCamera;
+            }
             if (!LooksLikeUrl(resolved)) {
                 return VideoSourceKind.File;
             }
@@ -203,7 +234,111 @@ namespace VirtualMirror.Tracking.OakD {
         /// <summary>True for a source with no end, which has no loop and no replay: a camera or a stream.</summary>
         public static bool IsLive(string resolved) {
             VideoSourceKind kind = KindOf(resolved);
-            return kind == VideoSourceKind.Camera || kind == VideoSourceKind.Stream;
+            return kind == VideoSourceKind.Camera || kind == VideoSourceKind.Stream
+                   || kind == VideoSourceKind.LanCamera;
+        }
+
+        /// <summary>
+        /// F-50. True for <c>lan:&lt;anything&gt;</c>, or an http(s) link whose path ends in /viewer and which
+        /// carries a non-empty <c>room</c> value. The same rule as <c>lan_camera.is_lan_camera_link</c>.
+        /// </summary>
+        public static bool IsLanCameraLink(string text) {
+            if (string.IsNullOrEmpty(text)) {
+                return false;
+            }
+            string t = text.Trim();
+            if (t.StartsWith(LanPrefix, StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            Uri uri;
+            if (!Uri.TryCreate(t, UriKind.Absolute, out uri)) {
+                return false;
+            }
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) {
+                return false;
+            }
+            if (!uri.AbsolutePath.TrimEnd('/').EndsWith(ViewerPath, StringComparison.OrdinalIgnoreCase)) {
+                return false;
+            }
+            return QueryValue(uri.Query, "room") != null;
+        }
+
+        /// <summary>
+        /// F-50. Validates a LAN camera link and returns the server's host[:port] and the room id. Refuses a
+        /// link that carries a <c>pin</c> (a PIN inside a link ends up in logs and screenshots; it belongs in
+        /// the separate PIN field). The same rules, in the same order, as <c>lan_camera.parse_lan_url</c>.
+        /// </summary>
+        public static bool TryParseLanCamera(string spec, out string host, out string room, out string error) {
+            host = string.Empty;
+            room = string.Empty;
+            error = string.Empty;
+
+            string text = spec == null ? string.Empty : spec.Trim();
+            if (text.StartsWith(LanPrefix, StringComparison.OrdinalIgnoreCase)) {
+                text = text.Substring(LanPrefix.Length).Trim();
+            }
+            if (text.Length == 0) {
+                error = "the LAN camera link is empty";
+                return false;
+            }
+            if (text.IndexOf("://", StringComparison.Ordinal) < 0) {
+                text = "http://" + text;
+            }
+            Uri uri;
+            if (!Uri.TryCreate(text, UriKind.Absolute, out uri)) {
+                error = "the LAN camera link is not a valid link";
+                return false;
+            }
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) {
+                error = "a LAN camera link must be http:// or https://, not '" + uri.Scheme + ":'";
+                return false;
+            }
+            if (string.IsNullOrEmpty(uri.Host)) {
+                error = "the LAN camera link has no host";
+                return false;
+            }
+            if (QueryValue(uri.Query, "pin") != null) {
+                error = "the link contains a PIN. Remove it and put the PIN in 'Lan Camera Pin' on "
+                        + "AppBootstrap instead - a PIN inside a link ends up in logs";
+                return false;
+            }
+            string roomId = QueryValue(uri.Query, "room");
+            if (roomId == null) {
+                error = "the LAN camera link has no room. It should look like http://<server>/viewer?room=<room id>";
+                return false;
+            }
+            if (!RoomPattern.IsMatch(roomId)) {
+                error = "room id '" + roomId + "' is not valid: 3-32 letters, digits, '-' or '_'";
+                return false;
+            }
+            host = uri.IsDefaultPort ? uri.Host : uri.Host + ":" + uri.Port;
+            room = roomId;
+            return true;
+        }
+
+        /// <summary>The first non-empty value of <paramref name="key"/> in a query string, or null.
+        /// Case-sensitive on the key, like the server and like Python's parse_qs.</summary>
+        private static string QueryValue(string query, string key) {
+            if (string.IsNullOrEmpty(query)) {
+                return null;
+            }
+            string q = query[0] == '?' ? query.Substring(1) : query;
+            string[] pairs = q.Split('&');
+            int i = 0;
+            while (i < pairs.Length) {
+                int eq = pairs[i].IndexOf('=');
+                if (eq > 0) {
+                    string name = Uri.UnescapeDataString(pairs[i].Substring(0, eq));
+                    if (string.Equals(name, key, StringComparison.Ordinal)) {
+                        string value = Uri.UnescapeDataString(pairs[i].Substring(eq + 1).Replace('+', ' ')).Trim();
+                        if (value.Length > 0) {
+                            return value;
+                        }
+                    }
+                }
+                i = i + 1;
+            }
+            return null;
         }
 
         /// <summary>Loopback, private or link-local address, or a .local name: where a phone serves from.</summary>
@@ -266,6 +401,14 @@ namespace VirtualMirror.Tracking.OakD {
             }
             if (kind == VideoSourceKind.File) {
                 return Path.GetFileName(resolved);
+            }
+            if (kind == VideoSourceKind.LanCamera) {
+                string lanHost;
+                string lanRoom;
+                string lanError;
+                return TryParseLanCamera(resolved, out lanHost, out lanRoom, out lanError)
+                    ? "lan camera " + lanHost + "/" + lanRoom
+                    : "lan camera";
             }
             string link = resolved.StartsWith(StreamPrefix, StringComparison.OrdinalIgnoreCase)
                 ? resolved.Substring(StreamPrefix.Length).Trim()

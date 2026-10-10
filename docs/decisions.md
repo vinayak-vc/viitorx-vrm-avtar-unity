@@ -4300,3 +4300,120 @@ and do not queue frames to "avoid drops" — a dropped frame is the correct resp
   `Video Subject Height Metres`.
 
 ---
+
+
+## ADR-086 — A phone over WebRTC is a frame SOURCE inside the video sender, and its PIN travels in the environment
+
+**Date:** 2026-10-10 · **Status:** Accepted · **Extends:** ADR-085 (a video is a producer; live sources) · **Relates to:**
+ADR-064 (Unity owns the sidecar), ADR-075 (supervised senders)
+
+### Context
+
+A phone could reach the sidecar only as a webcam (DroidCam/Iriun/Camo) or an MJPEG "IP camera" app. The LAN Camera Streaming
+project streams the phone's camera from a browser page over WebRTC with nothing to install. The request: run that server,
+paste the **viewer link** into `AppBootstrap`, type the **PIN in its own field**, and have the sidecar track the phone like a
+webcam. A standalone receiver (`cam_receiver`) was built first; the decision was to bring it in as a **utility**, not a second
+program.
+
+### Decision
+
+1. **`tools/video/lan_camera.py` is a frame source, not a sender.** `video_udp_sender.py` stays the only producer. The
+   reader has the same surface as `LatestFrameReader`, so the frame loop does not know which one it reads. No new process,
+   no new supervisor command shape, no wire change — therefore no cross-repo ADR is required.
+2. **A viewer link is classified before the generic http rule.** `http(s)://…/viewer?room=ID` (or `lan:<url>`) is a LAN
+   camera. Read by the generic rule it would be an MJPEG stream (LAN host) or a yt-dlp page (public tunnel host), and both
+   fail without ever naming the cause. Unity and Python each implement the rule; **both test suites pin the same examples.**
+3. **The PIN is never in the link and never on a command line.** A link carrying `pin=` is REFUSED, not stripped (silently
+   using it would teach people that a PIN in a link is fine, and links get logged and screenshotted). The PIN is its own
+   `AppBootstrap` field, masked in the Inspector, and reaches the sidecar as the `CAMERA_PIN` **environment variable**, set in
+   Unity for exactly the duration of `NativeProcess.Start()` and restored (verified: the child sees it only then). It is
+   handed only to a LAN camera source. The supervisor and its restarts inherit it from their own environment.
+4. **Fatal vs retry is decided by the server's own words.** Wrong PIN, invalid room, media-mode mismatch: exit 2 with one
+   line — retrying cannot fix them and the supervisor would only loop. Occupied room ("already has an active viewer"),
+   the server's 30 s rate-limit block and an internal error: retry (2, 5, then 10 s; five refusals make the server block the
+   socket, so faster only lengthens the wait). An unreachable server: retry forever.
+5. **Newest frame only, like every live source (ADR-085).** The loop thread drains the track and overwrites one slot; the
+   conversion to a BGR array happens in `read()`, only for the frame taken.
+6. **A resolution change is handled, not assumed away.** The crop box, the focal length and the per-person state come from
+   the first frame; a WebRTC sender changes resolution with the bandwidth, so the loop re-derives them when the size changes.
+7. **`RTCPeerConnection.close()` is bounded (3 s).** MEASURED hang (see tasks.md F-50); it would otherwise freeze the offer lock.
+8. **One viewer per room** is the server's rule, and a browser viewer open in the same room blocks the sidecar.
+
+### Consequences
+
+* The phone is one more `Video Source` value; every scene, the skeleton show and the VRM avatar run unchanged. The same
+  honesty rules as ADR-085 apply: no stereo (`src` all 0), one person, estimated depth.
+* The sidecar venv gained `aiortc` (+ PyAV, cryptography) and `python-socketio` (+ aiohttp): 27 pins in
+  `requirements.lock.txt`. They are imported only when a LAN camera starts.
+* The PIN is masked in the Inspector but **serialised into the scene as plain text**. `CAMERA_PIN` on the machine with the
+  field empty is the way to keep it out of the project.
+* WebRTC media is peer-to-peer. Behind router client isolation, or with the phone on another network and no TURN server, the
+  connection fails and the log says why; there is no fallback transport here.
+
+### DO NOT REVERT / how to tune
+
+* **Do not put the PIN back into the link or onto the command line** to "simplify" the field. Both end up in logs and in
+  process listings. Do not strip a `pin=` silently instead of refusing it.
+* **Do not classify a viewer link with the generic http rule**, and do not make the Unity and Python rules diverge: change
+  one, change the other, and extend BOTH test tables.
+* **Do not retry a wrong PIN.** It cannot succeed, and it turns a one-line error into a supervisor crash loop.
+* **Do not remove the 3 s bound on `pc.close()`** because it "never hangs": it did, three times in one run.
+* **Do not build a second program for the phone.** It is a source inside `video_udp_sender.py`.
+* **The server's side of the contract is documented in the LAN camera project** (`lan-camera-streaming/docs/receiver-guide.md`, written
+  after this work). It is technology-neutral and lists the pitfalls this receiver hit; change the receiver and that guide together.
+* **To use it:** run the LAN camera server, open its sender page on the phone, press start; in `AppBootstrap > Video Test
+  Source` tick `Track From Video`, paste the **viewer** link (`…/viewer?room=…`) into `Video Source`, type the server's
+  `ACCESS_PIN` into `Lan Camera Pin`, press Play. Close any browser viewer in that room first. If the avatar lies on its
+  side set `Video Rotate Degrees` to 90 or 270; for a selfie camera tick `Video Flip Horizontal`.
+
+---
+
+
+## ADR-087 — Status lights read the supervisor's state file; they never listen, never act, and never trust READY
+
+**Date:** 2026-10-10 · **Status:** Accepted · **Extends:** ADR-075 (supervised senders; nothing outside a scene binds the pose port),
+ADR-086 · **Relates to:** F-20B (the supervisor and its state file)
+
+### Context
+
+The sidecar has no window — on purpose: its preview window once bound ESC to quit and ended tracking for the session. The consequence
+was that a healthy system and a silently failed one looked the same, and after F-50 a working phone and a phone that never produced a
+person were indistinguishable. The user asked for lights in the Unity scene and kept the no-window rule.
+
+### Decision
+
+1. **Five lights**, in the order things fail: SIDECAR (the process), WATCHDOG (the supervisor), SOURCE (camera or phone), MODEL (loaded and
+   consuming frames), TRACKING (a person found and sent). Drawn top right in every scene, F8 hides, every change also logged once.
+2. **The source of truth is the supervisor's `supervisor_state.json`**, which now carries the sender's latest heartbeat as `Child`
+   (`Frames`, `Sent`, `Skipped`, `Live`, `Note`, `LineAgeSeconds`). The supervisor already tails the child's log; it copies the last
+   `frames= sent=` line there every ~2 s. Unity reads the file once a second, plus its own launcher state.
+3. **The lights do not listen on UDP.** Every scene binds the pose port for itself and a second bind is the failure ADR-075 removed.
+4. **The rules are a pure model** (`SidecarStatusModel`, System + Newtonsoft only) so each is asserted without a player.
+5. **READY is not "the model is loaded".** The senders print their first `frames=` line before loading the model, and the supervisor
+   marks READY on it (measured: READY at 1.5 s with "loading RTMW3D" immediately before). MODEL is therefore judged from the heartbeat:
+   `loading` in the note, then the frame counter moving.
+6. **"Moving" needs two observations and a window.** A counter that changed within 6 s is moving; the first sighting of a counter proves
+   nothing (a stalled sender's last line would read as healthy) and reads `checking...`. `frames` moving while `sent` stands still is
+   *no person found* — the case that previously looked like success.
+7. **Read-only and advisory.** The lights change nothing: not the sidecar, not the supervisor, not what any scene draws.
+
+### Consequences
+
+* A user can tell "starting", "loading", "waiting for the phone", "running but nobody found" and "crashed" apart without a terminal.
+* The supervisor's state file gained a key. Existing readers (the F-20B failure tests) read it by key and are unaffected.
+* The lights report what the SENDER says. They do not prove Unity receives the poses; that needs a hook in the pose provider and is open
+  work.
+* The state file is the contract between the two repositories for this feature; renaming `Child` or its fields breaks the lights
+  (`SidecarStatusModelF51Tests` and `test_supervisor_state.py` pin both ends).
+
+### DO NOT REVERT / how to tune
+
+* **Do not give the sidecar a window** to solve this; that is the problem ADR-075 and F-20B exist to prevent.
+* **Do not bind the pose port from the lights**, even "just to count". Add a counter in the pose provider instead.
+* **Do not read `SidecarReady` as inference started.** Do not turn the first sighting of a counter into "running".
+* **Do not let a light control anything.** If a state should trigger an action, that belongs in the supervisor or the bootstrap, tested
+  there.
+* **To tune:** `ActivitySeconds` (6), `StaleStateSeconds` (10) and `SilentChildSeconds` (8) in `SidecarStatusModel`, each derived from the
+  sender's 2 s heartbeat and the supervisor's 2 s write; change them only with a measurement of those cadences.
+
+---

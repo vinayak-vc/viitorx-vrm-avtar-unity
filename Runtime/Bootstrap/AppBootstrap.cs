@@ -102,10 +102,22 @@ namespace VirtualMirror.App {
                  "  * http://192.168.1.5:8080/video - a phone 'IP camera' app over Wi-Fi (MJPEG). An http link " +
                  "to a private/LAN address is read as a live camera, not a web page.\n" +
                  "  * rtsp://user:pass@host/stream - an IP camera. Credentials are never logged.\n" +
+                 "  * http://192.168.1.5:3000/viewer?room=room-abc123 - a phone streaming through the LAN CAMERA " +
+                 "STREAMING server (its sender page), received over WebRTC. Paste the VIEWER link; the access " +
+                 "PIN goes in 'Lan Camera Pin' below, never in the link. Close any browser viewer open in that " +
+                 "room first: the server allows one viewer.\n" +
                  "  * a web page link (YouTube...) - needs yt-dlp in the sidecar venv, which is not installed.\n" +
-                 "Live sources (camera, stream) process only the NEWEST frame, so lag cannot build up, and " +
-                 "reconnect on their own if the phone drops off.")]
+                 "Live sources (camera, stream, LAN camera) process only the NEWEST frame, so lag cannot build " +
+                 "up, and reconnect on their own if the phone drops off.")]
         [SerializeField] private string videoSource = "Assets/Games/video/SR7.mp4";
+        [Tooltip("LAN CAMERA ONLY. The access PIN of the LAN Camera Streaming server (its ACCESS_PIN). Used " +
+                 "when 'Video Source' is a viewer link; ignored for everything else.\n\n" +
+                 "It reaches the sidecar through its ENVIRONMENT, so it is never on a command line or in a " +
+                 "log. The field is masked, but it is still saved into the scene as plain text: leave it " +
+                 "empty and set the CAMERA_PIN environment variable on this machine if the PIN should not " +
+                 "live in the project. The field wins when both are set.")]
+        [MaskedString]
+        [SerializeField] private string lanCameraPin = string.Empty;
         [Tooltip("FILES ONLY. Replay the clip forever. Off: it plays once and then the sidecar idles, so " +
                  "tracking goes stale rather than the clip restarting. A camera or stream has no end.")]
         [SerializeField] private bool videoLoop = true;
@@ -318,6 +330,7 @@ namespace VirtualMirror.App {
         // by field rather than building a key string, because this runs every frame.
         private bool appliedTrackFromVideo;
         private string appliedVideoSource = string.Empty;
+        private string appliedLanCameraPin = string.Empty;
         private bool appliedVideoLoop;
         private bool appliedVideoAssumeMeasured;
         private float appliedVideoSubjectHeight;
@@ -1288,6 +1301,8 @@ namespace VirtualMirror.App {
         }
 
         private void StartSidecar(string senderScript) {
+            // F-51: status lights for the sidecar, its watchdog, the source, the model and the tracking.
+            SidecarStatusLights.Ensure();
             if (sidecarLauncher != null && (sidecarLauncher.IsOwnedProcessAlive || sidecarLauncher.State == SidecarLaunchState.AttachedExternal)) {
                 return;
             }
@@ -1301,6 +1316,20 @@ namespace VirtualMirror.App {
                     videoStatus = "VIDEO ERROR: " + videoError;
                     logService.Log(LogLevel.Error, "Video test source: " + videoError
                             + ". The sidecar was NOT started - fix 'Video Source' on AppBootstrap.");
+                    SnapshotVideoSettings();
+                    return;
+                }
+                // F-50: a LAN camera cannot join the room without the PIN. Say so here, in one line, rather
+                // than starting a sidecar that exits on it and is then restarted by the watchdog forever.
+                if (VideoSourceSpec.KindOf(resolvedVideo) == VideoSourceKind.LanCamera
+                    && string.IsNullOrWhiteSpace(lanCameraPin)
+                    && string.IsNullOrWhiteSpace(
+                        Environment.GetEnvironmentVariable(SidecarProcessLauncher.LanCameraPinEnvironmentVariable))) {
+                    videoStatus = "VIDEO ERROR: no LAN camera PIN";
+                    logService.Log(LogLevel.Error, "Video test source: the LAN camera needs the server's access PIN. "
+                            + "Fill in 'Lan Camera Pin' on AppBootstrap (or set the "
+                            + SidecarProcessLauncher.LanCameraPinEnvironmentVariable + " environment variable). "
+                            + "The sidecar was NOT started.");
                     SnapshotVideoSettings();
                     return;
                 }
@@ -1341,6 +1370,7 @@ namespace VirtualMirror.App {
                 // The video sender has no preview window, and the supervisor does not forward --show to it.
                 ExtraArguments = (sidecarShowPreview && !trackFromVideo) ? "--show" : string.Empty,
                 VideoSource = resolvedVideo,
+                LanCameraPin = lanCameraPin,
                 VideoLoopCount = videoLoop ? 0 : 1,
                 VideoAssumeMeasuredDepth = videoAssumeMeasuredDepth,
                 VideoRotateDegrees = videoRotateDegrees,
@@ -1354,6 +1384,7 @@ namespace VirtualMirror.App {
             };
             sidecarLauncher = new SidecarProcessLauncher(logService, launchOptions);
             sidecarLauncher.Start(SidecarLocator.Resolve(sidecarModelPathOverride));
+            SidecarStatusLights.Attach(sidecarLauncher);
             activeSenderScript = senderScript;
             videoStatus = trackFromVideo
                 ? (VideoSourceSpec.IsLive(resolvedVideo) ? "LIVE " : "VIDEO ")
@@ -1380,6 +1411,7 @@ namespace VirtualMirror.App {
         private void SnapshotVideoSettings() {
             appliedTrackFromVideo = trackFromVideo;
             appliedVideoSource = videoSource;
+            appliedLanCameraPin = lanCameraPin;
             appliedVideoLoop = videoLoop;
             appliedVideoAssumeMeasured = videoAssumeMeasuredDepth;
             appliedVideoSubjectHeight = videoSubjectHeightMetres;
@@ -1395,6 +1427,7 @@ namespace VirtualMirror.App {
         private bool VideoSettingsDiffer() {
             return appliedTrackFromVideo != trackFromVideo
                 || !string.Equals(appliedVideoSource, videoSource, StringComparison.Ordinal)
+                || !string.Equals(appliedLanCameraPin, lanCameraPin, StringComparison.Ordinal)
                 || appliedVideoLoop != videoLoop
                 || appliedVideoAssumeMeasured != videoAssumeMeasuredDepth
                 || appliedVideoSubjectHeight != videoSubjectHeightMetres

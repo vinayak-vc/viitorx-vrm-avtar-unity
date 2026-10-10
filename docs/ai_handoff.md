@@ -1,7 +1,73 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-10-09 (F-48 / ADR-084: operating volume, measured-depth calibration, hand safety — see the F-48 section directly below)
+Last updated: 2026-10-10 (F-51 / ADR-087: status lights for the sidecar; F-50 / ADR-086: a phone over WebRTC — see the two sections directly below)
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## 🔷 F-51 — status lights: see that the sidecar, its watchdog, the source, the model and the tracking are up (2026-10-10) — START HERE
+
+Full record: [`tasks.md`](tasks.md) F-51, [`decisions.md`](decisions.md) **ADR-087**.
+
+**What you see:** five lights top right in every scene (F8 hides) — `SIDECAR`, `WATCHDOG`, `SOURCE`, `MODEL`, `TRACKING` — and one
+console line per change (`[SidecarStatus] TRACKING: no person found yet`). The sidecar still has **no window**. Green healthy, pulsing
+amber in progress, red needs a person, blue external, grey off. `TRACKING: no person found yet` means the source delivers and the model
+runs but nobody was posed (hips must be visible; try the rotate field for a sideways phone).
+
+**How it works:** the supervisor copies the sender's latest `frames= sent=` heartbeat into `supervisor_state.json` as `Child`;
+`SidecarStatusLights` (OnGUI) polls it once a second with Unity's own launcher state and feeds the pure `SidecarStatusModel`. No UDP
+listener. **`SidecarReady` does NOT mean the model is loaded** (READY comes before the model loads) — the heartbeat does.
+
+**Measured:** `test_supervisor_state.py` 32/32, `SidecarStatusModelF51Tests` 23/23, 4 mutations caught, and a real state file from a live
+chain turned all five lights green in the real model. **Not seen on screen** (layout, overlap with HUDs, F8, scene-load survival), not run
+with a real OAK-D, and the lights do not prove Unity *receives* the poses (needs a counter in the pose provider).
+
+**Files (Unity repo):** `Runtime/Tracking/OakD/SidecarStatusModel.cs` (new), `Runtime/SkeletonShow/SidecarStatusLights.cs` (new),
+`SidecarBootstrap.cs`, `Runtime/Bootstrap/AppBootstrap.cs`, `Tests/EditMode/SidecarStatusModelF51Tests.cs` (new). **Sidecar repo:**
+`sidecar_supervisor.py` (`parse_heartbeat`, `Child`), `tests/test_supervisor_state.py` (new). Three new `.cs` files need their `.meta`
+files committed after Unity refreshes.
+
+**Next recommended:** run it in the Editor and look at the lights over a real session (including killing the sidecar and unplugging the
+phone); then a "Unity is receiving" light fed by a counter in `OakDUdpPoseProvider`.
+
+---
+
+## 🔷 F-50 — a phone over WebRTC: paste the LAN Camera viewer link, type the PIN (2026-10-10)
+
+Full record: [`tasks.md`](tasks.md) F-50, [`decisions.md`](decisions.md) **ADR-086**.
+
+**To use it:** start the LAN camera server (`lan-camera-streaming`), open its sender page on the phone, press start. In
+`AppBootstrap` (`Bootstrap.unity`) → `Video Test Source (F-49)`: tick **Track From Video**, paste the **viewer** link
+(`http://<server>/viewer?room=<id>`) into **Video Source**, type the server's `ACCESS_PIN` into **Lan Camera Pin**, press
+Play. Close any browser viewer in that room first (the server allows one). Sideways avatar -> `Video Rotate Degrees` 90/270.
+
+**How it works:** `python-sidecar~/tools/video/lan_camera.py` is a frame source with the same surface as `LatestFrameReader`;
+`video_udp_sender.py` gained a `lan` source kind and nothing else of substance. The PIN is its own field, masked, and reaches
+the sidecar as the `CAMERA_PIN` **environment variable** (set around `NativeProcess.Start()` only, handed only to a LAN
+source) — never in the link, never on a command line. A link carrying `pin=` is refused. No PIN and no `CAMERA_PIN` = one
+console error and no sidecar.
+
+**Measured:** Python `tests/test_lan_camera.py` 78/78 alone, **103/103** against the real Node server + a fake phone (incl. the
+real sender + real model on `123.webm`, a mid-run resolution change, and a run through the real supervisor); C#
+`VideoSourceF49Tests` 30/30; both sides mutation-checked; the PIN appears nowhere in any command line or log.
+
+**Know before quoting a result:** the "phone" was an aiortc process on loopback. **No real phone, browser, Wi-Fi, firewall
+prompt or zrok tunnel was involved**; real latency, a portrait phone's orientation and throughput are **unmeasured** (the
+23 ms in tasks.md excludes the phone and network). Not run in the Editor; `MaskedStringAttribute.cs` / `MaskedStringDrawer.cs`
+need their `.meta` files committed after Unity next refreshes. `RTCPeerConnection.close()` was seen to hang (bounded at 3 s,
+root cause unknown). The standalone `D:\Unity\cam-receiver` it was ported from is redundant — delete once agreed.
+
+**Files (Unity repo):** `Runtime/Tracking/OakD/VideoSourceSpec.cs`, `SidecarProcessLauncher.cs`,
+`Runtime/Bootstrap/AppBootstrap.cs`, `Runtime/Core/MaskedStringAttribute.cs` (new), `Editor/MaskedStringDrawer.cs` (new),
+`Tests/EditMode/VideoSourceF49Tests.cs`. **Sidecar repo:** `tools/video/lan_camera.py` (new), `tools/video/video_udp_sender.py`,
+`tests/test_lan_camera.py` (new), `tests/_lan_fake_sender.py` (new), `requirements.txt`, `requirements.lock.txt`, `README.md`.
+
+**The server's side is documented in the LAN camera project** (`lan-camera-streaming/docs/receiver-guide.md` and `architecture.md` §4, written
+after this work): the contract any receiver must follow, in any language, with the pitfalls this one hit. Keep the two in step.
+
+**Next recommended:** (1) try it with a real phone and the real sender page; read the `[lan]` log lines (`path: …` says
+direct vs relayed) and note the orientation and latency; (2) run it once in the Editor; (3) decide whether a fallback
+transport is wanted if the venue's Wi-Fi isolates clients.
 
 ---
 
@@ -43,7 +109,7 @@ Not yet run inside the Editor (see tasks.md F-49 NOT DONE). Files: `video_udp_se
 
 ---
 
-## 🔶 F-48 — SR7: bad near-field input poisoned the calibration (2026-10-09) — START HERE
+## 🔶 F-48 — SR7: bad near-field input poisoned the calibration (2026-10-09)
 
 Full record: [`tasks.md`](tasks.md) F-48, [`decisions.md`](decisions.md) **ADR-084**. SR7 is `Assets/Games/video/SR7.mp4`.
 

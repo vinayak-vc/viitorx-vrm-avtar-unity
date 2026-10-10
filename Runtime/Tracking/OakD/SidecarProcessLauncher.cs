@@ -186,7 +186,29 @@ namespace VirtualMirror.Tracking.OakD {
             // NativeProcess starts its reader threads inside Start() when the Redirect* flags are
             // set; BeginOutputReadLine/BeginErrorReadLine are no-ops kept only for API compatibility,
             // so there is deliberately nothing to call here.
-            if (!process.Start()) {
+            // F-50: the LAN camera's access PIN travels in the CHILD's environment, never on its command
+            // line (visible to every process on the machine) and never in a log. NativeProcess starts the
+            // child with the parent's environment (CreateProcessW, lpEnvironment = null), so it is set
+            // for exactly the duration of Start() and put back, which also keeps it out of any other
+            // process Unity launches later. A supervisor restart inherits it from the supervisor itself.
+            string pin = PinForChild(options);
+            string previousPin = null;
+            bool pinApplied = false;
+            if (pin.Length > 0) {
+                previousPin = Environment.GetEnvironmentVariable(LanCameraPinEnvironmentVariable);
+                Environment.SetEnvironmentVariable(LanCameraPinEnvironmentVariable, pin);
+                pinApplied = true;
+            }
+            bool started;
+            try {
+                started = process.Start();
+            } finally {
+                if (pinApplied) {
+                    // null removes the variable, which is the right restore when there was none.
+                    Environment.SetEnvironmentVariable(LanCameraPinEnvironmentVariable, previousPin);
+                }
+            }
+            if (!started) {
                 SetState(SidecarLaunchState.Failed, "NativeProcess.Start returned false");
                 return false;
             }
@@ -201,6 +223,26 @@ namespace VirtualMirror.Tracking.OakD {
                   ? "sidecar supervisor started, pid "
                   : "sidecar started UNSUPERVISED (no watchdog), pid ") + childPid);
             return true;
+        }
+
+        /// <summary>The environment variable the sidecar reads the LAN camera's PIN from
+        /// (<c>lan_camera.PIN_ENV</c>). The same name the standalone receiver uses, so a machine that
+        /// already exports it needs no PIN in Unity at all.</summary>
+        public const string LanCameraPinEnvironmentVariable = "CAMERA_PIN";
+
+        /// <summary>
+        /// The PIN to put in the child's environment, or empty. Only a LAN camera source gets one: any
+        /// other source has no use for it, and a secret that is not needed is not handed over.
+        /// </summary>
+        public static string PinForChild(SidecarLaunchOptions launchOptions) {
+            if (launchOptions == null || string.IsNullOrEmpty(launchOptions.VideoSource)
+                || string.IsNullOrEmpty(launchOptions.LanCameraPin)) {
+                return string.Empty;
+            }
+            if (VideoSourceSpec.KindOf(launchOptions.VideoSource) != VideoSourceKind.LanCamera) {
+                return string.Empty;
+            }
+            return launchOptions.LanCameraPin.Trim();
         }
 
         /// <summary>
@@ -718,5 +760,12 @@ namespace VirtualMirror.Tracking.OakD {
         /// <summary>Clamp the estimated hip depth to [min, max] metres. Either 0 disables the clamp.</summary>
         public float VideoDepthMinMetres;
         public float VideoDepthMaxMetres;
+
+        // ---- F-50: a phone over WebRTC -------------------------------------------------------------
+        /// <summary>The LAN Camera Streaming server's access PIN. Read only when <see cref="VideoSource"/>
+        /// is a LAN camera link, and handed to the sidecar through its ENVIRONMENT (see
+        /// <see cref="SidecarProcessLauncher.PinForChild"/>) - it is deliberately never part of
+        /// <see cref="VideoSource"/> or of any command line, because both end up in logs.</summary>
+        public string LanCameraPin = string.Empty;
     }
 }
