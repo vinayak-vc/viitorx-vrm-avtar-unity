@@ -182,6 +182,22 @@ The detector blob is not committed. Fetch it once:
 .venv\Scripts\python.exe -c "import blobconverter,shutil;shutil.copy(blobconverter.from_zoo(name='person-detection-retail-0013',shaves=6,zoo_type='intel'),'depthai_blazepose/models/person-detection-retail-0013_openvino_2022.1_6shave.blob')"
 ```
 
+### Phone, webcam or video instead of the OAK-D (F-49 to F-52)
+
+The OAK-D is not required. `Scenes/Bootstrap.unity` > `AppBootstrap` > **Video Test Source** feeds the same pipeline from a video file, a webcam (`camera:0`), a phone IP-camera app, an RTSP camera, or a phone streaming
+through the LAN Camera Streaming server (paste its **viewer** link; the PIN has its own masked field). Tick `Track From Video`, set `Video Source`, and press Play. The status lights (top right, F8 hides) say whether the
+sidecar, its watchdog, the source, the model and the tracking are up.
+
+**Several people:** set `Video Max People` to 2 or 3 and fetch the person detector once (`python-sidecar~/.venv/Scripts/python.exe tools/model/fetch_yolox_s.py`, 35.9 MB; without it Unity says so and does not start the sidecar).
+Measured on an RTX 3060: 2 people ~35 fps standalone / ~25 fps live in Unity, 3 people ~26 fps. By design a single-person scene shows the first person only (not yet checked on screen).
+
+**Quick tips** (measured numbers and the reasoning are in the sidecar README, "Camera setup and tips for better results"):
+* **Use a 1080p (or 720p) camera or file.** Resolution does not change how fast the pose runs (same ms per frame at 4K, 1080p and 1280); a 4K *file* just decodes slowly and plays in slow motion. Re-encode a 4K clip to 1080p first.
+* **A 60 fps camera does not give 60 fps of skeleton** (about 25-35 fps for two people); it gives less latency and, with good light, less motion blur.
+* **Frame the whole body, hips to ankles, at least ~400 px tall**, camera fixed and level at hip or chest height, people not standing in front of each other.
+* **Fix the exposure and focus**, light evenly, set the lens's real horizontal field of view and the subject height in the Video Test Source fields.
+* **`Video Max People` = the number of people really there**; each costs GPU time.
+
 ### Ports
 
 | Port | Protocol | Purpose |
