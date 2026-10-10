@@ -441,5 +441,69 @@ namespace VirtualMirror.Tests {
                 System.Threading.Thread.CurrentThread.CurrentCulture = saved;
             }
         }
+
+        // ---- F-52: several people from a phone / webcam / video
+
+        [Test]
+        public void ADefaultVideoSessionAsksForOnePersonAndSendsNoPeopleFlag() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "camera:0";
+            StringAssert.DoesNotContain("--video-max-poses", BuildArguments(options),
+                                        "one person is the old path and must be launched exactly as before");
+            options.VideoMaxPeople = 1;
+            StringAssert.DoesNotContain("--video-max-poses", BuildArguments(options));
+        }
+
+        [Test]
+        public void MoreThanOnePersonIsItsOwnFlagAndNeverTheOakCap() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "http://192.168.1.5:3000/viewer?room=abc";
+            options.MaxPoses = 5;
+            options.VideoMaxPeople = 3;
+            string args = BuildArguments(options);
+            StringAssert.Contains("--video-max-poses 3", args);
+            StringAssert.Contains("--max-poses 5", args,
+                                  "the OAK multi-person cap is still sent, separately, and the video sender ignores it");
+        }
+
+        [Test]
+        public void ThePeopleFlagIsAbsentForACameraSession() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoMaxPeople = 3;
+            StringAssert.DoesNotContain("--video-max-poses", BuildArguments(options),
+                                        "no video source: this is the OAK-D, which has its own cap");
+        }
+
+        [Test]
+        public void ThePeopleCountIsClampedToTheMeasuredRange() {
+            Assert.AreEqual(1, VideoSourceSpec.ClampPeople(0), "never 'nobody'");
+            Assert.AreEqual(1, VideoSourceSpec.ClampPeople(-4));
+            Assert.AreEqual(1, VideoSourceSpec.ClampPeople(1));
+            Assert.AreEqual(3, VideoSourceSpec.ClampPeople(3));
+            Assert.AreEqual(VideoSourceSpec.MaxPeople, VideoSourceSpec.ClampPeople(8));
+            Assert.AreEqual(VideoSourceSpec.MaxPeople, VideoSourceSpec.ClampPeople(99));
+            Assert.AreEqual(8, VideoSourceSpec.MaxPeople, "must match sidecar_supervisor.VIDEO_MAX_PEOPLE");
+
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "camera:0";
+            options.VideoMaxPeople = 99;
+            StringAssert.Contains("--video-max-poses 8", BuildArguments(options));
+        }
+
+        [Test]
+        public void TheDetectorWeightsAreWhereTheSidecarLooksForThem() {
+            Assert.AreEqual("yolox_s.onnx", VideoSourceSpec.DetectorWeightsFileName,
+                            "must match tools/model/fetch_yolox_s.py");
+            Assert.AreEqual("VIRTUAL_MIRROR_DETECTOR", VideoSourceSpec.DetectorEnvironmentVariable,
+                            "must match host_person_detector.DEFAULT_DETECTOR_ONNX");
+            string path = VideoSourceSpec.DetectorWeightsPath("D:/sidecar", string.Empty).Replace('\\', '/');
+            Assert.AreEqual("D:/sidecar/models/yolox_s.onnx", path);
+            Assert.AreEqual("E:/w/other.onnx", VideoSourceSpec.DetectorWeightsPath("D:/sidecar", "  E:/w/other.onnx "),
+                            "the environment override wins and is trimmed");
+            Assert.AreEqual("D:/sidecar/models/yolox_s.onnx",
+                            VideoSourceSpec.DetectorWeightsPath("D:/sidecar", "   ").Replace('\\', '/'),
+                            "a blank override is no override");
+            Assert.AreEqual(string.Empty, VideoSourceSpec.DetectorWeightsPath(string.Empty, string.Empty));
+        }
     }
 }

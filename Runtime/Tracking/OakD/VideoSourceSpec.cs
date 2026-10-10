@@ -384,6 +384,39 @@ namespace VirtualMirror.Tracking.OakD {
             return true;
         }
 
+        /// <summary>Most people the video sender may be asked to pose. Measured up to 8 (F-52); each person costs
+        /// roughly 9 ms of GPU time. Mirrors <c>sidecar_supervisor.VIDEO_MAX_PEOPLE</c>.</summary>
+        public const int MaxPeople = 8;
+
+        /// <summary>File name of the host-side person detector weights. Mirrors
+        /// <c>tools/model/fetch_yolox_s.py</c> and <c>host_person_detector.DEFAULT_DETECTOR_ONNX</c>.</summary>
+        public const string DetectorWeightsFileName = "yolox_s.onnx";
+
+        /// <summary>Environment variable that points the sidecar at other detector weights. Honoured by the
+        /// sidecar itself, and inherited from Unity's environment by the process Unity launches.</summary>
+        public const string DetectorEnvironmentVariable = "VIRTUAL_MIRROR_DETECTOR";
+
+        /// <summary>The number of people to ask the video sender for: 1 (the single-person path) up to
+        /// <see cref="MaxPeople"/>. Anything below 1 means 1, never "nobody".</summary>
+        public static int ClampPeople(int requested) {
+            if (requested < 1) {
+                return 1;
+            }
+            return requested > MaxPeople ? MaxPeople : requested;
+        }
+
+        /// <summary>Where the detector weights are expected: the override when one is given, otherwise
+        /// <c>&lt;sidecar root&gt;/models/yolox_s.onnx</c>. Empty when neither is known.</summary>
+        public static string DetectorWeightsPath(string sidecarRoot, string environmentOverride) {
+            if (!string.IsNullOrWhiteSpace(environmentOverride)) {
+                return environmentOverride.Trim();
+            }
+            if (string.IsNullOrEmpty(sidecarRoot)) {
+                return string.Empty;
+            }
+            return Path.Combine(Path.Combine(sidecarRoot, "models"), DetectorWeightsFileName);
+        }
+
         /// <summary>The same text with any <c>user:password@</c> inside a link removed. Everything that is
         /// printed, logged or shown goes through this: an IP-camera link commonly carries its login.</summary>
         public static string Redact(string text) {

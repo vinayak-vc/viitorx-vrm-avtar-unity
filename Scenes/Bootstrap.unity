@@ -188,8 +188,12 @@ MonoBehaviour:
   useVideoSource: 0
   useMediaPipeTracking: 1
   trackFromVideo: 1
-  videoSource: Assets\Games\video\video.webm
+  videoSource: http://localhost:7777/viewer?room=room-b3w653
+  lanCameraPin: 123456
   videoLoop: 1
+  videoRotateDegrees: 0
+  videoFlipHorizontal: 0
+  videoCameraSize: {x: 1280, y: 720}
   videoAssumeMeasuredDepth: 0
   videoSubjectHeightMetres: 1.7
   videoHorizontalFovDegrees: 60

@@ -315,6 +315,13 @@ namespace VirtualMirror.Tracking.OakD {
                 if (options.VideoAssumeMeasuredDepth) {
                     sb.Append(" --video-assume-measured");
                 }
+                // F-52. Its own flag, NOT --max-poses above (the OAK multi-person cap, always sent and
+                // ignored by the video sender): 1 sends nothing, so a one-person session is launched
+                // exactly as before.
+                int videoPeople = VideoSourceSpec.ClampPeople(options.VideoMaxPeople);
+                if (videoPeople > 1) {
+                    sb.Append(" --video-max-poses ").Append(videoPeople);
+                }
             }
             if (!string.IsNullOrEmpty(options.ExtraArguments)) {
                 sb.Append(" ").Append(options.ExtraArguments);
@@ -760,6 +767,9 @@ namespace VirtualMirror.Tracking.OakD {
         /// <summary>Clamp the estimated hip depth to [min, max] metres. Either 0 disables the clamp.</summary>
         public float VideoDepthMinMetres;
         public float VideoDepthMaxMetres;
+        /// <summary>F-52. People the video sender poses per frame. 1 is the single-person path; 2 or more makes
+        /// it run a host-side person detector and tracker. Clamped to 1..<see cref="VideoSourceSpec.MaxPeople"/>.</summary>
+        public int VideoMaxPeople = 1;
 
         // ---- F-50: a phone over WebRTC -------------------------------------------------------------
         /// <summary>The LAN Camera Streaming server's access PIN. Read only when <see cref="VideoSource"/>

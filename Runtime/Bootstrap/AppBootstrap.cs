@@ -151,6 +151,15 @@ namespace VirtualMirror.App {
         [SerializeField] private bool videoClampDepth = true;
         [Tooltip("Min and max hip depth, metres, when clamping. Keep inside the operating volume (1.35-4.5).")]
         [SerializeField] private Vector2 videoDepthRangeMetres = new Vector2(1.6f, 4.0f);
+        [Tooltip("HOW MANY PEOPLE to track from this source. 1 is the single-person path (one crop, no detector). " +
+                 "2 or more runs a person detector on the GPU and tracks each person with a stable id, so a phone, " +
+                 "webcam or video can drive several skeletons. Measured on an RTX 3060: 2 people ~35 fps, 3 people " +
+                 "~26 fps, 5 people ~17 fps (the camera is 30), so keep it at the number of people you really have.\n\n" +
+                 "Needs the detector weights once: run tools/model/fetch_yolox_s.py in python-sidecar~ (35.9 MB). " +
+                 "Which scenes show several people is decided by the scene you open; a single-person scene shows the " +
+                 "first person only.")]
+        [Range(1, 8)]
+        [SerializeField] private int videoMaxPeople = 1;
 
         [Header("Kalidokit Body — active whole-body retarget (ADR-022/023)")]
         [Tooltip("Drive the whole skeleton via the VRM normalized control rig. MUST be set BEFORE Play (the control rig is generated at load).")]
@@ -340,6 +349,7 @@ namespace VirtualMirror.App {
         private int appliedVideoRotate;
         private bool appliedVideoFlip;
         private Vector2Int appliedVideoCameraSize;
+        private int appliedVideoMaxPeople;
         private float videoChangeSeconds;
         private string videoStatus = string.Empty;
 
@@ -1333,6 +1343,23 @@ namespace VirtualMirror.App {
                     SnapshotVideoSettings();
                     return;
                 }
+                // F-52: several people need the detector weights, which are fetched once and not in version
+                // control. Say so here in one line instead of starting a sidecar that exits on it and is then
+                // restarted by the watchdog forever (the same reason as the PIN check above).
+                if (VideoSourceSpec.ClampPeople(videoMaxPeople) > 1) {
+                    string weights = VideoSourceSpec.DetectorWeightsPath(
+                        SidecarLocator.Resolve(sidecarModelPathOverride).Root,
+                        Environment.GetEnvironmentVariable(VideoSourceSpec.DetectorEnvironmentVariable));
+                    if (string.IsNullOrEmpty(weights) || !File.Exists(weights)) {
+                        videoStatus = "VIDEO ERROR: no person detector weights";
+                        logService.Log(LogLevel.Error, "Video test source: tracking " + videoMaxPeople
+                                + " people needs the person detector weights, which are not at '" + weights
+                                + "'. Run  python-sidecar~/.venv/Scripts/python.exe tools/model/fetch_yolox_s.py  once "
+                                + "(35.9 MB), or set 'Video Max People' to 1. The sidecar was NOT started.");
+                        SnapshotVideoSettings();
+                        return;
+                    }
+                }
                 senderScript = VideoSenderScript;
             }
             if (ProducerAlreadyRunning(oakUdpPort)) {
@@ -1380,7 +1407,8 @@ namespace VirtualMirror.App {
                 VideoSubjectHeightMetres = Mathf.Clamp(videoSubjectHeightMetres, 0.5f, 2.5f),
                 VideoHorizontalFovDegrees = Mathf.Clamp(videoHorizontalFovDegrees, 20f, 140f),
                 VideoDepthMinMetres = videoClampDepth ? videoDepthRangeMetres.x : 0f,
-                VideoDepthMaxMetres = videoClampDepth ? videoDepthRangeMetres.y : 0f
+                VideoDepthMaxMetres = videoClampDepth ? videoDepthRangeMetres.y : 0f,
+                VideoMaxPeople = VideoSourceSpec.ClampPeople(videoMaxPeople)
             };
             sidecarLauncher = new SidecarProcessLauncher(logService, launchOptions);
             sidecarLauncher.Start(SidecarLocator.Resolve(sidecarModelPathOverride));
@@ -1394,7 +1422,10 @@ namespace VirtualMirror.App {
                 logService.Log(LogLevel.Info, "Video test source: tracking "
                         + VideoSourceSpec.Redact(resolvedVideo) + " ("
                         + VideoSourceSpec.KindOf(resolvedVideo) + ") instead of the OAK-D camera. "
-                        + "Estimated depth; one person; "
+                        + "Estimated depth; "
+                        + (VideoSourceSpec.ClampPeople(videoMaxPeople) > 1
+                            ? "up to " + VideoSourceSpec.ClampPeople(videoMaxPeople) + " people; "
+                            : "one person; ")
                         + (videoAssumeMeasuredDepth ? "depth labelled MEASURED." : "depth labelled inferred."));
             }
             SnapshotVideoSettings();
@@ -1421,6 +1452,7 @@ namespace VirtualMirror.App {
             appliedVideoRotate = videoRotateDegrees;
             appliedVideoFlip = videoFlipHorizontal;
             appliedVideoCameraSize = videoCameraSize;
+            appliedVideoMaxPeople = videoMaxPeople;
             videoChangeSeconds = 0f;
         }
 
@@ -1436,7 +1468,8 @@ namespace VirtualMirror.App {
                 || appliedVideoRange != videoDepthRangeMetres
                 || appliedVideoRotate != videoRotateDegrees
                 || appliedVideoFlip != videoFlipHorizontal
-                || appliedVideoCameraSize != videoCameraSize;
+                || appliedVideoCameraSize != videoCameraSize
+                || appliedVideoMaxPeople != videoMaxPeople;
         }
 
         /// <summary>

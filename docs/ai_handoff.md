@@ -1,11 +1,41 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-10-10 (F-51 / ADR-087: status lights for the sidecar; F-50 / ADR-086: a phone over WebRTC — see the two sections directly below)
+Last updated: 2026-10-10 (F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
 Purpose: next agent can continue without re-deriving context.
 
 ---
 
-## 🔷 F-51 — status lights: see that the sidecar, its watchdog, the source, the model and the tracking are up (2026-10-10) — START HERE
+## 🔷 F-52 — several people from a phone / webcam / video: a host-side detector in front of the F-32 tracker (2026-10-10) — START HERE
+
+Full record: [`tasks.md`](tasks.md) F-52, [`decisions.md`](decisions.md) **ADR-088**.
+
+**State in four sentences.** `video_udp_sender.py --max-poses N` (N >= 2) now runs a YOLOX-s person detector on the GPU, the unchanged F-32
+`PersonTracker`, and one pose per confirmed person, and sends the F-32 `persons[]` datagram. **Unity can ask for it: `AppBootstrap > Video Max People`
+(1-8, default 1)** -> `--video-max-poses` -> the sender's `--max-poses`. Measured on files and through the real supervisor with a fake phone: 2 people 35.5 fps,
+3 people 26.3, 5 people 17.5, 8 people 14.8 (decode excluded); on a one-person clip it matches the single-person path. **Never seen in the Editor; no real
+phone, USB camera or real 2-3 person recording has been run.**
+
+**To try it with the phone:** (1) once, `python-sidecar~/.venv/Scripts/python.exe tools/model/fetch_yolox_s.py` (35.9 MB); (2) on `AppBootstrap` set `Track From
+Video`, `Video Source` = the viewer link, `Lan Camera Pin`, `Video Max People` = 2 or 3; (3) Play and watch the status lights. A single-person scene shows the first
+person only; open a crowd scene (the F-35 launcher) to see several. If the weights are missing the console says so and the sidecar is not started.
+
+**To try the sender by hand:** `.venv/Scripts/python.exe tools/model/fetch_yolox_s.py` once, then
+`.venv/Scripts/python.exe tools/video/video_udp_sender.py --video ..\..\video\456.webm --max-poses 3 --port 18899` (a spare port so a running
+Unity is not disturbed).
+
+**Do not:** use F-33's synthetic depth here (it flattens the model's z); pose LOST tracks; lower `--det-conf` without a phantom-people check;
+use `456.webm` (8 dancers, heavy occlusion) as a pass/fail bar for 2-3 people; quote ~17 fps for a file as the speed (decode cost).
+
+**Files (sidecar repo):** `tools/video/host_person_detector.py` (new), `tools/video/host_multiperson.py` (new), `tools/video/video_udp_sender.py`,
+`sidecar_supervisor.py` (`--video-max-poses`), `tools/model/fetch_yolox_s.py` (new), `tests/test_host_multiperson.py` (new, 73/73), `tests/test_video_source.py` (105/105).
+**Unity repo:** `Runtime/Tracking/OakD/VideoSourceSpec.cs`, `SidecarProcessLauncher.cs`, `Runtime/Bootstrap/AppBootstrap.cs`, `Tests/EditMode/VideoSourceF49Tests.cs` (35/35).
+
+**Next recommended:** (1) try it in the Editor with the real phone and look at the lights and a crowd scene; (2) record a clip of 2-3 real people from the
+target camera for a proper test (small people at phone resolution fragment ids); (3) only then 30 fps at 3 people (detect every other frame / FP16 detector, measure first).
+
+---
+
+## 🔷 F-51 — status lights: see that the sidecar, its watchdog, the source, the model and the tracking are up (2026-10-10)
 
 Full record: [`tasks.md`](tasks.md) F-51, [`decisions.md`](decisions.md) **ADR-087**.
 

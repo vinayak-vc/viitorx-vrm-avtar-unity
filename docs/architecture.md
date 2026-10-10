@@ -60,6 +60,8 @@ occlusion, so the LimbGate still makes the final call. Never move safety out of 
 
 **Multi-person path (F-32 + F-33, ADR-070/071):** a SECOND sidecar program, not a mode. The
 single-person sender above is byte-identical and remains the shipping path for the VRM mirror.
+(F-52 / ADR-088: the same tracker and wire can also be fed by a host-side YOLOX-s detector for a phone, webcam
+or video, via `video_udp_sender.py --max-poses N`; no stereo, so each person uses the single-person video chain.)
 
 ```
 OAK-D RGB + depth  (the pipeline above, unchanged)

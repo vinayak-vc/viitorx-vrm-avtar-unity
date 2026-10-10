@@ -4417,3 +4417,66 @@ person were indistinguishable. The user asked for lights in the Unity scene and 
   sender's 2 s heartbeat and the supervisor's 2 s write; change them only with a measurement of those cadences.
 
 ---
+
+
+## ADR-088 — Multi-person without an OAK-D: a host YOLOX-s detector feeding the existing F-32 tracker, with the SINGLE-person video chain per person
+
+**Status:** Accepted (2026-10-10); wired into Unity the same day as `AppBootstrap > Video Max People`. **Extends** ADR-070/071 (the F-32/F-33 multi-person path) and
+ADR-085 (the video sender); **does not touch** the wire format.
+
+### Context
+
+After a phone worked as a one-person camera (ADR-085/086), the next ask was several people through the SAME route (a video, then a phone or a
+USB RGB camera, no OAK-D). The multi-person chain needs a list of person boxes per frame; on the OAK-D that comes from a VPU detector, which a
+phone, webcam or file does not have, so `video_udp_sender.py` posed one crop. Target: 2-3 people, a fixed wall-mounted USB camera.
+
+### Decision
+
+1. **Add a host-side person detector and nothing else new:** YOLOX-s (Megvii, Apache-2.0), 640x640, on the same DirectML GPU. Its output is fed to
+   the unchanged `PersonTracker`. Weights are fetched by a script with a pinned size and SHA-256 and live outside version control and outside
+   Unity's import path (`python-sidecar~/models/`).
+2. **Per person, run the single-person VIDEO chain** (hip depth from apparent height, a One-Euro filter on the model's own per-joint z, P1-1 joint
+   states), keyed by track id — **not** F-33's chain, which needs stereo depth.
+3. **Opt-in:** `--max-poses N` on `video_udp_sender.py`, default 1 = the existing path byte-for-byte. The detector modules are imported only for N > 1.
+4. **Same wire as F-32:** `persons[]`, with `persons[0]` also at the root in the single-person shape (translation scaled by `--sway-gain` as in
+   the single-person video sender), so every existing scene consumes it unchanged.
+
+### Measured
+
+Detector 8-12 ms; finds a mean 6.26 of 8 dancers. Throughput with decode excluded: 2 / 3 / 5 / 8 people = **35.5 / 26.3 / 17.5 / 14.8 fps**.
+On a one-person clip the multi path matches the single path (shoulder width 334 vs 333 mm, jitter 14.1 vs 13.9 mm). 71 tests, 15 mutations
+caught, the LAN chain test (103/103) unchanged. Full table: `tasks.md` F-52.
+
+### Alternatives rejected
+
+* **Ultralytics YOLO:** AGPL-3.0, a real problem for a shipped product. (RTMDet, also Apache-2.0, was **not evaluated**, only not chosen.)
+* **F-33's synthetic depth frame** (the F-32 video harness's way): it paints each box with one flat distance, so every joint reads "measured" and
+  the model's coherent z is thrown away — measured as the reason single-person video looked good (F-49 finding). Rejected for any source without stereo.
+* **Squashing the frame into the detector:** the repo already measured 0.95 against 7.06 people per frame on the same clip (squashed vs letterboxed).
+* **Rewriting the single-person loop to share code:** that loop is validated on live evidence; the multi path duplicates ~25 lines of its recipe
+  (all of it calls into the shared `build_*` builders) rather than risk it.
+
+### Consequences
+
+* A phone, webcam or file can drive several skeletons without an OAK-D; 2 people run past the camera's 30 fps, 3 do not (26.3).
+* New 35.9 MB weights file to fetch once per machine; the detector is a second GPU model, so GPU contention with Unity's rendering is possible
+  (not measured on a loaded machine).
+* The sender's heartbeat gained fields (`people= tracks= dets= detect~ pose~`); the supervisor's parser strips `key=value` tokens, so the note
+  Unity's MODEL light reads is unchanged (pinned in `test_host_multiperson.py`).
+
+### DO NOT REVERT / how to tune
+
+* **Do not use the synthetic depth frame** for a source with no stereo. **Do not pose LOST tracks** (a box drifting away from a body).
+* **Do not lower `--det-conf` or the NMS bar** without re-measuring phantom people on a clip with nobody in it and on the 8-dancer clip; NMS 0.45
+  keeps two shoulder-to-shoulder people (IoU ~0.2) separate and merges duplicates.
+* **Do not treat `456.webm` (8 dancers, heavy occlusion) as a pass/fail bar** for a 2-3 person product; it is a stress test. Do not quote the ~17 fps
+  file figure as the pipeline's speed (it is the clip's decode cost).
+* **To tune:** the cap (`--max-poses`) is the GPU budget: each person is ~9 ms. To reach 30 fps at 3 people, measure first: detecting every other frame
+  (~4 ms), an FP16 detector.
+* **How Unity exposes it:** `AppBootstrap > Video Max People` -> `SidecarLaunchOptions.VideoMaxPeople` -> the supervisor's `--video-max-poses` -> the sender's
+  `--max-poses`. **Never forward the OAK `--max-poses` to the video sender**: Unity always sends it (default 3) and that would switch multi-person on for
+  every video session. The count is clamped to 1-8 in both languages (`VideoSourceSpec.MaxPeople`, `sidecar_supervisor.VIDEO_MAX_PEOPLE`), and Unity refuses to start
+  the sidecar for more than one person when the detector weights are missing (one error line, not a watchdog loop).
+* **Not decided here:** which crowd scenes should consume host-detected people.
+
+---

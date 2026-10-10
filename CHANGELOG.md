@@ -12,6 +12,12 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Added
 
+- **Several people from a phone, webcam or video (F-52 / ADR-088).** New field `AppBootstrap > Video Max People` (1-8, default 1). Above 1 the sidecar
+  runs a host-side YOLOX-s person detector and the F-32 tracker in front of the pose model and sends the F-32 `persons[]` datagram, so a source with no
+  OAK-D can drive several skeletons. Needs the detector weights once (`tools/model/fetch_yolox_s.py`, 35.9 MB); without them Unity says so and does not start
+  the sidecar. Measured on recorded clips: 2 people 35.5 fps, 3 people 26.3, 5 people 17.5. The default single-person path is unchanged. Verified through the real
+  supervisor with a synthetic phone; **not seen in the Editor, and not tried with a real phone, USB camera or a real 2-3 person scene.**
+
 - **Status lights: see that the sidecar, its watchdog, the source, the model and the tracking are up (F-51 / ADR-087).** The sidecar
   still has no window; five lights top right in every scene (F8 hides) and one console line per change now say whether the process is
   alive, the supervisor is watching, the camera or phone is connected, the model has loaded and is consuming frames, and a person is

@@ -2401,3 +2401,87 @@ had started. Wanted: keep the sidecar windowless and put lights in the Unity sce
       `VIRTUAL_MIRROR_EVIDENCE_DIR` is honoured by both ends.
 - [ ] `SidecarStatusModel.cs`, `SidecarStatusLights.cs` and their test have no `.meta` yet (Unity creates them on refresh); commit them
       with the sources.
+
+
+---
+
+## F-52 — MULTI-PERSON FOR A PHONE, WEBCAM OR VIDEO: A HOST-SIDE DETECTOR IN FRONT OF THE F-32 TRACKER (2026-10-10)
+
+Decision: **ADR-088**. Status: **BUILT, TESTED, MEASURED ON FILES AND THROUGH THE REAL SUPERVISOR WITH A FAKE PHONE; WIRED INTO UNITY
+(`AppBootstrap > Video Max People`); NOT SEEN IN THE EDITOR; NO REAL PHONE, USB CAMERA OR REAL TWO-/THREE-PERSON RECORDING.**
+
+Asked after the phone worked for ONE person: how to move on to several people, using the same route as before (a video, then the phone /
+a USB RGB camera, no OAK-D). Target stated by the user: **2-3 people**, a high-end USB camera screwed to a wall (so it does not move
+and latency matters less), the phone only for testing. The test clip was `Assets/Games/video/456.webm` (8 dancers, 1080x1920).
+
+### BASELINE — what the single-person sender did on that clip (measured first, nothing changed)
+
+354 of 356 frames posed at 29.3 fps, latency median 14.6 ms — and it followed ONE dancer (the front-centre one, because the crop starts at
+the frame centre) for the whole clip and ignored the other seven. One hip jump over 100 px. (The earlier note that the crop "hops between
+people" did not happen here; it follows whoever the crop starts on, and the pick is luck of position, not design.)
+
+### DONE (sidecar repo, `python-sidecar~`)
+
+- [x] `tools/video/host_person_detector.py`: YOLOX-s ONNX (Apache-2.0) on DirectML. The released file is a RAW export (`[1, 8400, 85]`),
+      so the grid and strides are applied here and any other output shape is refused. Letterbox is top-left on 114 grey, as trained.
+- [x] `tools/video/host_multiperson.py`: detector -> unchanged `PersonTracker` -> RTMW3D per CONFIRMED person (never a held/LOST one), each with
+      their own z filter and P1-1 tracker; the F-32 `persons[]` datagram plus `persons[0]` at the root with `--sway-gain`.
+- [x] `video_udp_sender.py`: `--max-poses N` (default 1 = unchanged path), `--detector`, `--det-conf`; detector modules imported only when N > 1.
+- [x] `tools/model/fetch_yolox_s.py`: pinned size + SHA-256 (`c5c2d13e...`), atomic, refuses a truncated or altered file. Weights live in
+      `python-sidecar~/models/` (not in git, invisible to Unity).
+- [x] `tests/test_host_multiperson.py` **71/71**; 15 mutations caught. Existing: `test_video_source` 95/95, `test_supervisor_state` 32/32,
+      `test_person_tracker` 19/19, `test_person_filters` 46/46, `test_lan_camera` **103/103** with the real Node server (the default path
+      is intact end to end).
+
+### WIRED INTO UNITY (same day, asked for so the phone can be tried)
+
+- [x] **`AppBootstrap > Video Test Source > Video Max People`** (1-8, default 1). 1 is the old single-person path and sends nothing new.
+      Edits during Play restart the sidecar like the other video fields.
+- [x] **A separate flag, `--video-max-poses`, not `--max-poses`.** Unity ALWAYS sends `--max-poses` (the OAK multi-person cap, default 3) and the
+      video sender ignored it; forwarding it would have switched multi-person on for every video session (a real launch line from the
+      Editor console shows `--max-poses 3` on a one-person phone session). Supervisor: `--video-max-poses N` (> 1) -> the sender's `--max-poses N`, clamped to 8.
+      Unity: `SidecarLaunchOptions.VideoMaxPeople`, `VideoSourceSpec.ClampPeople / MaxPeople / DetectorWeightsPath`.
+- [x] **A start-up check, like the PIN one:** with more than one person and no detector weights, Unity logs one error with the fetch command
+      and does NOT start the sidecar (instead of a watchdog restart loop). `VIRTUAL_MIRROR_DETECTOR` is honoured by both ends.
+- [x] Tests: `VideoSourceF49Tests` **35/35** (+5; 6 mutations all caught), `test_video_source.py` **105/105** (+10 command-shape cases, incl. "the OAK
+      `--max-poses` never reaches the video sender"), `test_host_multiperson.py` **73/73**. The Unity Editor console showed no errors or warnings after recompiling.
+- [x] **Through the real supervisor** (fake aiortc phone -> real Node LAN server -> real supervisor with `--video-max-poses` -> sender -> UDP):
+      the command line carried `--max-poses 3` and not the OAK `5` that was also passed; `SIDECAR READY`; `Child.Note` stayed empty; PIN absent from
+      output, log and events. 8-dancer clip at 360x640 (3 people): 19.1 datagrams/s with the fake phone's encoder on the same CPU, 3 persons on 392 of 459
+      datagrams, sender `lat` median 57 ms, but **12 distinct ids in 24 s** (small people fragment). 2-person composite at 540x480 (2 people): 28.0 datagrams/s,
+      2 persons on 456 of 681, `lat` median 39 ms; the right-hand person kept ONE id for 681 of 701 datagrams (the others are the left clip's people entering
+      and leaving, and the clip looping).
+
+### MEASURED (RTX 3060, DirectML, RTMW3D fp16)
+
+| check | result |
+|---|---|
+| detector alone | 8-12 ms per frame; **finds a mean 6.26 of the 8 dancers** (min 4, max 9); exactly 1 of 1 on `video.webm` (435/435 frames) |
+| `--max-poses` 2 / 3 / 5 / 8 on `456.webm`, decode excluded | **35.5 / 26.3 / 17.5 / 14.8 fps** (28.2 / 38.1 / 57.5 / 66.8 ms per frame) |
+| distinct ids posed (of those with >= 30 frames) | 4 (3) / 6 (4) / 10 (8) / 12 (10) — ids fragment under occlusion |
+| one-person clip `video.webm`, single path vs multi path | datagrams 435 vs 433; shoulder width 333 vs 334 mm; jitter 13.9 vs 14.1 mm; p95 71.9 vs 71.5 mm |
+| `123.webm` (a person who walks out of frame) | datagrams 570 vs 550; jitter 16.3 vs 10.7 mm (the 20 fewer are probably detector misses; not isolated) |
+| side-by-side composite of `123` and `video` (ground truth by construction) | the right-hand person kept ONE id for 385 of 387 frames, 0 switches |
+| a FILE through the sender | ~17 fps: decoding the 1080x1920 webm costs ~13 ms (spikes 97 ms) on the loop's own thread. A live source decodes on a reader thread. |
+| resolution A/B (single path, same clip, 1080x1920 -> 288x512) | jitter 25.4 -> 28.4 mm (+12 %), 354 -> 352 datagrams: for a ~640 px dancer the crop is cut from the original pixels, so resolution mattered little |
+
+### FOUND ALONG THE WAY
+
+- **Pose input is a fixed 288x384 crop per person.** The model never sees the whole frame; what matters is how many real pixels the PERSON
+  occupies before the crop is resized (>~384 px: more resolution buys nothing; <~200 px: the crop is stretched). The LAN phone sender asks the
+  phone for its maximum resolution, then the browser's WebRTC encoder scales it down (360x640 and 288x512 were seen); a USB camera has no such step.
+- **F-33's synthetic depth must NOT be used here.** It paints every box with one distance, so every joint reads "measured" and takes that flat
+  z, discarding the model's coherent root-relative z — the thing that made single-person video tracking good.
+- My first detector timing (108 ms) was an artefact: seeking and decoding between calls let the GPU idle down. Back-to-back it is 8-12 ms.
+
+### NOT DONE — open
+
+- [ ] **Never seen in the Editor.** The field, the missing-weights error and which scenes show several people have not been tried. A single-person
+      scene shows the first person only; the crowd scenes (F-34) fed by a host detector have never been on a screen.
+- [ ] **No real source.** No real phone, USB camera or browser sender page was run with several people (a synthetic phone was); no recording of 2-3 real
+      people from the target camera. Small people at phone resolution fragment ids (12 ids for 8 dancers at 360x640).
+- [ ] **3 people is 26.3 fps, under the camera's 30.** Candidates (unmeasured): detect every other frame, an FP16 detector, a cheaper pose preprocess.
+- [ ] **Hip depth for a hidden-ankle person is the 2.0 m default** (nose-to-ankle span); the detector's box height could be a second estimate.
+- [ ] **Identity is only counted, not labelled.** 12 ids for 8 dancers at cap 8 is fragmentation, but real swaps vs new births were not separated.
+- [ ] `--det-conf 0.45` is the OAK path's value, not tuned for YOLOX-s. Re-measure phantom people before changing it.
+- [ ] The crowd scenes (F-34) fed by this have never been seen on a screen.
