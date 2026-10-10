@@ -5,6 +5,24 @@ Purpose: next agent can continue without re-deriving context.
 
 ---
 
+## F-54 - CHROMATIC RAIN SHOWCASE: a rain-and-fluid scene driven by the existing bootstrap (2026-10-11)
+
+Full record: [`tasks.md`](tasks.md) F-54, [`decisions.md`](decisions.md) **ADR-090**. User guide: `Showcase/ChromaticRain/README.md`.
+
+**What it is.** `Showcase/ChromaticRain/Scenes/ChromaticRain_Showcase.unity`: procedural multicolour rain, a human silhouette built from the tracked landmarks that blocks the rain, and a FluXY fluid layer stirred by the hands. It is a row in the Launcher (one-person column, built list updated by `Virtual Mirror > Register All Scenes in Build Settings`), and ESC returns to the menu.
+
+**Tracking is the bootstrap's job, not the scene's.** The scene carries an `AppBootstrap` component (its Inspector has the same "Tracking Source" and "Video Test Source (F-49)" sections as `Bootstrap.unity`). That component starts and supervises the sidecar, picks OAK-D / video file / webcam / phone / LAN camera, and restarts it when the video fields change. The showcase only LISTENS, through the existing `TrackedStage`, like every experience scene. Reached through `Bootstrap.unity` the scene's copy destroys itself (AppBootstrap is a singleton) and the real one keeps going. **To use a video:** select `Tracking (AppBootstrap)` in the scene, tick `Track From Video`, set `Video Source`, press Play. No tracking code was duplicated.
+
+**Verified (Editor, 2026-10-11):** the scene's own `AppBootstrap` launched the real supervised video sidecar and the showcase went `LIVE (VIDEO 147_1080p.mp4)`; Launcher -> scene -> Launcher round trip leaves exactly one `AppBootstrap` and no console errors; 28 showcase EditMode tests and the 15 `SceneLauncherF35Tests` pass; 1080p Editor frame time about 4 ms with the full effect (rain 3.5 ms, +silhouette 3.6, +FluXY 4.1). **Never run on a physical OAK-D / camera.**
+
+**Know before changing it.** The sidecar sends NO pose for an empty room, so `Source = Live` reads `NO SIGNAL` with nobody present and `Auto` falls back to the simulation (visibly) after 3 s; use `Live` for an unattended installation. FluXY rounds its resolution DOWN to a power of two. The showcase assembly references FluXY (`Assets/FluXY`, outside this repo): without it only the `ChromaticRain` assemblies fail to compile. The sim's "still/travel" debug key is `T` because `O` is the bootstrap's camera-orientation key.
+
+**Files:** new `Showcase/ChromaticRain/**` (scripts, 4 shaders, materials, settings, scene, editor builder, 28 tests, README); changed `Runtime/SkeletonShow/SceneLauncher.cs` (one catalogue row), `Editor/SceneRegistrar.cs` (also registers `Showcase/**/Scenes`). New files need their `.meta` files committed.
+
+**Next recommended:** run it on the physical camera and tune `ChromaticRainSettings` on the venue screen.
+
+---
+
 ## 🔷 F-52 follow-up — first real 2-person clip (`147.webm`, 4K) live in Unity; three fixes (2026-10-10)
 
 Full record: [`tasks.md`](tasks.md) "F-52 FOLLOW-UP". Offline: both people posed on 1931/1934 frames with exactly 2 ids and no id change. Live: (1) the first sidecar launch

@@ -1,0 +1,21 @@
+{
+    "name": "ChromaticRain",
+    "rootNamespace": "ChromaticRain",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.Tracking",
+        "VirtualMirror.SkeletonShow",
+        "fluxy",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

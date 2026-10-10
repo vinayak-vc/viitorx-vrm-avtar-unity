@@ -4513,3 +4513,16 @@ were migrated by hand. A partial class and an editor-side grouping change nothin
 * **To group another component:** add `[InspectorGroup]` to its fields and `[CustomEditor(typeof(X))] sealed class XEditor : GroupedInspectorEditor { }`.
 
 ---
+
+
+---
+
+## ADR-090 - Chromatic Rain: tracking belongs to the AppBootstrap, the scene only listens, and the mask is analytic
+
+**Decision.** The showcase scene does not start, supervise or configure the sidecar and has no video-source code of its own. It carries an `AppBootstrap` (the same component and Inspector sections as `Bootstrap.unity`), which owns the sidecar and the source choice; the scene reads the stream through the existing `TrackedStage`. It is registered in the Launcher (`SceneLauncher` row, one-person) so `AppBootstrap.EnsureSidecarForScene` treats it like any experience. The silhouette is drawn by one fragment shader that evaluates tapered capsules and a head ellipse (smooth-min) into a single R8 mask texture shared by the rain, the fluid layer and the dark overlay.
+
+**Why.** Every experience scene already splits the work this way (bootstrap = process and source, scene = listener), and F-49..F-52 put all source options behind that one component; a second copy in the scene would drift. The sidecar carries landmarks only (no segmentation mask, no image coordinates), so the body is stylised from joints; an analytic shape is anti-aliased at any mask size and keeps limbs continuous.
+
+**Do not.** Add a second UDP listener or a source selector to the scene; start the sidecar from the scene; make the scene's `AppBootstrap` navigate away (`mirrorSceneName` = the scene's own name, `loadMirrorSceneOnStart` off); use the sim's `O` key (the bootstrap owns it). **Tune** through `ChromaticRainSettings` (live) and `AppBootstrap > Video Test Source`.
+
+**Known:** `Auto` falls back to the simulation only after 3 s of no pose, and the sender emits nothing for an empty room, so use `Live` for an unattended install. The rain phase wraps at exactly 1 (whole-number cycles per column) so it never loses precision or visibly resets; keep `REF_FALL` / `WRAP_SECONDS` in the rain shader and `RainRenderer` in step.

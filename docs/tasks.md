@@ -4,6 +4,21 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## F-54 - Chromatic Rain showcase (2026-10-11)
+
+```text
+VERDICT: BUILT, COMPILING, TESTED IN THE EDITOR. NOT RUN ON A PHYSICAL CAMERA.
+```
+
+- [x] Scene, shaders, silhouette, rain, FluXY layer, UI, debug view, simulated pose, scene builder, 28 EditMode tests (`Showcase/ChromaticRain`).
+- [x] Tracking handled by the scene's `AppBootstrap` (video / webcam / phone / OAK-D sources exactly as in `Bootstrap.unity`); the showcase only listens.
+- [x] Launcher row + ESC to menu + Build Settings registration (`SceneLauncher`, `SceneRegistrar`).
+- [x] Verified: bootstrap-launched video sidecar -> LIVE; Launcher round trip; port-in-use is reported, not fatal; stream loss fades the silhouette and stops the fluid targets; mirror flip; mutation-checked tests.
+- [ ] Run on the physical OAK-D / camera. Tune the visuals on the venue screen.
+- [ ] Measure a player build (the 4 ms figure is the Editor).
+
+---
+
 ## PER-PERSON FILTERS (F-33, 2026-09-17) — multi-person gets the measured single-person chain
 
 ```text

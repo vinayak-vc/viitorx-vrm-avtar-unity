@@ -33,6 +33,10 @@ namespace VirtualMirror.Editor {
     public static class SceneRegistrar {
         private const string ScenesFolder = "Assets/Games/viitorx-vrm-avtar-unity/Scenes";
 
+        /// <summary>Showcase packages keep their scene next to their code, in
+        /// <c>Showcase/&lt;Name&gt;/Scenes/</c>; they are launchable from the menu like any other.</summary>
+        private const string ShowcaseFolder = "Assets/Games/viitorx-vrm-avtar-unity/Showcase";
+
         /// <summary>No scenes excluded; all scenes in Scenes/ are registered.</summary>
         private static readonly string[] Excluded = new string[0];
 
@@ -64,7 +68,12 @@ namespace VirtualMirror.Editor {
                 i = i + 1;
             }
 
-            string[] found = Directory.GetFiles(ScenesFolder, "*.unity", SearchOption.TopDirectoryOnly);
+            List<string> foundList = new List<string>(
+                Directory.GetFiles(ScenesFolder, "*.unity", SearchOption.TopDirectoryOnly));
+            if (Directory.Exists(ShowcaseFolder)) {
+                foundList.AddRange(Directory.GetFiles(ShowcaseFolder, "*.unity", SearchOption.AllDirectories));
+            }
+            string[] found = foundList.ToArray();
             System.Array.Sort(found);
 
             int added = 0;

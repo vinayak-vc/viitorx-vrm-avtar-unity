@@ -1,0 +1,22 @@
+{
+    "name": "ChromaticRain.Editor",
+    "rootNamespace": "ChromaticRain.EditorTools",
+    "references": [
+        "ChromaticRain",
+        "VirtualMirror.App",
+        "fluxy",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
