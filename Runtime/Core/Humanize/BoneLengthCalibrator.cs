@@ -24,6 +24,14 @@ namespace VirtualMirror.Core.Humanize {
     /// LEFT/RIGHT ARE AVERAGED. Real limbs are symmetric to within a couple of per cent; a monocular
     /// or a partially-occluded tracker's are not. Sharing one length between mirrored bones makes the
     /// body symmetric for free and doubles the sample rate for each of them.
+    ///
+    /// ...BUT ONLY WHEN THEY AGREE (F-48). Two medians more than <see cref="MirrorToleranceFraction"/>
+    /// apart mean one side was measured wrongly, and averaging would hand half that error to the good
+    /// side; each then keeps its own. One validated side alone still serves both.
+    ///
+    /// WHAT MAY ENTER AT ALL is decided in two places. The caller (<see cref="HumanizedSkeleton"/>)
+    /// offers only samples whose endpoints were stereo-MEASURED, inside the operating volume and
+    /// settled; this class then applies the per-bone anatomical band from <see cref="HumanBodyModel"/>.
     /// </summary>
     public sealed class BoneLengthCalibrator {
         /// <summary>Sliding window per bone. At ~30 Hz this is ~4 s of history — long enough for the
@@ -40,6 +48,15 @@ namespace VirtualMirror.Core.Humanize {
         private readonly float[] median;
         private readonly float[] scratch;
         private bool dirty = true;
+        private long rejectedImplausible;
+
+        /// <summary>
+        /// Left and right medians that differ by more than this fraction of their mean are NOT averaged.
+        /// Real limbs are symmetric to a few per cent, so 20 % is a bone that was measured wrongly on
+        /// one side - and averaging would hand half of that error to the good side (F-48). Each side
+        /// then keeps its own median until they agree again.
+        /// </summary>
+        public const float MirrorToleranceFraction = 0.20f;
 
         public BoneLengthCalibrator() {
             int boneCount = HumanBodyModel.Bones.Length;
@@ -60,6 +77,7 @@ namespace VirtualMirror.Core.Humanize {
                 median[i] = 0f;
                 i = i + 1;
             }
+            rejectedImplausible = 0L;
             dirty = true;
         }
 
@@ -68,15 +86,16 @@ namespace VirtualMirror.Core.Humanize {
         /// plausible human anatomy — a sample taken from a collapsed or blown-up joint must never be
         /// allowed to move the median, because the median is what protects against exactly that sample.
         /// </summary>
-        public void Observe(int bone, float length) {
+        public bool Observe(int bone, float length) {
             if (bone < 0 || bone >= counts.Length) {
-                return;
+                return false;
             }
-            if (float.IsNaN(length) || float.IsInfinity(length)) {
-                return;
-            }
-            if (length < HumanBodyModel.MinBoneM || length > HumanBodyModel.MaxBoneM) {
-                return;
+            // PER BONE, not one global band (F-48). 0.01-0.80 m admitted a 0.55 m forearm, which is
+            // longer than any human one but shorter than the global ceiling, so an inferred-depth
+            // stretch of a small bone went straight into the median.
+            if (!HumanBodyModel.IsPlausibleBoneLength(bone, length)) {
+                rejectedImplausible = rejectedImplausible + 1L;
+                return false;
             }
             int slot = writeIndex[bone];
             samples[bone * WindowSize + slot] = length;
@@ -85,6 +104,16 @@ namespace VirtualMirror.Core.Humanize {
                 counts[bone] = counts[bone] + 1;
             }
             dirty = true;
+            return true;
+        }
+
+        /// <summary>Samples refused because the length is not possible for that bone. Cumulative
+        /// until <see cref="Reset"/>. A healthy session keeps this near zero; a climbing count means
+        /// the tracker is offering geometry no body has.</summary>
+        public long RejectedImplausibleCount {
+            get {
+                return rejectedImplausible;
+            }
         }
 
         /// <summary>True once this bone has enough samples for its median to mean anything.</summary>
@@ -111,7 +140,11 @@ namespace VirtualMirror.Core.Humanize {
             bool self = IsCalibrated(bone);
             bool other = mirror >= 0 && mirror < counts.Length && IsCalibrated(mirror);
             if (self && other) {
-                return 0.5f * (median[bone] + median[mirror]);
+                float mean = 0.5f * (median[bone] + median[mirror]);
+                if (Mathf.Abs(median[bone] - median[mirror]) > MirrorToleranceFraction * mean) {
+                    return median[bone];
+                }
+                return mean;
             }
             if (self) {
                 return median[bone];

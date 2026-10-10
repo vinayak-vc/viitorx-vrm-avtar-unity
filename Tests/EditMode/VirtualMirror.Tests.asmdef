@@ -5,9 +5,12 @@
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
         "VirtualMirror.Core",
+        "VirtualMirror.App",
         "VirtualMirror.Tracking",
         "VirtualMirror.Retargeting",
-        "VirtualMirror.Diagnostics"
+        "VirtualMirror.Diagnostics",
+        "VirtualMirror.SkeletonShow",
+        "VirtualMirror.Experiences"
     ],
     "includePlatforms": [
         "Editor"

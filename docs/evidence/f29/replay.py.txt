@@ -1,0 +1,33 @@
+"""Replay a recorded F-29 dump onto UDP, optionally without hands.
+
+TEST-ONLY, and in the scratchpad rather than the repo for that reason. Two jobs:
+  * deterministic: the same packets every run, so a check that fails is the code changing, not the
+    model landing differently on a re-inference;
+  * --no-hands: the provider's PRE-EXISTING hand path calls Quaternion.Slerp/LookRotation, which are
+    Unity native (ECall) and cannot run outside a player. Stripping lh/rh exercises the whole body +
+    telemetry path headlessly. Hand data is verified separately, from this same dump.
+"""
+import json, socket, sys, time
+
+path = sys.argv[1]
+port = int(sys.argv[2]) if len(sys.argv) > 2 else 8899
+no_hands = "--no-hands" in sys.argv
+fps = 30.0
+
+rows = [json.loads(l) for l in open(path, encoding="utf-8")]
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+t0 = time.time()
+sent = 0
+for i, r in enumerate(rows):
+    r.pop("frame", None)
+    r.pop("hip_z", None)
+    if no_hands:
+        r.pop("lh", None)
+        r.pop("rh", None)
+    r["t"] = round(time.time(), 4)          # fresh send epoch so latency/age read true
+    sock.sendto(json.dumps(r).encode("utf-8"), ("127.0.0.1", port))
+    sent += 1
+    lag = (i + 1) / fps - (time.time() - t0)
+    if lag > 0:
+        time.sleep(lag)
+print("replayed %d packets%s in %.1f s" % (sent, " (hands stripped)" if no_hands else "", time.time() - t0))

@@ -66,6 +66,41 @@ namespace VirtualMirror.Tracking.OakD {
             return NormalizeSeparators(Path.Combine(streamingAssetsPath, PlayerSidecarFolderName));
         }
 
+        /// <summary>The FP16 build's path for a model path: <c>.../rtmw3d-x.onnx</c> becomes
+        /// <c>.../rtmw3d-x-fp16.onnx</c>. Empty when the path is empty, is not an .onnx file, or is already
+        /// an FP16 build. Mirrors <c>evidence_paths._default_model</c> and <c>tools/model/f45_make_fp16.py</c>.</summary>
+        public static string Fp16Sibling(string modelPath) {
+            const string Extension = ".onnx";
+            const string Suffix = "-fp16";
+            if (string.IsNullOrEmpty(modelPath)
+                || !modelPath.EndsWith(Extension, System.StringComparison.OrdinalIgnoreCase)) {
+                return string.Empty;
+            }
+            string stem = modelPath.Substring(0, modelPath.Length - Extension.Length);
+            if (stem.EndsWith(Suffix, System.StringComparison.OrdinalIgnoreCase)) {
+                return string.Empty;
+            }
+            return stem + Suffix + modelPath.Substring(modelPath.Length - Extension.Length);
+        }
+
+        /// <summary>
+        /// The FP16 build of <paramref name="modelPath"/> when it exists, otherwise the path unchanged.
+        ///
+        /// ADR-082 made FP16 the default: 2.97x faster on the GPU stage, three people at 37 fps instead of
+        /// 15.5, and a model that loads in about half the time (13.8 s -> 6.8 s, which matters because the
+        /// supervisor treats 10 s of silence as a hang). The sidecar's own default already prefers it, but
+        /// Unity passes an explicit --model, which bypasses that preference - so Unity ran the slow build
+        /// the whole time. It only upgrades to a file that is actually there; a machine that never ran
+        /// the converter keeps the FP32 model exactly as before.
+        /// </summary>
+        public static string PreferFp16(string modelPath, System.Func<string, bool> fileExists) {
+            string fp16 = Fp16Sibling(modelPath);
+            if (fp16.Length == 0 || fileExists == null) {
+                return modelPath;
+            }
+            return fileExists(fp16) ? fp16 : modelPath;
+        }
+
         /// <summary>Builds the concrete path set for a resolved sidecar root.</summary>
         public static SidecarPathSet Resolve(string sidecarRoot, string modelPathOverride) {
             SidecarPathSet set = new SidecarPathSet();

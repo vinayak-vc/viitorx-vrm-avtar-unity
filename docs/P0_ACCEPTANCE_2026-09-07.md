@@ -25,7 +25,7 @@ recently a dedicated presence probe on 2026-09-08: **0 of 359 frames tracked, ma
 criteria are **NOT TESTED**, not "passed".
 
 The harness is built, instrumented and verified. Run
-[`guided_capture.py`](../python-sidecar~/guided_capture.py) — it walks the operator through blocks A–J
+`guided_capture.py` (since DELETED in 29ec57e — see the note below) — it walked the operator through blocks A–J
 on a countdown and reports every metric per block.
 
 ---
@@ -187,10 +187,10 @@ The brief demanded: *"Explicitly prove: P0-1 Unity gate fired during occlusion. 
 Python-side holds."* Done — and the Python sidecar was **not running at all** during this test, so no
 inference from a sidecar hold is even possible.
 
-**Method.** [`inject_occlusion.py`](../python-sidecar~/inject_occlusion.py) streams the *same* UDP JSON
+**Method.** `inject_occlusion.py` (since deleted) streamed the *same* UDP JSON
 contract straight to Unity with a scripted confidence timeline. An occluded joint is emitted as
 `[0,0,0,0]` — byte-for-byte what `build_body_landmarks.emit()` produces when confidence falls below
-`--conf`. [`verify_gate.py`](../python-sidecar~/verify_gate.py) then reads the gate's **own state at
+`--conf`. `verify_gate.py` (since deleted) then read the gate's **own state at
 apply time** (`model_log.gate{}`) and compares it against the intended timeline.
 
 **Timeline:** 3, 5, 8, 12, 20-frame occlusions × 4 limbs (lArm/rArm/lLeg/rLeg), 40 clean frames of
@@ -515,6 +515,11 @@ Every block is commented `DIAG-ONLY`. Unity `+85` lines, sidecar `+20` lines.
 | `python-sidecar~/wholebody_udp_sender.py` | `camLatMs` (device clock), `capToPoseMs`, `poseToDepthMs`, `depthWaitMs`, `capToSendMs` | camera→pose was the last unmeasured stage |
 | `python-sidecar~/analyze_capture.py` | **new** — acceptance analyzer | produces §9/§13/§14/§15/§16/§17 tables |
 | `python-sidecar~/run_p0_acceptance.bat` | **new** — one-shot capture + analysis | simple human-subject protocol |
+> **The three capture harnesses below no longer exist.** They were deleted in `29ec57e`, before
+> the ADR-065 reorganisation that moved surviving harnesses into `tools/`. The measurements in
+> this report stand; the scripts that produced them do not. Recorded here because the links to
+> them were dangling and a dead link reads like a missing file rather than a removed one.
+
 | `python-sidecar~/guided_capture.py` | **new** — block-segmented guided capture | prompts through blocks A–J on a countdown, writes `blocks.json` so every metric is reported **per block** |
 | `python-sidecar~/inject_occlusion.py` | **new** — scripted occlusion injector | proves the Unity gate without the sidecar (§4b) |
 | `python-sidecar~/verify_gate.py` | **new** — gate verifier | intended vs observed holds, origin-collapse + bone-length checks |

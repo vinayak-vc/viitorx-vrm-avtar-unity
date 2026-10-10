@@ -73,6 +73,10 @@ namespace VirtualMirror.Core.Humanize {
         private readonly Vector3[] observed = new Vector3[HumanBodyModel.SlotCount];
         private readonly float[] confidence = new float[HumanBodyModel.SlotCount];
         private readonly bool[] valid = new bool[HumanBodyModel.SlotCount];
+        // F-48: per-slot "was this joint's depth MEASURED by the stereo pair". Filled from the trust
+        // channel each pose. It gates what the CALIBRATION may learn from and nothing else - a joint
+        // with inferred depth is still output, still rebuilt and still held, exactly as before.
+        private readonly bool[] measured = new bool[HumanBodyModel.SlotCount];
         private readonly Vector3[] rebuilt = new Vector3[HumanBodyModel.SlotCount];
         private readonly Vector3[] lastAccepted = new Vector3[HumanBodyModel.SlotCount];
         private readonly bool[] hasLastAccepted = new bool[HumanBodyModel.SlotCount];
@@ -100,6 +104,15 @@ namespace VirtualMirror.Core.Humanize {
         private bool enforceAngles = true;
         private bool enforceBoneLengths = true;
         private bool enforceVelocity = true;
+
+        private PoseAdmission admission = PoseAdmission.Trusted;
+        // True while `output` holds a body that was actually produced from an admitted pose, i.e. the
+        // thing an out-of-volume hold may legitimately keep serving.
+        private bool hasGoodOutput;
+        // Set by a held (out-of-volume) pose; consumed by the next admitted one to drop the temporal
+        // memory that spans the gap, so a subject who walked out and back is not velocity-clamped
+        // against where they stood a few seconds earlier.
+        private bool gapPending;
 
         private HumanizedStats stats;
         private HumanizedStats frameStats;   // snapshot at frame start, to detect "did anything fire"
@@ -138,6 +151,8 @@ namespace VirtualMirror.Core.Humanize {
         /// session so one subject's bone lengths and held poses never leak into another's.</summary>
         public void Reset() {
             calibrator.Reset();
+            hasGoodOutput = false;
+            gapPending = false;
             int i = 0;
             while (i < HumanBodyModel.SlotCount) {
                 hasLastAccepted[i] = false;
@@ -168,15 +183,57 @@ namespace VirtualMirror.Core.Humanize {
         /// failsafe, not here.
         /// </summary>
         public PoseFrame Process(PoseFrame input, float deltaSeconds) {
+            return Process(input, deltaSeconds, null, PoseAdmission.Trusted);
+        }
+
+        /// <summary>
+        /// F-48 — humanize one frame, told what is KNOWN about where its depth came from.
+        ///
+        /// <paramref name="telemetry"/> is the trust channel for this pose. Its per-joint
+        /// <see cref="TrackingTelemetry.DepthMeasured"/> decides which bone lengths the calibration may
+        /// learn from; it is not consulted for anything else, so output is unchanged for a joint whose
+        /// depth was inferred. Null, or a stream with no depth channel at all, means the provenance is
+        /// UNKNOWN rather than bad, and is treated as measured - refusing to calibrate on a legacy
+        /// sender would be a regression to protect against a fault that sender cannot report. A source
+        /// that reports the channel and measures nothing (a video file) therefore never calibrates, and
+        /// outputs the tracker's own lengths.
+        ///
+        /// <paramref name="poseAdmission"/> is the operating-volume verdict (see
+        /// <see cref="OperatingVolumeGate"/>). <see cref="PoseAdmission.Outside"/> HOLDS: the previous
+        /// good body is returned untouched, no state advances, nothing is learned. That is the bounded
+        /// "keep the last known-good body" behaviour - the consumer decides when the hold has gone on
+        /// long enough, and passes an invalid frame from then on. <see cref="PoseAdmission.Settling"/>
+        /// produces output normally but forbids calibration.
+        /// </summary>
+        public PoseFrame Process(PoseFrame input, float deltaSeconds, TrackingTelemetry telemetry,
+                                 PoseAdmission poseAdmission) {
             if (input == null || !input.IsValid) {
                 output.MarkInvalid(input != null ? input.TimestampSeconds : 0.0);
+                hasGoodOutput = false;
                 return output;
             }
+            if (poseAdmission == PoseAdmission.Outside) {
+                stats.FramesHeldOutOfVolume = stats.FramesHeldOutOfVolume + 1L;
+                // Every bone sample this pose would have offered, forgone.
+                stats.CalibRejectedVolume = stats.CalibRejectedVolume + (long)HumanBodyModel.Bones.Length;
+                gapPending = true;
+                if (!hasGoodOutput) {
+                    // Nothing has ever been admitted, so there is no body to hold. Say so.
+                    output.MarkInvalid(input.TimestampSeconds);
+                }
+                return output;
+            }
+            if (gapPending) {
+                DropTemporalMemory();
+                gapPending = false;
+            }
+            admission = poseAdmission;
             float dt = deltaSeconds > 0f ? deltaSeconds : 1f / 30f;
             frameStats = stats;
             stats.FramesProcessed = stats.FramesProcessed + 1L;
 
             Gather(input);
+            GatherProvenance(telemetry);
             ClassifyValidity();
             if (enforceVelocity) {
                 ClampVelocity(dt);
@@ -188,8 +245,29 @@ namespace VirtualMirror.Core.Humanize {
                 FixKneeDirection();
             }
             Emit(input);
+            hasGoodOutput = true;
             TallyFrame();
             return output;
+        }
+
+        /// <summary>The learned skeleton's headline numbers as HUD text, split across short lines. See
+        /// <see cref="HumanizedStats.ToHud"/> for why it is not one line.</summary>
+        public string HudText() {
+            return stats.ToHud(calibrator.CalibratedBoneCount(), HumanBodyModel.Bones.Length,
+                               calibrator.TrunkAndHeadLength());
+        }
+
+        // A joint that was not accepted across a held gap has no meaningful "previous position", and
+        // comparing against one from before the subject left would read a legitimate walk back in as
+        // a teleport. Clearing wasValid arms the short re-acquire blend, so the return does not snap.
+        private void DropTemporalMemory() {
+            int i = 0;
+            while (i < HumanBodyModel.SlotCount) {
+                hasLastAccepted[i] = false;
+                clampStreak[i] = 0;
+                wasValid[i] = false;
+                i = i + 1;
+            }
         }
 
         // ---------------------------------------------------------------------------------------
@@ -210,6 +288,22 @@ namespace VirtualMirror.Core.Humanize {
             confidence[HumanBodyModel.MidHip] = Mathf.Min(confidence[23], confidence[24]);
             observed[HumanBodyModel.MidShoulder] = 0.5f * (observed[11] + observed[12]);
             confidence[HumanBodyModel.MidShoulder] = Mathf.Min(confidence[11], confidence[12]);
+        }
+
+        // ---------------------------------------------------------------------------------------
+        // 1b. Depth provenance (F-48). Read straight from the trust channel, which is the single
+        //     source of truth for "measured versus inferred" - nothing here re-derives it. The two
+        //     virtual joints are only as measured as the pair they are built from.
+        // ---------------------------------------------------------------------------------------
+        private void GatherProvenance(TrackingTelemetry telemetry) {
+            bool known = telemetry != null && telemetry.HasDepthChannel;
+            int i = 0;
+            while (i < PoseFrame.LandmarkCount) {
+                measured[i] = known ? telemetry.DepthMeasured(i) : true;
+                i = i + 1;
+            }
+            measured[HumanBodyModel.MidHip] = measured[23] && measured[24];
+            measured[HumanBodyModel.MidShoulder] = measured[11] && measured[12];
         }
 
         // ---------------------------------------------------------------------------------------
@@ -378,15 +472,32 @@ namespace VirtualMirror.Core.Humanize {
         }
 
         // ---------------------------------------------------------------------------------------
-        // 5. Feed the calibrator only from frames where BOTH endpoints are trustworthy. A length
-        //    measured against a held or clamped joint is a measurement of this layer's own output.
+        // 5. Feed the calibrator only from evidence that can be trusted. A bone is observed only when
+        //      (a) both endpoints passed plausibility - a length measured against a held or clamped
+        //          joint is a measurement of this layer's own output;
+        //      (b) both endpoints' depth was MEASURED by the stereo pair - an inferred depth puts the
+        //          joint on the hip plane or the model's monocular guess, so its distance to a measured
+        //          neighbour is a depth error, not a bone (SR7: forearms, necks and trunks stretched);
+        //      (c) the pose is inside the operating volume and settled - see OperatingVolumeGate;
+        //      (d) the calibrator's own per-bone anatomical band accepts the length.
+        //    Each refusal is counted under its own name, so a recording can say WHICH of these kept a
+        //    bone from calibrating instead of just reporting that it did not.
         // ---------------------------------------------------------------------------------------
         private void LearnBoneLengths() {
             int b = 0;
             while (b < HumanBodyModel.Bones.Length) {
                 HumanBodyModel.Bone bone = HumanBodyModel.Bones[b];
                 if (valid[bone.Parent] && valid[bone.Child]) {
-                    calibrator.Observe(b, Vector3.Distance(observed[bone.Parent], observed[bone.Child]));
+                    if (!measured[bone.Parent] || !measured[bone.Child]) {
+                        stats.CalibRejectedUnmeasured = stats.CalibRejectedUnmeasured + 1L;
+                    } else if (admission != PoseAdmission.Trusted) {
+                        stats.CalibRejectedVolume = stats.CalibRejectedVolume + 1L;
+                    } else if (calibrator.Observe(b, Vector3.Distance(observed[bone.Parent],
+                                                                     observed[bone.Child]))) {
+                        stats.CalibSamplesAccepted = stats.CalibSamplesAccepted + 1L;
+                    } else {
+                        stats.CalibRejectedImplausible = stats.CalibRejectedImplausible + 1L;
+                    }
                 }
                 b = b + 1;
             }

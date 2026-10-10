@@ -150,12 +150,91 @@ guard exists to prevent it.
 the destination port to detect a stale producer, which means it reads Unity's healthy listener as
 "port in use" and refuses to start. This flag tells it that a listener is expected.
 
+### Multi-person (F-32)
+
+A second sidecar tracks **several people at once** with stable per-person ids:
+
+```powershell
+.venv\Scripts\python.exe multiperson_udp_sender.py --max-poses 3
+```
+
+It detects people on the OAK-D's VPU (free — RGB and depth are unaffected), tracks their
+identities on the host, and poses the most-established ones on the GPU. **`--max-poses` is a
+real budget**: pose inference is 20.7 ms per person, so 2 people run at ~24 fps, 3 at ~16 fps
+and 4 at ~12 fps.
+
+It is **backward compatible**: the most-established person is also published in the ordinary
+single-person shape, so `Scenes/Bootstrap.unity` (the VRM mirror) and all nine single-person
+experience scenes work with this sender unchanged. Only `Bonds` reads the rest.
+
+Since **F-33** each tracked person carries the full single-person filter chain — P0 smoothing,
+P1-1 joint tracking, F-22 validation — in their own instance, keyed to their track id and living
+exactly as long as that identity does. At 30 fps it is the same chain with the same constants as
+the single-person sender; below 30 fps it is better, because each person measures their own update
+rate and retunes their filters from it rather than assuming camera rate. Measured: implausible
+single-frame steps (over 300 mm in one 33 ms frame) fell from 2158 to 77 across 2060
+person-frames, for 0.88 ms per person-frame. `--no-filters` restores the raw F-32 output for an
+A/B.
+
+The detector blob is not committed. Fetch it once:
+
+```powershell
+.venv\Scripts\python.exe -c "import blobconverter,shutil;shutil.copy(blobconverter.from_zoo(name='person-detection-retail-0013',shaves=6,zoo_type='intel'),'depthai_blazepose/models/person-detection-retail-0013_openvino_2022.1_6shave.blob')"
+```
+
+### Phone, webcam or video instead of the OAK-D (F-49 to F-52)
+
+The OAK-D is not required. `Scenes/Bootstrap.unity` > `AppBootstrap` > **Video Test Source** feeds the same pipeline from a video file, a webcam (`camera:0`), a phone IP-camera app, an RTSP camera, or a phone streaming
+through the LAN Camera Streaming server (paste its **viewer** link; the PIN has its own masked field). Tick `Track From Video`, set `Video Source`, and press Play. The status lights (top right, F8 hides) say whether the
+sidecar, its watchdog, the source, the model and the tracking are up.
+
+**Several people:** set `Video Max People` to 2 or 3 and fetch the person detector once (`python-sidecar~/.venv/Scripts/python.exe tools/model/fetch_yolox_s.py`, 35.9 MB; without it Unity says so and does not start the sidecar).
+Measured on an RTX 3060: 2 people ~35 fps standalone / ~25 fps live in Unity, 3 people ~26 fps. By design a single-person scene shows the first person only (not yet checked on screen).
+
+**Quick tips** (measured numbers and the reasoning are in the sidecar README, "Camera setup and tips for better results"):
+* **Use a 1080p (or 720p) camera or file.** Resolution does not change how fast the pose runs (same ms per frame at 4K, 1080p and 1280); a 4K *file* just decodes slowly and plays in slow motion. Re-encode a 4K clip to 1080p first.
+* **A 60 fps camera does not give 60 fps of skeleton** (about 25-35 fps for two people); it gives less latency and, with good light, less motion blur.
+* **Frame the whole body, hips to ankles, at least ~400 px tall**, camera fixed and level at hip or chest height, people not standing in front of each other.
+* **Fix the exposure and focus**, light evenly, set the lens's real horizontal field of view and the subject height in the Video Test Source fields.
+* **`Video Max People` = the number of people really there**; each costs GPU time.
+
 ### Ports
 
 | Port | Protocol | Purpose |
 |---|---|---|
 | 8899 | UDP | Pose stream, sidecar → Unity |
 | 8897 | TCP | Supervisor single-instance lock |
+
+### Experience scenes (F-30)
+
+Eight demonstration scenes under `Scenes/`, each a camera and one GameObject with everything built
+at runtime. All of them have sound: a drone that follows whole-body energy, a movement layer, and
+event cues — synthesised at runtime, so there are no audio assets to install. They all take the same sidecar on the same port — open one and press Play. With nobody
+in front of the camera each shows a synthetic attract figure rather than a black screen.
+
+| Scene | What a visitor does | Needs hands? |
+|---|---|---|
+| `Footprints` | Stand still; the floor grows a mark that remembers how long you stayed | no |
+| `Fluid` | Move; the space swirls and keeps swirling after you stop | no |
+| `ObjectPlay` | Bat, kick and head objects; pinch to pick one up and throw it | optional |
+| `BubblePop` | Swing at bubbles. 60 s, score, combo | no |
+| `PoseMatch` | Copy a ghost pose; your joints turn green as they land | no |
+| `DepthReach` | Reach *into* rings at three real distances — the demo that needs the depth camera | no |
+| `TimeEcho` | Move; four copies of you from seconds ago trail behind | no |
+| `AirGraffiti` | Pinch thumb and finger together and draw in the air | **yes** |
+| `Bonds` | **Needs two people.** Everyone gets a colour; lines connect people and brighten as they close; touch hands to make one flare | no |
+| `SkeletonShow` | The five-mode show scene, including the trust HUD (F-28/F-29) | mode 5 only |
+
+Sound is on by default in every experience scene; `M` mutes.
+
+Shared keys in every experience: `R` reset, `H` humanized skeleton, `A` attract loop, `G` ground to
+floor, `M` mute. Some add their own — `C` clears in Air Graffiti, Footprints and Time Echo, `N` skips
+a pose in Pose Match.
+
+**Hand-driven experiences need the subject close to the camera.** At ~1.4 m 99.1% of hand
+observations are anatomically plausible; at ~2.9 m only 59.9% are. Air Graffiti and Object Play's
+grabbing say so on screen rather than failing silently, but they will frustrate at three metres.
+Everything else runs on body joints and is unaffected.
 
 ---
 
@@ -234,13 +313,71 @@ These are open. Do not describe them as done.
   pipeline does body-volume avoidance. **Not fixed.**
 * **The avatar is not proven faithful.** F-26 established that F-19's "avatar quality proven good"
   rested on four internal-consistency metrics, all of which a stably-wrong pose also satisfies.
-* **F-21 live two-person acceptance has never been run.** ADR-061's drift budget is unmeasured, and
-  single-person ownership is not a safety property on current evidence.
+* **Multi-person is UNSUPPORTED, and single-person ownership fails live.** The live two-person
+  session *has* now been run (2026-09-16) and it found a second silent wrong-person route: while
+  `LOCKED`, the ownership reference updates every accepted frame, so an observation migrating slower
+  than the switch margin slides from one human to another without failing a single test. Measured at
+  **0.015 m/frame against a 0.35 m margin — 23x under it**; 97 datagrams emitted, `target_id`
+  unchanged, zero ownership events logged (ADR-061). A mechanism exists but
+  **`drift_budget_m` defaults to `None` = disabled**, so production behaviour is unchanged; the
+  budget is deliberately unset because it is unmeasured.
+
+  Note what this layer is and is not. RTMW3D-x is a single-person top-down model — one inference,
+  one skeleton, no detector, no track id — so the pipeline cannot track several people at once and
+  F-21 does not attempt to. It exists only to hold **one** person and refuse to hand off silently.
+  Offline it is strong (75/75 unit, 63/63 across 17 scenarios, 8-person footage with 0 switches);
+  live it is not yet a safety property. Do not deploy this where a second person can enter frame.
 * **F-22 L2 hands-near-face** has not been run live.
 * **F-27 (humanized skeleton) has never run on stereo.** Both measurements used the video path,
   which synthesises every joint's depth, so every protective stage was idle.
-* **F-28 (skeleton show scene) has never run with a live camera.**
+* **F-28/F-29 (skeleton show scene) has never run with a live camera**, and F-29 has never been
+  rendered on a screen by a human — it is verified by compilation, 23 EditMode tests and a headless
+  harness that drives the real provider over a real socket with recorded packets. Every geometric
+  and numeric claim is tested; no **visual** claim is. The trust HUD's depth row has consequently
+  only ever shown `0/33 MEASURED`, because a video file has no stereo pair.
+* **Multi-person tracking exists (F-32) and now runs the full filter chain per person (F-33).**
+  P0 smoothing, P1-1 joint tracking and F-22 validation each get one instance per track id; P1-4
+  remains available and off, exactly as in the single-person sender. Two caveats stand. It has
+  **never been run with two real people in front of the camera** — all evidence is recorded video
+  and synthetic trajectories. And the filter chain costs **233 ms of lag at 30 fps**, which is not
+  new (it is the accepted single-person tuning) but should be quoted alongside any jitter figure.
+* **A slow, confident drift is still not caught.** 850 mm injected over 25 frames is followed to
+  847 mm: no single step is large enough for the displacement cap, and P1-1's residual gate adapts
+  to the joint's own scale. P1-4 catches it and P1-4 is rejected for production, so both senders
+  share this blind spot deliberately.
+* **The SINGLE-person pipeline silently produces a chimera when several people are in frame.**
+  Use `multiperson_udp_sender.py` where more than one person can appear.
+  This is the most important known limitation and it invalidated part of an earlier report (F-32).
+  `456.webm` contains seven dancers; the single-person crop migrates between them, and the emitted
+  "body" has a shoulder width varying 0.068–0.455 m — it belongs to nobody. It does not fail
+  loudly: it emits a plausible-looking skeleton, and those numbers reached a report as though they
+  measured one person. **Do not run this where more than one person can be in frame.**
+* **Range limits are less well established than previously stated.** Floor contact is stable to
+  21 mm and hands are 99.1% plausible on a clean single subject at 1.4 m; at 1.96 m hands are still
+  93.7% plausible. The much worse figures previously attributed to "2.9 m" came from the
+  seven-person clip above and measure contamination, not distance. Genuine single-subject accuracy
+  beyond ~2 m is **untested** — assume neither that it holds nor that it fails.
+  See `docs/evidence/f32/identity_contamination.txt`.
+* **F-29 hand gesture thresholds are uncalibrated.** Pinch and finger-extension thresholds are
+  derived from the distribution of ordinary hand poses in two dance clips, not from a subject
+  performing each gesture on cue. They separate open from closed on that data; they have not been
+  validated against intent.
+* **The F-31 sound layer has never been heard.** It compiles and the synthesis arithmetic is
+  checked, but `AudioClip.Create` is a Unity native call that cannot run outside a player, so every
+  judgement about how it actually sounds — levels, whether the drone masks the cues, whether it is
+  bearable for an hour — is unmade. Expect to retune; the mix constants are all named.
+* **The eight experience scenes have never been rendered.** They compile, their shared
+  tracking core is verified over a real socket with recorded packets, and F-29's 23 tests still
+  pass — but no experience's own visuals or feel have been seen. Expect to tune constants on first
+  run; they are all named, with the reasoning attached. The scene files were generated rather than
+  authored in the Editor, so if a component shows as missing, the script `.meta` GUID and the
+  scene's `m_Script` guid have diverged.
+* **`SkeletonShowBootstrap` still carries its own copy of the tracking chain.** `TrackedStage` was
+  extracted for the experiences; the F-28/F-29 scene was left alone because it is the one scene
+  carrying verified evidence and the refactor could not be visually checked. Two copies of that
+  chain will drift — this is the top follow-up.
 * **The Unity EditMode suite has not been re-run** since `kalidokitBodyTorsoRoll` changed 0 → 1.
+  F-29's own 23 tests were run outside the Editor (23/23) because the project lock was held.
 
 ---
 

@@ -193,10 +193,80 @@ namespace VirtualMirror.Core.Humanize {
         public const float BodyRadiusM = 1.6f;
 
         /// <summary>Plausible human bone lengths, metres, for the calibration's own sanity check.
-        /// A "bone" measured outside this band is rejected as a calibration sample.</summary>
+        /// A "bone" measured outside this band is rejected as a calibration sample.
+        ///
+        /// THIS IS NOW ONLY THE OUTER BACKSTOP. A single 0.01-0.80 m band cannot tell a forearm from a
+        /// femur, so it admitted a 0.55 m "forearm" (SR7, F-48) that is longer than any human one.
+        /// The test the calibrator actually applies is per bone: <see cref="MinBoneLengthM"/> /
+        /// <see cref="MaxBoneLengthM"/>.</summary>
         public const float MinBoneM = 0.01f;
 
         /// <summary>See <see cref="MinBoneM"/>. A femur is ~0.45 m on a very tall adult.</summary>
         public const float MaxBoneM = 0.80f;
+
+        // ---- PER-BONE ANATOMICAL RANGES (F-48) ------------------------------------------------------
+        // Each band is the adult range for that segment, widened at both ends for the difference
+        // between a skeletal joint centre and the point a landmark model actually places (a hip
+        // landmark sits nearer the trochanter than the joint centre; a wrist landmark sits at the
+        // wrist crease, not the styloid). Bands are deliberately generous at the SMALL end so that a
+        // child of ~1.2 m still calibrates, and tight enough at the LARGE end that the failures this
+        // exists for - a stretched limb from an inferred-depth sample - fall outside them. Sources are
+        // adult anthropometric survey ranges (ANSUR II, 1st-99th percentile), not tuning.
+        //
+        //   segment                       adult range     band used
+        //   half hip width                0.08 - 0.19     0.05 - 0.22
+        //   trunk (mid-hip to mid-shldr)  0.40 - 0.62     0.30 - 0.70
+        //   half shoulder width           0.16 - 0.23     0.10 - 0.28
+        //   neck to nose                  0.20 - 0.32     0.12 - 0.40
+        //   upper arm (acromion-elbow)    0.28 - 0.40     0.20 - 0.45
+        //   forearm (elbow-wrist)         0.22 - 0.32     0.15 - 0.38
+        //   thigh (hip-knee)              0.36 - 0.52     0.28 - 0.58
+        //   shin (knee-ankle)             0.34 - 0.48     0.26 - 0.55
+        //   heel (ankle-heel)             0.05 - 0.13     0.03 - 0.20
+        //   toe (ankle-big toe)           0.13 - 0.25     0.08 - 0.32
+        //   hand point (wrist-finger)     0.04 - 0.20     0.02 - 0.25
+        //
+        // Indexed by position in <see cref="Bones"/>.
+        private static readonly float[] BoneMinM = {
+            0.05f, 0.05f, 0.30f, 0.10f, 0.10f, 0.12f,                  // trunk
+            0.20f, 0.15f, 0.20f, 0.15f,                                // arms
+            0.28f, 0.26f, 0.28f, 0.26f,                                // legs
+            0.03f, 0.08f, 0.03f, 0.08f,                                // feet
+            0.02f, 0.02f, 0.02f, 0.02f, 0.02f, 0.02f,                  // hands
+        };
+
+        private static readonly float[] BoneMaxM = {
+            0.22f, 0.22f, 0.70f, 0.28f, 0.28f, 0.40f,
+            0.45f, 0.38f, 0.45f, 0.38f,
+            0.58f, 0.55f, 0.58f, 0.55f,
+            0.20f, 0.32f, 0.20f, 0.32f,
+            0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
+        };
+
+        /// <summary>Shortest length a human segment can have, for the bone at this index in
+        /// <see cref="Bones"/>. An out-of-range index returns the global backstop.</summary>
+        public static float MinBoneLengthM(int bone) {
+            if (bone < 0 || bone >= BoneMinM.Length) {
+                return MinBoneM;
+            }
+            return BoneMinM[bone];
+        }
+
+        /// <summary>Longest length a human segment can have, for the bone at this index in
+        /// <see cref="Bones"/>. An out-of-range index returns the global backstop.</summary>
+        public static float MaxBoneLengthM(int bone) {
+            if (bone < 0 || bone >= BoneMaxM.Length) {
+                return MaxBoneM;
+            }
+            return BoneMaxM[bone];
+        }
+
+        /// <summary>True when <paramref name="length"/> is a possible length for this bone.</summary>
+        public static bool IsPlausibleBoneLength(int bone, float length) {
+            if (float.IsNaN(length) || float.IsInfinity(length)) {
+                return false;
+            }
+            return length >= MinBoneLengthM(bone) && length <= MaxBoneLengthM(bone);
+        }
     }
 }

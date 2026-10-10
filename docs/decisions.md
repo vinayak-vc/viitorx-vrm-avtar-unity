@@ -2552,3 +2552,1964 @@ cross-group harness imports   9 sampled, all resolve
 supervisor end-to-end         3/3 start/stop cycles, READY ~13 s, no orphan, ports released
 duplicate scan after merge    0 pairs, 0 duplicated functions
 ```
+
+---
+
+## ADR-056 / ADR-061 addendum (2026-09-16) — the cited F-21 images were lost, and why they could not all come back
+
+**What happened.** The v1 cleanup deleted the untracked bulk under `oak_v4_evidence/`. That removal
+was checked against the *tracked* file list — no tracked file was touched — but it was never checked
+against the **documentation's** citations, and the F-21 images were untracked. Eight cited paths went
+with it:
+
+```text
+f21/handoff/123_handoff_f00621_owner_before_loss.png            ADR-056
+f21/handoff/123_handoff_f00628_other_body_at_loss.png           ADR-056
+f21/handoff/123_handoff_f00690_reacquired_as_same_target.png    ADR-056
+f21/wrongperson/frames/123_residual_f00014.png                  F-21 report
+f21/walkin/s34_evidence/                                        ADR-061  (incl. run3_rep3_peakdrift_t122.png)
+f21/live/attempt1_inconclusive/                                 F-21 report SS_live
+f21/live/attempt2_device_crash/                                 F-21 report SS_live
+f21/supervisor_integration/cue_render.png                       F-21 report
+```
+
+**Root cause, and it is not the cleanup.** Those files could never have been committed. `.gitignore`
+carried a blanket `oak_v4_evidence/` (directory form) as its final rule, *after* the careful
+`!oak_v4_evidence/f21/**/*.png` negations. Git cannot re-include a file whose parent directory is
+excluded, so every one of those negations was dead and `git add` silently refused the images. The
+rule has been removed and replaced with a comment explaining why it must not come back; `git add
+--dry-run` now accepts the PNGs and still refuses the bulk `*_rows.jsonl` streams, as intended.
+
+**What was regenerated (2026-09-16), now tracked:**
+
+`f21_wrongperson_replay.py --video ../../video/123.webm --dump` reproduces the residual-frame
+evidence, and produces *more* than the original single frame: the same three frames under all four
+arms, so the comparison is visible rather than asserted. Stored at 50 % scale per this tree's stated
+policy (1.1 MB total; regenerate full resolution from the harness).
+
+```text
+ARM                 emitted     held    WRONG   episodes  releases   switch
+OWNERSHIP_OFF           775        0      102          2         0        0
+PATH_OFF                500      275       40          2         0        0
+PATH_ON                 404      371        2          1         1        1
+PATH_ON_NO_F22          404      371        2          1         1        1
+```
+
+**What could NOT be regenerated, and the reason is informative:**
+
+* **ADR-056's three hand-off frames.** Re-running `f21_handoff_forensics.py` on the same clip today
+  reports `VERDICT: NO HAND-OFF CANDIDATES` — because ADR-057 *fixed* the defect those images
+  documented. The evidence is unreproducible precisely because the bug is gone. That run's
+  `123_forensics.json` is committed as the post-fix record; reproducing the original images would
+  mean checking out pre-ADR-057 `target_ownership.py`.
+* **ADR-061's live imagery and both earlier live attempts.** Live two-person captures. There is no
+  way to regenerate these without running the session again with two people, which is the session
+  §34.5 already calls for.
+
+**Standing consequence.** ADR-061's reasoning and its measured numbers survive in prose; its
+*imaged* corroboration does not. The drift finding therefore rests on a 2 Hz preview sample and the
+`sent` counter, exactly as the ADR's own "honest limit of this measurement" paragraph already warned
+— that limit is now the only record. The next live session should capture and **commit** the frames,
+not merely write them to disk.
+
+---
+
+## ADR-066 — The pipeline publishes its own verdict on the wire (the F-29 trust channel)
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-061 (F-21 ownership), P1-1 (joint tracker), P1-4 (kinematic recovery), F-20A (`sid`).
+
+### Context
+
+P1-1's tracker, P1-4's recovery, F-22's validation and F-21's ownership each decide something about
+every joint of every frame. All of that reasoning reached a log file and nothing else. On screen a
+confidently measured elbow and one being extrapolated through an occlusion are the same white dot, so
+a viewer cannot tell a working system from a lucky one — and neither can an operator standing next to
+the installation. The most expensive engineering in the project was invisible.
+
+### Decision
+
+The sidecar publishes three OPTIONAL, READ-ONLY fields: `st` (P1-1/P1-4 state per JointId), `own`
+(F-21 ownership state) and `lat` (measured camera-to-payload latency, ms). Unity surfaces them
+through `TrackingTelemetry` / `OakDUdpPoseProvider.TryGetTelemetry`.
+
+Three properties were treated as non-negotiable:
+
+1. **Nothing reads them back.** They echo decisions already made. No tracking behaviour changes
+   because of them, so the diagnosis can never become the thing being diagnosed.
+2. **Optional, exactly as `sid` was.** A consumer that ignores them behaves as before; a sender that
+   omits them is reported as *not having a trust channel*, which is a different statement from
+   "everything is untracked".
+3. **`-1` is a claim, not padding.** Only the 12 joints in `DEFAULT_TRACKED` have a tracker.
+   Reporting the other 21 as TRACKED would overstate what the system knows.
+
+`st` is captured **after** P1-4, so it describes the geometry actually emitted — reading it before
+recovery would report LOST for a joint that was reconstructed and sent, and the HUD would contradict
+the skeleton drawn beside it.
+
+### Consequences
+
+* `TrackingTelemetry` is a side-channel, not a `PoseFrame` field. `PoseFrame` is the tracking
+  contract every consumer reads; a contract that accumulates each caller's extras stops being one.
+* The video harness now runs the real `SkeletonTracker` and `TargetOwnership` so the only testable
+  path reports genuine states. Geometry is deliberately **not** written back there, which keeps that
+  harness's emitted landmarks byte-identical to before and every `src` flag honestly 0.
+* An implementation trap, recorded because it cost a debugging cycle: age was first computed as
+  `UtcNow − arrivalStopwatchTime`. The provider's arrival stamp is a Stopwatch since start, not an
+  epoch, so the result was the epoch itself — 1.79 × 10¹² ms. `SendEpochSeconds` and `ArrivalSeconds`
+  are now separate, separately named fields with the hazard documented on both.
+
+### Alternatives rejected
+
+* **Widen `PoseFrame`.** Rejected: see above.
+* **Infer state in Unity from confidence.** Rejected — confidence is not validity, which is the
+  finding P1-1 exists because of (a limb can sit at a wrong position with confidence ~0.63).
+
+---
+
+## ADR-067 — Experiences are separate scenes over one shared tracking core
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-066, F-28 (skeleton show), F-27 (humanized skeleton), F-29 (feet, hands, attract).
+
+### Context
+
+Seven demonstration experiences were wanted, each in its own scene. F-28's bootstrap had grown the
+whole chain inside one MonoBehaviour — provider, converter, humanized layer, world pose, hands, trust
+channel, attract loop, presence gate, grounding. Copying that per scene is ~120 lines each, and a copy
+of *this* chain is worse than most: the subtle parts are exactly what a copy gets wrong. Advance the
+humanized layer once per **pose**, not per frame (F-27 measured per-frame advancement making the
+stream jump *more* than the raw one). Never let the attract figure carry telemetry. Keep the
+grounding loop slower than the floor estimator it feeds back through.
+
+### Decision
+
+`TrackedStage` owns everything between the socket and a usable body. `ExperienceBase` owns the shared
+staging, HUD and keys. Each experience is one `MonoBehaviour` in one scene containing a camera and one
+GameObject; everything visible is built at runtime.
+
+**`TrackedStage` is a plain class, not a MonoBehaviour.** As a component, each experience would read
+it in its own `Update` and Unity's arbitrary script execution order would decide whether the pose was
+this frame's or last frame's. `ExperienceBase` calls `Stage.Tick(dt)` and *then* `Play(dt)` — the
+ordering is in the code rather than in a project setting nobody inspects.
+
+**`ScoringAllowed` is part of the base class**, not left to each experience. The attract figure is
+synthetic; drawing it is right and scoring it is a lie. Fluid is the deliberate exception because
+nothing there is scored.
+
+### Consequences
+
+* New assembly `VirtualMirror.Experiences`, referencing `SkeletonShow` for the pose/hand/attract
+  types. The existing assemblies keep their dependency surfaces.
+* `SkeletonPose` gained per-joint `Velocity`, because anything reacting directionally to the body
+  needs a direction and `Speed` is a scalar. **`|Velocity|` is not `Speed`:** they agree exactly on
+  straight-line motion (measured 1.000 vs 1.000 m/s) but the smoothed vector partly cancels on
+  reversing motion (measured mean ratio 0.678 on a dancing subject, max 0.999, and `|Velocity| ≤
+  Speed` always). Take **direction** from `Velocity` and **magnitude** from `Speed`; using
+  `|Velocity|` as a speed under-reports a hard swing by about a third, landing the most vigorous
+  movement as the weakest hit.
+* **Known debt:** `SkeletonShowBootstrap` still carries its own copy of the chain. It was left alone
+  because it is the scene carrying verified F-28/F-29 evidence and the refactor could not be visually
+  checked while the Editor held the project lock. Two copies will drift. This is the top follow-up.
+
+### Alternatives rejected
+
+* **One scene with a mode switcher**, as F-28 does. Rejected for seven experiences: a mode owns
+  everything it creates and tears it down on switch, which is right for three visual treatments of
+  one skeleton and wrong for seven interactions with their own state, scoring and tuning.
+* **Unity physics for `ObjectPlay`.** Rejected: the tracked body is not a rigidbody and never will
+  be — it teleports between frames, and a physics engine resolves a teleporting collider by launching
+  whatever it touches across the room. The joints' measured velocity is the interesting input and a
+  kinematic collider discards it.
+
+---
+
+## ADR-068 — Sound is a shared layer, synthesised at runtime, and every pitch is pentatonic
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-067 (experience scaffold), F-28 §7.4 (which first recorded "no audio").
+
+### Context
+
+F-28 §7.4 listed "no audio" as missing when there were three modes. There are now nine scenes and the
+project contains no `AudioSource`, no `AudioClip` and no sound of any kind. An installation without
+sound is half an installation — visitors feel the absence before they can name it, and a silent room
+reads as a screensaver rather than as a thing that has noticed them.
+
+Every hook already existed: a bubble pops, a footprint blooms, an object is struck, a pose is
+matched, a person walks up. They simply made no noise.
+
+### Decision 1 — a layer on `ExperienceBase`, not a ninth scene
+
+`ExperienceAudio` is built and ticked by `ExperienceBase`, so all nine scenes get a drone that
+follows whole-body energy, a movement layer that follows extremity speed, and an arrival/departure
+cue from the presence gate — without any of them being edited. A subclass only calls `Play` for
+things that actually happened. Adding a "sound experience" instead would have left the other eight
+silent, which is a far worse return for the same work.
+
+### Decision 2 — synthesise at runtime; ship no audio assets
+
+No `.wav` files, no import settings, no licence questions, and the scene stays a camera and one
+GameObject — the same rule the visuals already follow. Clips are built once during `Build`; nothing
+allocates per frame. The drone's partials are snapped to frequencies that complete a whole number of
+cycles in the buffer, because a loop that does not close clicks once per cycle.
+
+### Decision 3 — every pitch comes from a pentatonic scale
+
+This is the decision that determines whether the room is bearable after an hour. A moving person is
+an effectively random trigger source, and random semitones sound like a fault within about four
+notes. A major pentatonic set contains no clashing interval, so **any** combination a visitor happens
+to play is consonant. `Play` therefore takes a scale DEGREE rather than a frequency: a caller can
+compose a rising run (a combo, petals opening) and is structurally unable to produce a wrong note.
+
+### Consequences
+
+* Continuous layers are smoothed hard (0.35 s for the drone). Audio amplitude reacts far more harshly
+  to a step than colour does; an un-smoothed gain follows the tracker's own jitter and produces a
+  crackle rather than a swell.
+* Sources are 2D (`spatialBlend = 0`). The sound belongs to the room, not to a point in it;
+  spatialising a drone makes it swing across the speakers as the body moves.
+* `ExperienceAudio.Build` adds an `AudioListener` if none exists. The scene template carries one on
+  the camera, but `ShowStage` will create a bare camera when none is present, and a silent
+  installation with no error is the worst possible way to discover that.
+* `M` mutes. `Volume = 0` silences without changing any other behaviour, so a noisy room can be
+  quietened without stopping the experience.
+* **Untested acoustically.** The synthesis is arithmetic and compiles, but `AudioClip.Create` is a
+  native call, so none of it can run headlessly — nobody has heard any of it.
+
+---
+
+## ADR-069 — Time Echo: replay the person to defeat the single-person limit
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Related:** ADR-061 (F-21 ownership), ADR-067 (experience scaffold).
+
+### Context
+
+The hardest limitation in the project is that RTMW3D-x is a single-person top-down model with no
+detector and no track id. F-21's live two-person acceptance FAILED on 2026-09-16, and multi-person is
+a model change rather than a scene change. Every experience so far therefore shows exactly one body.
+
+### Decision
+
+Record the tracked pose into a fixed ring and draw several delayed copies of it. One person becomes a
+crowd without touching the tracking at all — the constraint becomes the subject.
+
+Nothing on screen is newly sensed: it is replay of pose data already validated, so this cannot fail
+in a way the existing pipeline does not already fail. It uses body joints only, so it works at the
+distance where hands are known to be unreliable and needs no floor precision.
+
+### Consequences
+
+* **World positions are stored, not hip-relative ones.** An echo is a record of where the body
+  actually WAS and must stay there as the person walks away; re-staging hip-relative poses would glue
+  every echo to the live body and destroy the effect. The cost is that the slow grounding correction
+  is baked into old frames — at a 1.5 s time constant and a few centimetres, far below visible.
+* **Nearest frame, not interpolated.** At the 60 Hz record rate the worst error is 8 ms of motion,
+  and interpolating across two frames would blend a real pose with a dropped one whenever tracking
+  flickered, producing a body that was never in that position. P1-3 interpolates the LIVE pose
+  because latency matters there; here it does not.
+* **Recording is at a fixed rate, not per render frame.** A buffer whose span depends on frame rate
+  would change how far back the echoes reach whenever the scene got busier.
+* **Colour means AGE here, not speed** — the same trade the trust HUD makes, for the same reason:
+  two meanings on one channel is unreadable, and the subject of this mode is time.
+* `EchoBuffer` is a top-level, clock-injected class rather than a private detail, because a
+  mis-indexed ring shows a plausible body at slightly the wrong time and no viewer can tell. Eight
+  unit tests pin it, including the post-wrap case.
+
+---
+
+## ADR-070 — Multi-person: detector on the VPU, optimal assignment on the host, additive wire
+
+**Date:** 2026-09-17
+**Status:** Accepted
+**Supersedes:** ADR-061 (F-21 single-person ownership) **for the multi-person path only** — the
+single-person sender keeps it unchanged. **Related:** ADR-016, ADR-018, ADR-066, ADR-067.
+
+### Context
+
+RTMW3D-x is a single-person top-down model: one crop in, one skeleton out, no detector, no track id.
+F-21 held ONE person and refused silent hand-off; its live two-person acceptance failed.
+
+F-32 measured what actually happens on multi-person input, and it is worse than "only tracks one
+person": on a seven-dancer clip the pipeline emits a body whose shoulder width ranges 0.068–0.455 m
+with no frame-to-frame jump above 172 mm. It is a chimera assembled from whichever dancers fall
+inside the migrating crop, and it does not fail loudly — those numbers reached an earlier report as
+though they measured one person. You cannot fix that with a better gate on one target.
+
+### Decision 1 — a real person detector, on the OAK-D VPU
+
+`person-detection-retail-0013`, fed letterboxed at 544×320. Measured against the BlazePose detector
+already vendored on disk: median 7 of 7 people versus 1–5, with tight separated boxes versus sloppy
+overlapping ones. BlazePose is a single-prominent-subject detector and its 224×224 input leaves each
+dancer ~18 px wide.
+
+It runs on the VPU, which was doing nothing but stereo. Measured: RGB 29.8 → **29.7** fps, depth
+29.6 → 29.4, detector 11.4 fps. It is free to the existing streams. 11.4 Hz is ample because
+detection is an **enrolment** source — tracks carry identity between detections.
+
+**Non-negotiable config:** the NN input must be non-blocking with queue size 1. A blocking input
+back-pressures `ColorCamera.preview`, which the production RGB output also consumes, and RGB
+collapses to 12.3 fps.
+
+### Decision 2 — optimal assignment, not greedy
+
+Greedy nearest-neighbour is suboptimal on **54.6% of random 4×4 cost matrices** (measured), and its
+failure mode is exactly an ID swap between crossing people — the case multi-person tracking is judged
+on. `assignment.py` is a pure-numpy O(n³) shortest-augmenting-path solver, verified optimal against
+brute force on 200 random rectangular matrices. scipy is not in the venv and is not worth ~30 MB of
+transitive dependency for one function.
+
+### Decision 3 — associate in 3-D, because this rig can
+
+Every published tracker associates on image-plane IoU because a webcam gives nothing else. This rig
+has metric depth per detection. Two people overlapping on screen at different distances have
+near-perfect IoU and are trivially separable in Z. Depth is a first-class association term here, with
+IoU-style image distance as the fallback when depth sampling fails.
+
+### Decision 4 — the wire is ADDITIVE, so nothing breaks
+
+The multi-person sender publishes a `persons` array **and** republishes the most-established person
+at the payload root in the exact single-person shape. The VRM mirror app, `OakDUdpPoseProvider`, the
+P1-3 buffer and all nine experience scenes therefore consume it unchanged and unaware. Verified:
+`root lm == persons[0].lm` on every packet, and the Unity acceptance run confirms `Pose` and
+`Bodies[0]` are the same person across 752 frames.
+
+Cost: one duplicated person, ~6 KB of a ~9.3 KB payload. `--no-legacy-primary` drops it.
+
+### Decision 5 — a NEW sender file, not a rewrite of the production one
+
+`wholebody_udp_sender.py` carries the whole measured single-person stack — P0, P1-1, P1-4, F-21,
+F-22, F-08 — all accepted on live evidence. Rewriting it in place for an unproven feature would put
+every one of those results at risk. `multiperson_udp_sender.py` imports its building blocks
+(`build_body_landmarks`, `build_hand`, `build_joint_states`) so there is one definition of the
+landmark contract, and leaves the production path byte-identical.
+
+### Consequences
+
+* **Budget, measured:** RTMW3D is 20.7 ms p50 with a FIXED batch of 1 — no dynamic batch axis — so N
+  people cost N sequential inferences. 2 → 24 fps, 3 → 16 fps, 4 → 12 fps. `--max-poses` defaults to
+  3. The tracker emits most-established-first so the cap drops the least-established people.
+* **Multi-person output is RAWER than single-person.** No P0 smoother, no P1-1, no P1-4, no F-22 per
+  person. Those need one filter instance per track id with a lifecycle tied to it. This is the
+  obvious next step and is NOT done. **[Superseded by ADR-071 — it is done.]**
+* **The crowd is not P1-3 interpolated.** That buffer reconstructs one body at a presentation time
+  and has no concept of identity; interpolating a crowd means matching people across two buffered
+  frames, which is the tracker's job and already done upstream.
+* **Placement:** landmarks are hip-relative, so each person must be offset by their own measured
+  mid-hip relative to the primary's. Staging them all at one origin draws the crowd on top of itself
+  — measured as a 0.00 m mean pair gap across 850 frames before this was fixed. Y is not offset;
+  vertical placement belongs to the grounding loop.
+* **An experience keyed on a track id is safe**: ids are stable while held and never reused.
+
+### Alternatives rejected
+
+* **Generalise F-21 ownership to N targets.** Rejected: it is a single-target state machine whose
+  signals (one hip, one scale) and whose whole purpose (refuse hand-off) do not generalise. The
+  multi-person problem is an assignment problem, not a gating problem.
+* **A ReID / appearance model.** Rejected for now: it is a third network on an already-contended
+  budget, and 3-D position association is a stronger signal here than appearance would be at this
+  resolution. Revisit if long occlusions prove to be the dominant failure.
+* **Batch N crops into one RTMW3D inference.** Not possible without re-exporting the ONNX: the input
+  is fixed at [1,3,384,288] with no batch axis.
+
+---
+
+## ADR-071 — Per-person filter chains, keyed on the track id, with a self-measured sample rate
+
+**Feature:** F-33. **Report:** [`F33_PER_PERSON_FILTERS_2026-09-17.md`](F33_PER_PERSON_FILTERS_2026-09-17.md).
+**Date:** 2026-09-17
+**Status:** Accepted
+**Completes:** ADR-070's stated gap ("multi-person output is RAWER than single-person… this is the
+obvious next step and is NOT done"). **Related:** ADR-016 (P0 smoothing), ADR-018 (bounded hold),
+ADR-020 (single-owner smoothing), ADR-063, ADR-067.
+
+### Context
+
+Every stage of the measured single-person chain — P0's One-Euro, its displacement cap and bounded
+hold, P1-1's per-joint state machine, F-22's bend history — is a **temporal** filter. All of that
+state belongs to a person, and none of it is in the frame. F-32 therefore shipped multi-person with
+the entire chain switched off, and said so.
+
+Turning it on is not a matter of instantiating the modules. Two things make it a design decision.
+
+### Decision 1 — a POOL keyed on track id, not a list keyed on position
+
+`PersonTracker.update()` returns people most-established-first, so a person's **index changes**
+whenever somebody else gains a hit. A bank addressed by index hands person A's One-Euro history to
+person B on that frame: every joint appears to teleport, and the displacement cap then spends
+several frames slewing the two bodies into each other. Track ids are stable and never reused, which
+is exactly the property a temporal filter needs. Unity's `TrackedStage.UpdateCrowd` had already
+reached the same conclusion for `SkeletonPose`; this is the sidecar half of it.
+
+Lifecycle is **idle-based, not event-based**: a chain is dropped 3.0 s after its person stops being
+seen. Forwarding the tracker's RELEASED events would work until a caller forgot to drain them, and
+the failure mode of that is a slow leak over an evening's run.
+
+The pool keeps **two clocks**, and conflating them was a real defect caught by its own test.
+`last_seen_at` is lifecycle — a person whose pose failed this frame is still in the room.
+`last_update_at` is the rate estimate — a frame that produced no sample is not a sample interval.
+One clock released the chain of anyone whose hips went unconfident for three seconds, mid-session,
+while they stood there.
+
+### Decision 2 — each person MEASURES their own sample rate
+
+`KeypointSmoother` takes `freq` once at construction; the single-person sender leaves it at 30.0,
+which is true there. It is not true here: three people cost three sequential 20.7 ms pose solves, so
+the loop runs at ~16 fps, and a person below `--max-poses` is updated rarer still.
+
+One-Euro derives velocity as `delta * freq`. Told 30 while sampled at 16, it over-estimates speed by
+1.9×, inflates its adaptive cutoff and **opens up** exactly when it should damp — so the naive port
+is worse on *both* axes at once. Measured against known ground truth
+(`docs/evidence/f33/filter_bench.txt`):
+
+| 10 fps | jitter median | lag |
+|---|---|---|
+| no filters at all | 33.5 mm | 0 ms |
+| told `freq=30` (naive port) | **35.6 mm** | 400 ms |
+| self-measured rate | 29.9 mm | 200 ms |
+
+The naive port is **worse than not filtering** on the median frame while costing 400 ms of lag.
+Each person therefore takes the median of their last 15 update gaps — median, not mean, so one
+skipped frame cannot move it — and retunes their own filters. `smoothing.py` gained `set_freq()` to
+allow it; the change is purely additive and the single-person sender never calls it.
+
+### Decision 3 — the FEET and the HEAD join the filter group
+
+This is the one place the chain deliberately differs from the single-person sender, and it was found
+by looking at what the first filtered run still got wrong.
+
+The single-person limb set is `{5..16} ∪ {91..132}`. It contains neither the feet (WholeBody 17–22)
+nor the head (0–4), so both got the light image-plane One-Euro and nothing else — no heavy depth
+cutoff, no bounded hold, no tightened displacement cap. Both then produced the worst artefacts in
+the filtered run, **for opposite reasons**: the feet fail with `src=0` (no depth, so the point is
+rebuilt from the model's raw monocular z every frame — the **hold** is the fix), the head fails with
+`src=1` (depth *was* sampled, from a window straddling the edge of the head and catching the wall
+behind it — the **displacement cap** is the fix).
+
+Single-frame steps over 300 mm — 9 m/s, not a person — over 2060 person-frames of identical input:
+
+| | steps > 300 mm | worst step |
+|---|---|---|
+| no filters (raw F-32) | 2158 | 2091 mm |
+| filters, single-person grouping | 630 | 2018 mm |
+| **filters + feet + head** | **77** | **960 mm** |
+
+The change moved the distal, trunk and hip figures by 0.0% to the decimal and emitted exactly the
+same 40 200 joints — it touched only the joints it targets, which is why it is a grouping fix rather
+than a tuning accident. `--no-filter-feet` / `--no-filter-head` restore the single-person grouping
+exactly, which is how that table was produced.
+
+It is not cosmetic: F-29 put the feet on the wire and `FootprintsExperience` reads heel and toe
+directly, so an unfiltered heel is a footprint appearing two metres from the person who made it.
+
+### Consequences
+
+* **At 30 fps the multi-person chain IS the single-person chain** — same modules, same constants,
+  same measured result. Below 30 fps it is better, because it knows its own rate.
+* **Cost 0.88 ms per person-frame**, against 20.7 ms for the pose solve it follows — about 4%.
+* **1.1 points fewer joints emitted** (60.2% → 59.1%). That is the chain refusing a joint it does
+  not believe; a refused joint arrives as `[0,0,0,0]`, byte-identical to a real occlusion, and
+  Unity's P0 LimbGate still makes the final call. Safety does not move into this repo (AGENTS.md §2).
+* **Lag is 233 ms at 30 fps and is not new** — it is the accepted single-person tuning
+  (`--min-cutoff 0.5`, `--beta 0.4`). Stated because a jitter figure without a lag figure means
+  nothing.
+* **`wholebody_udp_sender.py` stays byte-identical.** The constants are duplicated in
+  `FilterConfig`, and `tests/test_person_filters.py` reads the sender's source and fails if any of
+  them drifts apart.
+* **P1-4 is reachable and OFF**, exactly as in production. A slow confident drift is still followed
+  (847 mm of an injected 850 mm); P1-4 catches it (264 mm) and remains rejected. Multi-person
+  inherits the single-person blind spot deliberately, and a test pins that limitation rather than
+  hiding it.
+* **P1-1's horizons are still counted in FRAMES**, so a 6-frame prediction spans ~375 ms at 16 fps
+  against ~200 ms in the single-person loop. Only P0 adapts to the real rate.
+* **The wire is unchanged in shape**, so Unity needed no change. The `st` field now carries real
+  per-joint states per person instead of all `-1`.
+
+### Alternatives rejected
+
+* **One shared filter bank, reset when the crowd changes.** Rejected: it discards everyone's history
+  whenever anyone arrives or leaves, which is the moment the filters are needed most.
+* **Address banks by list index and re-sort them each frame.** Rejected: it needs a correct
+  permutation every frame to avoid the exact cross-contamination a track id gives for free.
+* **Add `dt` to `KeypointSmoother.filter()`.** Rejected: it changes a signature the production
+  single-person sender calls 133 times a frame, for a problem that only exists here. `set_freq()` is
+  additive and leaves that path byte-identical.
+* **Rewrite `wholebody_udp_sender.py` to be N-person and delete the duplication.** Rejected for the
+  same reason ADR-070 gave: it puts every accepted single-person measurement at risk for a feature
+  that is still new. The duplication is guarded by a drift test instead.
+* **Tighten the hip displacement cap.** Rejected for now: the 77 residual implausible steps are
+  dominated by whole-body origin shifts, but three events over 2060 person-frames is not enough
+  evidence to retune a constant that was tuned on live data (AGENTS.md §10).
+
+---
+
+## ADR-072 — A crowd experience must be SYMMETRIC IN ITS PARTICIPANTS, because an identity switch cannot be detected
+
+Date: 2026-09-17
+Status: Accepted
+Supersedes: nothing. Extends ADR-067 (experiences are separate scenes over one shared tracking core)
+and ADR-070 (multi-person: detector on the VPU, optimal assignment on the host).
+Report: `F34_CROWD_EXPERIENCES_2026-09-17.md`
+Evidence: `evidence/f34/`
+
+### Context
+
+F-32 put a crowd on the wire and F-33 gave each person a real filter chain. That unlocked a long list
+of multi-person experience ideas, and the question was which of them can honestly be built.
+
+The answer is decided by one measurement. **The live two-person session measured an identity
+migrating between two humans at 0.015 m per frame against a 0.35 m association margin — 97
+datagrams, zero events logged.** Roughly 0.24 m/s: well inside ordinary human movement, three orders
+of magnitude below anything a discontinuity test could catch, and with nothing in the stream marking
+it.
+
+That rules out the obvious defence. "Detect a switch and freeze the score" cannot be written, because
+nothing announces one. It also rules out treating it as rare: it happened in the first live
+two-person session anybody ran.
+
+### Decision
+
+**An experience may only be built on quantities that are symmetric in the people and computed from
+the current frame.** Concretely:
+
+1. **No per-person accumulated state may be presented as a score.** Not points, not a streak, not a
+   hold timer, not a leaderboard. If exchanging two people's labels would change what is on screen,
+   the design is wrong.
+2. **Accumulated state is allowed when it belongs to something that is not a person** — a rally, a
+   circuit, a light's drift, a floor. Those survive a switch because a switch does not touch them.
+3. **Every deliberate exception is named in the class header**, with what a switch costs. F-34 has
+   exactly three, all bounded: colour (two people trade colours), a pass count (one off-by-one in a
+   shared total), and a crown-change chime (one spurious chime that nothing depends on).
+4. **The symmetry claim goes in a test, not a comment.** The two measures a crowd scene may take live
+   in `CrowdMath` as pure static functions for exactly this reason; `FluidField`'s injection is
+   likewise asserted order-independent. A claim like this is too easy to break silently.
+
+A fourth rule follows from the same reasoning but is about presence rather than identity:
+**`PresenceGate` is not a crowd signal.** It answers "is there *a* person", so it never changes in a
+crowd. Arrivals and departures come from `CrowdRoster`, keyed on the track id, and exist to **release
+resources** — a voice, a slot — never to start or stop a score.
+
+### Consequences
+
+* **Nine scenes shipped** and several obvious ones deliberately did not. Head-to-head Bubble Pop,
+  a hold-the-crown timer in Podium and a per-pair streak in Mirror Each Other were all designed out,
+  and the reason is recorded in each file rather than left as an absence.
+* **`SkeletonPose` gained `ResetHistory()` and a 12 m/s mid-hip guard.** It does *not* catch the slow
+  switch above — nothing can — but it does catch the two detectable cases, one of which was a live
+  latent bug: `TrackedStage` snaps its ground offset on first floor acquisition, which moved the
+  staging origin by up to a metre in one frame and produced a whole-body speed spike above every
+  strike gate at once.
+* **`ExperienceBase.ResetsOnNewVisitor` defaults to true**, so the ten single-person scenes are
+  behaviourally untouched. All nine crowd scenes set it false.
+* **Two shipped scenes were migrated onto shared logic** (`FluidField`, `FloorMarks`) rather than
+  having it copied. They need a play-mode smoke test; that is the cost of not having two fluids that
+  drift apart.
+* **The three movement thresholds are now in one place with their caveat attached** and have NOT been
+  re-measured at 16 fps. A test pins the current values so a re-measurement is deliberate.
+* **Nothing here has been on a screen.** The decision is about what is buildable, and what shipped is
+  verified to compile and to satisfy its symmetry claims. §8 of the report lists what the camera has
+  to confirm.
+
+### Alternatives rejected
+
+* **Detect the switch and compensate.** Rejected on the measurement: 0.015 m/frame against a 0.35 m
+  margin with nothing logged. There is no signal to trigger on. Building a detector anyway would have
+  produced a guard that fires never and is believed to work.
+* **Tighten the tracker's association margin so switches stop happening.** Rejected as out of scope
+  and probably a trade rather than a fix — a tighter margin drops identities under occlusion, which
+  is the failure the margin exists to prevent. Worth measuring separately; it does not change what an
+  experience should be built on, because no margin makes a switch *impossible*.
+* **Ship per-player scores and accept the occasional wrong one.** Rejected: the failure is
+  maximally visible and unexplainable to the person it happens to — they watch their points appear on
+  somebody else's counter. An installation cannot apologise.
+* **Key experience state on list position instead of the track id.** Rejected for the reason
+  ADR-071 already gives on the sidecar side: `TrackedStage` re-sorts most-established-first every
+  frame, so position-keyed state cross-contaminates on every frame rather than only on a switch.
+* **Rebuild Bonds as the "constellation" scene.** Rejected: it already is one. Only its private
+  colour table moved out, so a person keeps their colour across every crowd scene.
+* **Migrate `ObjectPlayExperience` onto Pass's ball physics.** Rejected: the divergence is measured,
+  not accidental. Objects grabs by pinch, and hand plausibility falls from 99.1% on a single subject
+  at 1.4 m to 59.9% on the seven-person clip, so a crowd scene cannot use that channel at all.
+
+---
+
+## ADR-073 — Every demonstration scene is in Build Settings, and the menu checks anyway
+
+Date: 2026-09-17
+Status: Accepted
+Extends: ADR-067 (experiences are separate scenes over one shared tracking core)
+Report: `F35_SCENE_LAUNCHER_2026-09-17.md`
+Evidence: `evidence/f35/`
+
+### Context
+
+ADR-067 made every experience its own scene, which is why there are now nineteen of them plus the
+production app. Picking one meant finding it in the Project window and double-clicking it — fine for
+the person who wrote them, useless for anyone demonstrating the system, and impossible in a build.
+
+Two facts shaped the answer:
+
+* **`SceneManager.LoadScene` only works for a scene in Build Settings**, and its failure for one that
+  is not is a console error *after* the click. The symptom is a button that does nothing.
+* **Ten of the nineteen scenes do nothing on their own.** Somebody standing alone in front of Chain
+  or Mirror Each Other sees a scene that appears broken, and the fix is a second person or a
+  different sidecar — neither of which the scene can tell them before they choose it.
+
+### Decision
+
+1. **All 20 launchable scenes are registered in `EditorBuildSettings.asset`, enabled.** This is what
+   makes them loadable at runtime, in the Editor and in a player. They are camera-and-one-GameObject
+   scenes, so the build cost is negligible — but it is a real change to what ships, and it is
+   recorded here so nobody removes them wondering what they are for.
+2. **`License-Verifier` stays at index 0.** The startup scene of a build is unchanged. Opening a
+   build on the menu instead is a separate decision and has not been made.
+3. **The launcher never assumes registration.** Availability is resolved once at startup by walking
+   the build list, and an unregistered row is drawn greyed with the reason. A silent dead button is
+   the one failure a menu must not have.
+4. **Scenes are grouped by HOW MANY PEOPLE they need**, not by theme. That is the only grouping that
+   changes what a visitor should do next.
+5. **The launcher runs the real `TrackedStage` while you choose**, so the sidecar being absent — or
+   being the single-person sender — is visible *before* a scene is picked rather than being
+   discovered inside one and blamed on it.
+6. **`ESC` returns to the menu, from both scene bases, via `LauncherScene` in the SkeletonShow
+   assembly.** Experiences references SkeletonShow and not the reverse, so anything both bases call
+   has to live in the lower assembly. It is a no-op with one warning when no launcher is present, so
+   opening a single scene on its own keeps working exactly as before.
+
+### Consequences
+
+* A demonstration is now: open `Launcher`, click, `ESC`, click. No Project window.
+* **The registration does not travel.** `ProjectSettings/EditorBuildSettings.asset` is gitignored in
+  the Unity project, so the list is per-machine and a clone opens the launcher with every row greyed
+  out. `Virtual Mirror > Register All Scenes in Build Settings` (`Editor/SceneRegistrar.cs`) fixes
+  that in one click; it only ever APPENDS, because index 0 is the startup scene and a convenience
+  must not be able to change what the product does on launch. Un-ignoring the asset was not done: it
+  also carries the startup scene and whatever anyone else has added locally, which is a repo decision
+  rather than one this change should make.
+* **The UDP port is the coupling to watch.** Every scene binds the same fixed port, so both bases now
+  stop tracking *before* `LoadScene` rather than leaving it to `OnDestroy`, and skip the rest of the
+  frame instead of running Update and OnGUI against a disposed provider.
+* **The catalogue is copied, not read.** SkeletonShow cannot see the Experiences types, so titles and
+  one-liners are duplicated in `SceneLauncher`. A unit test pins the column membership and the
+  structural invariants; it cannot pin that a blurb still matches the scene's own `Instruction`. If
+  the two ever disagree, the scene is right.
+* **`ESC` does not return from `Bootstrap`**, which is the production app and not one of the two
+  bases. Listed as a known limit rather than fixed, because wiring a demo key into the product needs
+  its own decision.
+* `Mirror.unity` is deliberately not on the menu: `Bootstrap` loads it additively after wiring
+  settings, avatar and UI, so opening it alone gives an unwired scene.
+
+### Alternatives rejected
+
+* **A canvas-based menu with prefabs.** Rejected for the reason ADR-067 gives for the scenes
+  themselves: a scene asset full of hand-placed UI is not reviewable in a diff and drifts from the
+  code that drives it. IMGUI keeps the scene a camera and one GameObject.
+* **Read each experience's `Title`/`Instruction` by reflection.** Rejected: the menu is in the
+  assembly the experiences reference, not the other way round, so it would mean inverting the
+  dependency or loading types by string — a lot of machinery to avoid copying two strings, and it
+  would fail silently if a type moved.
+* **Put the launcher in the Experiences assembly instead.** Rejected: `SkeletonShowBootstrap` could
+  then not call back into it, so the one scene that is not an `ExperienceBase` would have no way
+  home.
+* **Additive loading, keeping the menu alive underneath.** Rejected: the menu holds a UDP socket on
+  the same fixed port every scene wants, so it would have to stop tracking anyway — and a live menu
+  behind a running experience is a second thing drawing and consuming frames during the measurements
+  everything else here depends on.
+* **Make `Launcher` index 0 so builds open on it.** Rejected as out of scope: it changes what the
+  product does on launch, which is a product decision rather than a demonstration one.
+
+---
+
+## ADR-074 — The demonstration launcher starts the sidecar itself, UNSUPERVISED, and the product does not
+
+Date: 2026-09-17
+Status: **Superseded in part by ADR-075 (same day).** The scene topology stands; the UNSUPERVISED
+part does not. This ADR's own "Alternatives rejected" says teaching the supervisor the multi-person
+sender is "worth doing if the demonstration path ever needs restart-on-crash" — it turned out the
+PRODUCT path had been moved onto the direct route too, and a preview window's quit key was enough to
+end tracking for a session with nothing to bring it back.
+Extends: ADR-064 (Unity launches the sidecar itself), ADR-073 (the scene launcher)
+Report: `F36_SIDECAR_BOOT_2026-09-17.md`
+Evidence: `evidence/f36/`
+
+### Context
+
+ADR-073 gave the nineteen demonstration scenes a menu. It did not give them a producer: every scene
+listens on UDP 8899 and none starts one, so the whole set needed a terminal open before it did
+anything. Only `Bootstrap.unity` auto-started a sidecar, and that is the avatar application.
+
+The obvious fix — point `AppBootstrap` at the launcher — fails on three counts. It loads the scene
+**additively** and then builds the avatar session against an `AvatarRoot` the launcher does not have;
+it **binds UDP 8899 itself**, so every scene the launcher then opens would fail to receive; and it
+survives scene loads with its camera and UI, which fight `ShowStage.BuildCamera` over `Camera.main`.
+
+The less obvious fix — reuse `SidecarProcessLauncher` as-is — fails on one, and it is decisive.
+`sidecar_supervisor.py` builds its child command from a fixed flag set (`--portrait`,
+`--portrait-dir`, `--subpixel-bits`, `--seconds`) that **only `wholebody_udp_sender.py` accepts**, and
+waits on a readiness contract only that sender emits. So the existing auto-start can produce the
+single-person stream and nothing else — a working ONE PERSON column and a dead TWO OR MORE column.
+
+### Decision
+
+1. **A separate boot scene, `Scenes/SidecarBoot.unity`, at Build Settings index 1.** Index 0 stays
+   `License-Verifier`. It owns exactly one thing — the sidecar process — and is `DontDestroyOnLoad`
+   only so that process outlives every scene switch. **It binds no UDP socket**, because each scene
+   binds 8899 for itself and a second bind is the failure this exists to remove.
+2. **It runs `multiperson_udp_sender.py` DIRECTLY, without the supervisor.** That sender is backward
+   compatible — it publishes the most-established person in the single-person shape, hands included —
+   so ONE sender serves the single-person scenes, the crowd scenes and the avatar app.
+3. **The demonstration path therefore has NO WATCHDOG, and the product keeps one.** The change to
+   `SidecarProcessLauncher` is additive: `DirectScript` defaults to empty, so `AppBootstrap` gets the
+   supervisor exactly as before. A unit test pins that default, because a silent regression there
+   would take the product's restart-on-crash out without anything failing.
+4. **Never a second producer, in BOTH directions.** Before spawning, the boot scene listens on the
+   destination port for 400 ms; datagrams arriving mean somebody is already producing and it attaches
+   instead. This tests the condition itself rather than a proxy like a lock file, which a
+   hand-started sender never creates.
+   And once it owns a sidecar it **HOLDS** the supervisor's single-instance lock. That direction is
+   not hypothetical: `Bootstrap.unity` ships with `useOakUdpTracking: 1` and auto-start on, so
+   launching the avatar app from the menu's PRODUCTION column would otherwise have spawned a second,
+   supervised sidecar on top of the boot scene's. The lock therefore became a thing anyone can HOLD
+   as well as probe — `SidecarSingleInstanceLock`, now the one definition both sides use. Held only
+   when the boot scene actually spawned; released on teardown, because a lock outliving its owner
+   blocks every later start.
+5. **`AppBootstrap` is untouched**, and its `mirrorSceneName` code default was reverted to `"Mirror"`.
+   The value is `[SerializeField]`, so the scene's serialized `Mirror` was winning anyway — but the
+   changed default would have made any NEWLY added `AppBootstrap` load a scene with no `AvatarRoot`.
+
+### Consequences
+
+* The whole installation is now: press Play on `SidecarBoot`. Sidecar up, menu, pick anything, ESC
+  back. No terminal.
+* **A sidecar crash is not recovered** on this path. It stays dead until play mode is restarted. This
+  is the one real regression against the supervised path and it is accepted only because the product
+  does not take it.
+* `SidecarProcessLauncher` now has two modes. Its orphan prevention — the kill-on-close job object and
+  the `taskkill /F /T` of the whole tree — applies to both, which is why reusing it beat writing a
+  second launcher.
+* **`Bootstrap.unity` is not superseded and is still the product.** `SidecarBoot` builds no avatar and
+  no UI; it cannot replace it. Launching the avatar app from the menu now attaches to the running
+  multi-person sidecar — which works, because that sender publishes the primary person in the
+  single-person shape.
+* `SceneRegistrar` places `SidecarBoot` at index 1 the first time it adds it, rather than appending.
+  It still never touches index 0 and never moves an entry that is already registered; nothing here
+  loads a scene by build index.
+* The boot adds a 400 ms probe when no producer is running. Paid once.
+
+### Alternatives rejected
+
+* **Teach `sidecar_supervisor.py` to supervise the multi-person sender.** The better long-term answer
+  and rejected for now as the wrong size: it needs flag mapping plus the readiness/heartbeat contract,
+  and it changes the Python production path that F-20B measured 35/35. Worth doing if the
+  demonstration path ever needs restart-on-crash.
+* **Boot scene on the supervised single-person sender.** Keeps the watchdog and needs no Python work,
+  and leaves the ten multi-person scenes dead unless somebody starts their sender by hand — which is
+  the problem this ADR exists to remove.
+* **Point `AppBootstrap.mirrorSceneName` at the launcher.** Rejected on the three counts in Context.
+* **A generic `--extra-args` passthrough on the supervisor.** Rejected for the reason the supervisor's
+  own comment already gives: a supervisor that forwards arbitrary strings into a supervised process
+  can also forward `--seconds 30`, and then the thing under test is not the thing that was configured.
+* **Have the launcher itself start the sidecar.** Rejected: the launcher is torn down by the first
+  scene it loads, so the sidecar would die with it. Something outside the scene graph has to own it.
+
+---
+
+## ADR-075 — The detector sees what the pose stage sees, the tracker is fed once per detection, and BOTH senders are supervised
+
+**Date:** 2026-09-17 · **Status:** Accepted · **Supersedes the operative part of ADR-074**
+
+### Context
+
+Two live recordings (`SR1.mp4`, `SR2.mp4`, 2026-09-17) show one person in a room and the sender's own
+preview reporting `tracks=4 dets=2 posed=2`: two overlapping boxes on the SAME body at 1.7 m and
+2.4 m, each with its own skeleton, plus a third box sitting on a stack of cardboard cartons at 3.5 m.
+The operator's summary was "it keeps tracking the chair as a person", and separately, "when I press
+esc the sidecar is killed and does not revive — no supervisor reboot".
+
+Three independent defects, all in the path ADR-074 had just made the production one.
+
+**1. The detector was fed a cropped, stretched picture.** `oak_depth.build_rgbd_pipeline` never sizes
+`cam.preview`, so it sat at DepthAI's default 300x300 with `keepAspectRatio` ON. Measured on
+depthai 2.32.0.0: that CENTRE-CROPS the 640x400 ISP to 400x400 — discarding 120 px off each side —
+and `ImageManip.setResize(544, 320)` then stretched the square to 17:10. `detections_from` mapped the
+resulting boxes onto the FULL 640x400 frame with no inverse, so every box was also displaced outward
+from centre by 640/400. `multiperson_udp_sender.py` has always carried a `letterbox()` helper whose
+docstring records the cost of exactly this mistake — 0.95 people per frame on a clip containing
+seven, against 7.06 letterboxed — and it was called only from the VIDEO harness
+(`tools/video/f32_multiperson_video.py`). The measured F-32 result came from a code path Unity does
+not run.
+
+**2. One detection was counted as three confirmations.** The detector runs at ~11 Hz against 30 Hz
+RGB. The loop re-fed the same `latest_dets` list on every RGB frame, so `confirm_hits = 3` was
+satisfied by a SINGLE detector packet. `person_tracker.py`'s stated guarantee — "confirm over several
+frames so a flickering false positive never becomes a person" — could never fire. A carton clipped
+once became a CONFIRMED person in ~100 ms.
+
+**3. Nothing could restart the sidecar.** ADR-074 launched the multi-person sender directly because
+the supervisor could not build a command for it, and accepted "no restart-on-crash" as the price.
+What that costs in practice was not anticipated: the sender is launched with `--show`, its preview
+window bound ESC to quit, and Unity's own on-screen hint reads "ESC menu" — so the natural key, in a
+window that happens to have focus, ended the producer for the rest of the session.
+
+### Decision
+
+* **Letterbox on the VPU and invert the mapping on the host.** `cam.setPreviewSize(isp)` +
+  `setPreviewKeepAspectRatio(False)` + `ImageManip.setResizeThumbnail` — DepthAI's own letterbox —
+  and `detections_from` un-letterboxes through `letterbox_mapping`, one definition shared with the
+  video harness so the two cannot drift. Verified: a full-frame box round-trips to exactly
+  (0,0)-(1,1) and the centre stays the centre.
+* **Update the tracker only when a detector packet arrives.** Its `dt`, velocities and miss counts
+  are now on the clock that actually produces evidence. Between packets the tracks stand and the pose
+  stage keeps using their boxes, which is all "tracks carry identity between detections" ever meant.
+* **Only CONFIRMED tracks are posed and sent.** LOST tracks coast on prediction with no detection
+  behind them; running RTMW3D on one fits a skeleton to a box drifting off any body, which is where
+  the second skeleton on a single person came from. They stay in the tracker so an occlusion cannot
+  destroy an identity — they just do not become people on the wire.
+* **ESC is not a quit key.** Only `q` closes the preview, and it closes the WINDOW, not the process.
+* **The supervisor launches either sender.** `SENDER_BY_SCRIPT` picks the command shape from the
+  script it is given; the multi-person branch passes only flags that sender's argparse defines. Both
+  bootstraps now launch supervised, and `--show` defaults OFF in `Bootstrap.unity`.
+
+### Consequences
+
+* **ADR-074's central trade is withdrawn.** It accepted an unsupervised producer because supervising
+  the multi-person sender was "the wrong size"; the recordings are the evidence that the trade was
+  not affordable. The change turned out to be ~40 lines of Python and one C# option.
+* `multiperson_udp_sender.py` now prints the `producer session id = ` banner, so it satisfies the
+  same two-marker readiness contract as the single-person sender. Nothing else in F-20B moved: same
+  state machine, same backoff table, same heartbeat.
+* **`SidecarBootstrap` no longer holds the single-instance lock by hand.** It only ever did so
+  because nothing else bound that port on the direct path; the supervisor binds its own. Holding it
+  now would make the supervisor abort on its own mutex.
+* The single-person supervised command is unchanged, byte for byte, and a unit test pins that.
+* **Not yet re-measured on the camera.** The geometry is verified arithmetically and the supervisor
+  is verified against its own harness (D/E/F, 4/4); the people-per-frame figure this predicts to
+  recover needs a live run to claim.
+
+### Alternatives rejected
+
+* **Widen the tracker's thresholds so phantoms die faster.** Treats the symptom. The detector was
+  being handed a bad picture; no gate downstream fixes that, and tightening one costs real people
+  during occlusion.
+* **Raise `--det-conf` above 0.45.** Would suppress some carton boxes and equally suppress distant
+  and partly occluded people. The confidences were low because the input was distorted.
+* **Keep the direct path and add respawn-on-exit to `SidecarProcessLauncher`.** Duplicates a watchdog
+  Python already has, and skips its environment validation, crash-loop detection and heartbeat.
+* **A generic `--extra-args` passthrough on the supervisor.** Still rejected, for the reason the
+  supervisor's own comment gives: it can forward `--seconds 30` just as easily, and then the thing
+  under test is not the thing that was configured.
+
+---
+
+## ADR-076 — The SCENE chooses the sender: one person gets the single-person pipeline, a crowd gets the crowd one
+
+**Date:** 2026-09-17 · **Status:** Accepted · **Extends:** ADR-075, ADR-018 (RTMW3D over BlazePose),
+ADR-074 (the unified bootstrap)
+
+### Context
+
+The unified bootstrap starts ONE sidecar and it lives for the whole session. ADR-074 made that one
+`multiperson_udp_sender.py`, on the reasoning that it is backward compatible — it publishes the
+most-established person in the single-person shape, so every scene consumes it unchanged. True, and
+not the same thing as being as GOOD.
+
+For one person the two senders are not interchangeable:
+
+| | `wholebody_udp_sender.py` | `multiperson_udp_sender.py` |
+|---|---|---|
+| finds the body | the whole frame | person detector → tracker → per-person crop |
+| pose | RTMW3D, 133 kpts incl. hands | RTMW3D per track, same model |
+| identity | F-21 target ownership, refuses silent hand-off | PersonTracker, N identities |
+| chain | P0 → P1-1 → (P1-4) → F-22, measured | the same chain, per track (F-33) |
+
+The crowd sender adds a detector and a crop stage that exist only to make N people possible. For
+N = 1 they are pure risk — as ADR-075 showed when a mis-mapped crop put two skeletons on one body.
+Reported as *"I go from Bootstrap -> launcher and any single person exp then multi person tracking
+gets started and that is not accurate for 1 person"*.
+
+**On "use MediaPipe", which is what was asked for.** The literal MediaPipe sidecar still exists:
+`depthai_blazepose/udp_pose_sender.py`, the Phase-1 BlazePose path from ADR-016. It is not the right
+answer and the codebase already says so in a runtime warning — `OakDUdpPoseProvider` line 319: *"150+
+datagrams with no lh/rh — fingers will not track. Run wholebody_udp_sender.py (not the deprecated
+blazepose sender)"*. BlazePose-33 carries **no hand landmarks at all**, and two of the nine
+single-person experiences are pinch-driven (**AIR GRAFFITI**: "Pinch your thumb and finger together,
+then draw"; **OBJECTS**: "Pinch to pick one up"). ADR-018 replaced it for exactly this, plus depth.
+So "the best result for one person" is `wholebody_udp_sender.py` — which is also what `AppBootstrap`
+ran before ADR-074, i.e. what "like earlier it was" refers to.
+
+### Decision
+
+* **The catalogue classifies the scene.** `SceneLauncher.TrackingNeedFor(sceneName)` reads the same
+  `SinglePerson[]` / `MultiPerson[]` / `Production[]` arrays the menu draws, so the columns a person
+  sees and the tracking they get cannot disagree. `Production` (`Mirror`) counts as single-person: it
+  loads one VRM and retargets one body.
+* **`AppBootstrap.EnsureSidecarForScene` switches the sender on scene load**, and only when the
+  requirement actually changes.
+* **An unlisted scene is `Unspecified` and changes nothing.** This is the load-bearing case, not a
+  tidy default: `Launcher` is passed through on every single navigation, so resolving it either way
+  would restart the sidecar every time somebody backed out of a scene.
+* **A sidecar we did not spawn is never restarted.** `AttachedExternal` means a person started one by
+  hand; killing it to suit a scene would be a surprise, and we cannot restart what we did not spawn.
+
+### Consequences
+
+* **Switching costs ~15-20 s of no tracking** — one python process killed, another loading RTMW3D.
+  Paid ONLY when crossing between the single-person and crowd columns. Launcher → PoseMatch →
+  Launcher → AirGraffiti costs nothing. This is a real cost in a live demonstration and it is the
+  price of not tracking one person with a crowd pipeline; it is logged when it happens so the pause
+  is explained rather than mysterious.
+* **No experience scene changed.** `TrackedStage` already states the contract — *"A single-person
+  sender leaves Bodies with exactly one entry, so an experience written against Bodies works with
+  BOTH senders"* — and falls back to the root-shape pose when the datagram carries no `persons`.
+* Boot starts the single-person sender, before any scene has said what it needs. A crowd scene
+  corrects it on load.
+* `Bootstrap.unity` now carries two sender fields instead of one.
+
+### Alternatives rejected
+
+* **`multiperson_udp_sender.py --max-poses 1`.** Zero restarts, and it keeps the detector and crop
+  stage that are the thing being complained about. The cap limits how many people get posed; it does
+  not turn the crowd pipeline into the single-person one.
+* **Run both senders at once on two UDP ports.** Would remove the switch entirely, and cannot work:
+  a DepthAI device is exclusive to one process, so the second sender cannot open the OAK-D at all.
+* **`depthai_blazepose/udp_pose_sender.py` (literal MediaPipe).** No hand landmarks — it would break
+  the two pinch experiences outright, and it is the path ADR-018 replaced for both fingers and depth.
+* **Let each scene declare its own requirement.** More flexible and worse: the requirement would then
+  live in two places (the scene and the menu column) and could disagree, which is exactly the failure
+  the catalogue comment already warns about for titles.
+
+---
+
+## ADR-077 — Sub-pixel disparity is not a tuning knob, it is a multiplier on every depth reading
+
+**Date:** 2026-09-17 · **Status:** Accepted · **Extends:** F-16 (sub-pixel measurement), F-19
+(production stereo), ADR-075/076
+
+### Context
+
+`multiperson_udp_sender.py` had no `--subpixel-bits` flag. Not defaulted off — **absent**. It called
+`oak_depth.build_rgbd_pipeline()` and inherited `STEREO_CONFIG`'s shipped default:
+
+```python
+"subpixel": False,          # <- production default; F-16 measured 1/8 sub-pixel as a large
+"subpixelBits": 0,          #    quantisation win, but enabling it is NOT part of F-19.
+```
+
+`wholebody_udp_sender.py` has had the flag since F-19 and mutates the shared `STEREO_CONFIG` from
+it. Unity has been passing `--subpixel-bits 3` to the supervisor all along. So **only one of the two
+senders could act on it**, and every crowd scene has been running on whole-pixel disparity while the
+configuration said otherwise. Nothing logged it, because this sender also never printed the stereo
+banner the single-person one prints.
+
+### Why this is not a small number
+
+Stereo depth error is
+
+```
+Δz  ≈  z² × Δd / (f × B)
+```
+
+`Δd` — the disparity step — is a straight multiplier. Going from whole pixels to eighths is 8× at
+**every** distance; it is not a far-field-only refinement. Measured from this device rather than a
+datasheet (`getBaselineDistance()` = 7.5 cm, mono `fx` = 287.16 px at 640×400, so `f·B` = 21.54):
+
+| Distance | Whole pixel (shipped) | 1/8 px (this ADR) | + 800p mono (open) |
+|---|---|---|---|
+| 2.0 m | ±18.6 cm | ±2.3 cm | ±1.2 cm |
+| 2.4 m | ±26.7 cm | ±3.3 cm | ±1.7 cm |
+| 3.5 m | ±56.9 cm | ±7.1 cm | ±3.6 cm |
+| 4.5 m | ±94.0 cm | ±11.8 cm | ±5.9 cm |
+| 6.0 m | ±167 cm | ±20.9 cm | ±10.5 cm |
+
+ADR-018's "~0.7 m steps at ~3.5 m → guide users to ~2 m" is an *observation*; the quantisation floor
+alone is ±57 cm and matching noise sits on top. Either way, the guidance existed because of a number
+this ADR divides by eight.
+
+### Decision
+
+* **The flag exists in both senders, with identical name, semantics and default** (`-1` = leave
+  production untouched, `0` = off, `3` = 1/8 px). They share `STEREO_CONFIG`; a flag that meant
+  something different in each would be worse than no flag.
+* **The supervisor forwards it to both.** It was already forwarding it to the single-person sender;
+  the multi-person branch now does the same.
+* **The multi-person sender prints its stereo configuration at startup.** Sub-pixel is invisible in
+  the stream, so a configuration that silently did not apply is exactly the failure that occurred.
+
+### Consequences
+
+* Crowd-scene depth improves by 8× at every range with no model, no scene and no protocol change.
+* **Costs VPU compute**, on top of the left-right check already enabled. Not measured on hardware
+  here — if it costs frames, that is the trade to weigh, and it reverts with one flag.
+* The `--subpixel-bits -1` default means nothing changes for anyone who does not pass it, so the
+  F-19 "not part of this feature" position is preserved for anything still relying on it.
+
+### Alternatives rejected
+
+* **Guide people to stand at ~2 m.** That is the workaround this makes unnecessary. The usable zone
+  was small because the measurement was coarse, not because the geometry demanded it — ±2.3 cm at
+  2 m and ±11.8 cm at 4.5 m is a room, not a spot.
+* **Flip `STEREO_CONFIG`'s default to subpixel-on.** Would fix the multi-person path and silently
+  change every other consumer of `build_rgbd_pipeline`, including the F-19 production
+  configuration and the harnesses that measured against it. The flag is the auditable route.
+* **Raise the mono resolution at the same time.** A second 2× is available (right-hand column) and
+  it is a much larger compute change. Kept separate so the fps cost of each can be attributed.
+
+---
+
+## ADR-078 — One camera, one orientation flag; the view is a MIRROR; and the body walks
+
+**Date:** 2026-09-17 · **Status:** Accepted · **Extends:** ADR-075/076/077, F-18 (the portrait
+transform), ADR-023 (why the avatar does NOT flip its input)
+
+### Context
+
+A live session (`SR4.mp4`, 2026-09-17) plus the Editor log produced four findings. Two were bugs the
+supervision work exposed; two were behaviours nobody had chosen.
+
+**1. The two senders disagreed about which way the camera is.** `wholebody_udp_sender.py` rotates
+image, depth AND intrinsics through `f18_portrait`; `multiperson_udp_sender.py` had **no portrait
+support at all** — it never imported the module. `SidecarProcessLauncher`'s comment that it "handles
+portrait internally" was simply untrue. Same camera, two coordinate frames.
+
+**2. The figure never moved.** `TrackedStage.StagingOrigin()` returned the authored `BodyOrigin`
+with only a grounding term on Y. Extra people were offset by their own hip *relative to the primary*,
+so a crowd separated correctly while one person stayed nailed to the spot however far they walked.
+
+**3. The view was a photograph, not a mirror.** `flipX` was `false` in all three C# sites and
+`flipX: 0` in all twenty scenes, so X was never negated: your right hand drove the figure's left, and
+two people appeared on the wrong sides of each other.
+
+**4. Walking out of frame killed the sidecar.** Measured: `HEARTBEAT TIMEOUT pid=41620 no stdout
+growth for 10s`, `rc=1 uptime=463.9s`. The multi-person sender's periodic `frames=` line sat BELOW
+`if not persons: continue`, so an empty room produced no stdout, and the supervisor's watchdog — new
+to this sender as of ADR-075 — shot it. Also caught in the same log: `SIDECAR EXIT rc=0
+uptime=30.6s`, the single-person sender's three remaining `ESC` quit bindings, which ADR-075 only
+fixed in the multi-person one.
+
+### Decision
+
+* **Orientation is a per-sender setting, because it describes a physical mount that differs between
+  the two.** Portrait suits one person (the sensor's long axis vertical is more pixels on a standing
+  body); landscape suits a crowd (more room side-to-side, and the person detector runs on the
+  **unrotated** stream, so a rotated mount makes it read people lying sideways). `AppBootstrap`
+  exposes `sidecarSinglePersonPortrait` (default on) and `sidecarMultiPersonPortrait` (default off),
+  and **O** in play mode flips whichever sender is running and restarts it — for the moment somebody
+  turns the camera on its mount and needs the software to agree.
+* **The multi-person sender gets the real transform**, `f18_portrait`'s, not a re-derivation — image,
+  depth and intrinsics together. Its detector boxes arrive in raw coordinates and are rotated with
+  `rotate_box_normalised`, verified to the pixel against a genuinely rotated image in both directions.
+* **`flipX` is ON everywhere**: three C# defaults and all twenty scene files. A mirror installation
+  that is not mirrored is simply wrong, and the setting stays per-scene for anyone who disagrees.
+* **`TrackedStage.FollowPosition`** drives the staged body's X/Z from the measured mid-hip, relative
+  to a neutral captured on first sight and re-captured when the room empties. Y is still the
+  grounding loop's.
+* **The heartbeat runs before the empty-frame skip**, and ESC is not a quit key in either sender.
+
+### Consequences
+
+* **Crowd geometry is unchanged.** Follow translates the whole group; every crowd experience reads a
+  DIFFERENCE between people, and a common offset cancels out of a difference.
+* **A reflection is not a rotation.** `OakDUdpPoseProvider.PalmRotation` builds a quaternion from a
+  cross product of converted points, so with `flipX` on its palm normal is inverted. Nothing in the
+  experiences reads `HandPose.PalmRotation` today, so this is latent — but it is exactly ADR-023's
+  warning, and an experience that starts using palm orientation must fix it output-side rather than
+  turning `flipX` off.
+* **The avatar is untouched.** `Mirror.unity` and `AppBootstrap.poseFlipX` are not in this change;
+  ADR-023 established that reflecting the input twists a rotation retarget, and that still holds.
+* Changing orientation costs a sidecar restart (~15 s). It is a launch argument, and there is no
+  control channel into a running sidecar.
+
+### Alternatives rejected
+
+* **Rotate on device** (`ImageManipConfig.setRotationDegrees`) so the detector also sees upright
+  people. Genuinely better for portrait multi-person, and rejected for now because its interaction
+  with `setResizeThumbnail` cannot be verified without the camera, while `f18_portrait` is measured.
+  Worth revisiting if portrait crowd scenes are ever wanted.
+* **Make both senders landscape and crop portrait in software.** Throws away the reason to mount the
+  camera rotated at all, which is pixels on a standing body.
+* **Follow the hip on Y as well.** Hip height is the noisiest axis and the grounding loop already
+  owns vertical placement from the measured floor; following both makes the figure bob.
+* **A live orientation toggle with no restart.** There is no command channel into the sidecar, and
+  inventing one to avoid a 15 s restart is a large amount of machinery for a rare action.
+
+---
+
+## ADR-079 — Mount tilt is corrected in one place, and the sign is supplied by a human
+
+**Date:** 2026-09-18 · **Status:** Accepted · **Extends:** F-18 (portrait geometry), F-19 §7 (the
+IMU mount measurement) · **Touches:** ADR-025-era axis conventions (unchanged)
+
+### Context
+
+Nothing in the pipeline compensated for camera pitch. Verified rather than assumed:
+`PoseSpaceConverter` applied three axis SIGN FLIPS and no rotation; neither sender contained the
+string `tilt` or `pitch`; and `f19_level.py` exists only to help a human level the bracket by hand.
+
+That is fine for a level mount and wrong for any other, because `SkeletonPose` learns the floor as a
+**single scalar** (`FloorY`, from foot contacts, asymmetric 0.05 s fall / 0.6 s rise). A camera
+pitched by θ makes the floor appear at a different height at every distance:
+
+```
+apparent floor drift  =  tan(θ)  metres per metre of depth
+```
+
+| tilt | drift | walk needed to cross `PlantedBandMetres` (0.08 m) |
+|---|--:|--:|
+| 5.89° — the last measured production mount | 0.10 m/m | 78 cm |
+| 15° | 0.27 m/m | **30 cm** |
+| 20° | 0.36 m/m | 22 cm |
+| 30° | 0.58 m/m | **14 cm** |
+
+This is not theoretical. F-18 §3 derived the camera height from imagery at several distances and
+found it *sloping* — "a level camera gives the same answer at every distance. It does not" — at
+**+0.338 m/m**, implying ~19°. `tan(19°) = 0.344`. The model and that measurement agree, so the
+effect was already in the data before anyone chose to tilt the camera deliberately.
+
+F-40's `FollowPosition` made it worse rather than better: the figure now tracks the user in depth,
+which is precisely the axis the shear corrupts.
+
+### Decision
+
+1. **`PoseSpaceConverter` rotates about X before applying the mirror signs.** In the sender's frame
+   (X right, **Y down**, Z forward):
+
+   ```
+   y' = y·cosθ + z·sinθ
+   z' = z·cosθ − y·sinθ
+   ```
+
+   Order matters: the signs are a display convention applied to already-levelled data. Mirroring
+   first would rotate in the mirrored frame and lean the body the wrong way whenever `flipZ` is on.
+   `PoseSpaceConverterTiltF43Tests.TiltIsAppliedBeforeTheMirrorSigns` pins it.
+
+2. **One value, in `CameraMount`, not a serialized field per component.** Four components build a
+   converter — `AppBootstrap`, `SkeletonShowBootstrap`, and `TrackedStage` from both `ExperienceBase`
+   and `SceneLauncher`. `flipX` is declared separately in all four and the bill for that arrived in
+   F-40: turning the mirror on meant editing twenty scene files. Tilt has the same shape and a worse
+   failure mode, because a wrong mirror is obvious and a wrong tilt just reads as "tracking is a bit
+   off". `AppBootstrap.Awake` publishes it before the first scene loads.
+
+3. **The magnitude is measured; the SIGN is read off the bracket by eye.** `mount.json` records
+   `tilt_deg` as magnitude only and says so: *"the IMU sign convention is not asserted"* — the board
+   returns an identity IMU-to-camera extrinsic that F-19 §7 disproved directly. A wrong sign
+   **doubles** the error instead of removing it, so the default is 0 and a guess is worse than
+   nothing. Positive = pitched DOWN.
+
+### Consequences
+
+* A deliberately angled mount (the 15–30° "game camera" framing) becomes usable. It was not before.
+* Portrait needs no special case: `f18_portrait` rotates image, depth and intrinsics together, so
+  the physical 90° roll is already undone by the time data reaches the converter and pitch is the
+  only remaining misalignment — a rotation about X in both orientations.
+* At 0° the path is bit-identical to the old one (`Tilt.Identity` short-circuits, and the test
+  asserts equality at tolerance 0), so every existing install is untouched until someone sets it.
+
+### DO NOT REVERT / how to tune
+
+* **Do not "simplify" this into the sign flips.** A rotation is not a sign flip; collapsing it
+  reintroduces the shear silently.
+* **Do not auto-read the sign from the IMU.** That is the one thing F-19 §7 explicitly refused to
+  assert, and it is refused here for the same reason.
+* **To tune:** run `tools/capture/f19_level.py` for the magnitude, set
+  `AppBootstrap.cameraTiltDegrees` (positive = nose down), and check the fix by walking toward and
+  away from the camera — the ground pool should stay under the feet at both ends. If the figure
+  sinks *more* as you approach, the sign is inverted; negate it.
+* **Levelling the bracket is still better than correcting for it.** This removes the floor shear, not
+  the foreshortening or the out-of-distribution pose estimates at steep angles.
+
+---
+
+## ADR-080 — The IR dot projector is on
+
+**Date:** 2026-09-18 · **Status:** Accepted · **Extends:** F-17 §8 (the IR-cut / unfiltered split)
+
+### Context
+
+The OAK-D-PRO's IR laser dot projector had never been switched on. DepthAI leaves the emitter off by
+default ("The emitter is turned off by default") and neither sender ever called the setter —
+`setIrLaserDotProjectorIntensity` appeared nowhere in this repo outside the vendor CLI in
+`site-packages`. **Every stereo measurement this project has ever taken was on an unassisted pair.**
+
+F-17 §8 established the split that makes this worth having on *this* board: **CAM_A is an IR-cut
+colour sensor while CAM_B/CAM_C are unfiltered mono.** Depth comes from the unfiltered pair. So the
+projector's dots land squarely in the images that do the block matching and are invisible in the RGB
+frame RTMW3D reads — texture exactly where matching fails (blank walls, plain clothing), with no
+change to the pose input.
+
+### Decision
+
+Default **on at 0.8** in both senders via `oak_depth.enable_ir_dot_projector`, forwarded by the
+supervisor as `--ir-dot` so Unity can override it; `0` restores the previous behaviour.
+
+Guarded three ways, because this is optional hardware and a wrong assumption would be invisible:
+`getIrDrivers()` is the device's own answer to "do I have one", the setter's bool return catches a
+firmware refusal, and both are wrapped so a non-PRO board keeps working unchanged. The result is
+printed as what the **device did**, not what was asked for:
+
+```
+[wb]   IR dot projector: on (80%, driver LM3644)
+```
+
+### Consequences
+
+* Verified live on the camera during the F-20B A/B runs — the banner above is from
+  `evidence/oak_v4/f20b/tests/a_normal_start/logs/run_001.txt`.
+* This changes a production default, deliberately. It is the one lever in this pass that improves
+  depth *density* rather than depth *precision*: sub-pixel (ADR-077) makes each valid reading finer,
+  the projector makes more readings valid.
+* **Unquantified.** No before/after hole-rate measurement was taken. The mechanism is established
+  and the risk is low, but the size of the win is not known — see F-43's open items.
+
+### DO NOT REVERT / how to tune
+
+* Turn it off with `--ir-dot 0` if a second OAK-D shares the room; two projectors can interfere.
+* It does not help in direct sunlight, which is IR-rich enough to swamp it. That is a lighting fix,
+  not a projector setting.
+
+---
+
+## ADR-081 — Resolution is the working-volume lever, and it was being thrown away
+
+**Date:** 2026-09-18 · **Status:** Accepted · **Extends:** F-16 (config sweep), F-17 (the lens is the
+lever), ADR-077 (sub-pixel) · **Supersedes in part:** the "mono 400p → 800p, deferred" roadmap note
+
+### Context
+
+The working volume was the largest single gap in the system's honest self-assessment: excellent pose
+quality inside roughly a one-metre box, and nothing outside it. The instinct is that this is a lens
+or a baseline problem. It was neither. It was **resolution the pipeline was discarding**:
+
+```python
+cam.setResolution(...THE_800_P)   # OV9782 native 1280x800
+cam.setIspScale(isp_num, isp_den) # ...scaled to 640x400
+mono_*.setResolution(...THE_400_P)  # 640x400 from a 1280x800 sensor
+```
+
+Worse, `build_rgbd_pipeline(color_res=..., mono_res=...)` **declared both as parameters and ignored
+them** — the body hard-coded `THE_800_P` and `THE_400_P`. A caller could ask for 800p, be told by
+`stereo_config_str()` that it got 800p (`STEREO_CONFIG["monoRes"]` was reported, never applied), and
+run at 400p. That is precisely the failure ADR-077 records for the sub-pixel banner, in a second
+place, undetected.
+
+### Why resolution and not the lens or the baseline
+
+F-17 settled the baseline question: **NOT FEASIBLE**, with three independent `f·B` doublings moving
+the bias −9% rather than −50%. Its conclusion was "the lens is the real lever" — and the wide lens is
+already fitted. What nobody checked is that the *sensor* behind that lens was running at a quarter of
+its pixel count.
+
+The two constraints on range are independent, and each had its own untouched 2×:
+
+| constraint | governed by | old | new |
+|---|---|---|---|
+| can the pose model still resolve a body? | RGB pixels on target | 640×400 | **1280×800** |
+| is the depth precise enough? | mono focal px → `f·B` | 287 px | **574 px** |
+
+### Measured, on the device, before deciding
+
+Empty room, sub-pixel 1/8, IR dot on, 150 frames per config after a 30-frame warm-up:
+
+| config | rgb/depth | fps | valid depth | px on a 1.7 m body @2 m | @4 m |
+|---|---|--:|--:|--:|--:|
+| 400p + ISP 1/2 (as shipped) | 640×400 | 30.0 | 14.3% | 242 | 121 |
+| 800p + ISP 1/2 | 640×400 | 29.1 | 18.3% | 242 | 121 |
+| 400p + ISP 1/1 | 1280×800 | 30.0 | 13.5% | 484 | 242 |
+| **800p + ISP 1/1** | **1280×800** | **29.2** | **19.9%** | **484** | **242** |
+
+**2× the pixels on a body and +5.6 pp valid depth, for 2.6% of the frame rate.**
+
+The reason it is nearly free is structural, not lucky: **RTMW3D always resizes its crop to 288×384
+and the person detector always runs at 544×320.** Neither sees the source resolution, so the 20.4 ms
+per person — the expensive part, and the thing that caps multi-person at 16 fps — is untouched. The
+cost lands on the VPU's stereo matcher and the USB link, which is what the fps column measures.
+
+Confirmed end to end through the supervisor, with the real model loaded:
+
+```
+[wb]   rgb 800x1280   depth 800x1280
+[wb]   intrinsics  fx=568.908 fy=569.254      <- exactly 2x the previous 284.454/284.627
+[wb]   FOV  H 70.22 deg  V 96.70 deg          <- UNCHANGED: ISP scaling does not crop
+[wb]   stereo: ... mono=800p(1280x800) rgbIsp=1/1
+```
+
+### Decision
+
+`monoRes: "800p"` and `rgbIsp: (1, 1)` become the defaults in `STEREO_CONFIG`; `build_rgbd_pipeline`
+reads them and **applies** `mono_res` instead of ignoring it; `--mono-res` / `--rgb-isp` are
+forwarded by the supervisor to both senders and exposed in Unity as `sidecarMonoResolution` /
+`sidecarRgbIspScale`.
+
+### Consequences
+
+* The distance at which the pose model sees a given level of detail **doubles**: what was 242 px at
+  2.0 m is now 242 px at 4.0 m. Usable floor area grows roughly **3–4×**.
+* Depth error halves at every range (`f·B` 21.54 → 43.07): 4 m now quantises at 46 mm, against
+  interaction tolerances of 130–450 mm in the experiences. Depth precision is no longer what limits
+  range; pixels on target are.
+* The FOV is unchanged, so no framing minimum moves. Portrait still needs ~0.9 m for a full body.
+* `stereo_config_str()` now reports the mono pixel dimensions and the ISP ratio, so neither can be
+  silently wrong again.
+
+### DO NOT REVERT / how to tune
+
+* **Do not re-add a hard-coded resolution inside `build_rgbd_pipeline`.** The whole defect was a
+  parameter that existed and was ignored while the banner reported it.
+* **The fps cost is real but small, and it is not on the GPU.** If frame rate becomes a problem in a
+  crowd scene, the answer is the pose model (batching, TensorRT, a smaller variant), not this.
+  Dropping back to `--rgb-isp 1/2` buys 0.8 fps and costs half the range.
+* **Rollback is one flag each:** `--mono-res 400p --rgb-isp 1/2` restores the pre-F-44 pipeline
+  exactly.
+* **Not yet measured with a person in frame at full resolution.** The valid-depth figures above are
+  an empty room, so they compare configurations rather than describing tracking.
+
+---
+
+## ADR-082 — FP16, not batching and not TensorRT: the multi-person frame rate
+
+**Date:** 2026-09-18 · **Status:** Accepted · **Extends:** F-32 (the 20.7 ms budget), F-33, F-34
+(three people at 16 fps) · **Rejects:** batched inference, and TensorRT as unnecessary
+
+### Context
+
+Multi-person ran at **16 fps with three people** and everything else was downstream of that: F-34
+records that the crowd speed constants were tuned at ~21 fps and have been running at 16, and the
+frame rate was the single largest term in that feature's quality.
+
+The obvious fixes were batching and TensorRT. Both were investigated before either was built, and
+the profile came first, because both only help the GPU stage:
+
+| stage | time | share |
+|---|--:|--:|
+| preprocess (CPU) | 2.42 ms | 11.4% |
+| **`session.run` (GPU)** | **18.75 ms** | **88.1%** |
+| decode (CPU) | 0.11 ms | 0.5% |
+| total | 21.28 ms | → 3 people = 15.7 fps |
+
+15.7 fps reproduces F-34's measured 16, so the profile describes the real system. 88% on the GPU
+means the GPU stage is worth attacking.
+
+### Batching — built, measured, REJECTED
+
+The exported model pins batch to 1 (`[1,3,384,288]`), so this is a graph change, not a scheduling
+change. The graph was rewritten to a symbolic batch and **verified correct**: every row of a batch-3
+run matches the batch-1 result exactly, so the SimCC head carries no batch-1 assumption.
+
+It still does not work, for a reason that has nothing to do with the model:
+
+| case | total | ms/person | vs production |
+|---|--:|--:|--:|
+| static batch=1 (production) | 18.50 | **18.50** | — |
+| dynamic batch=1 | 26.26 | 26.26 | **+42%** |
+| dynamic batch=2 | 39.07 | 19.53 | +6% |
+| dynamic batch=3 | 51.89 | 17.30 | −7% |
+
+**Making the batch dimension dynamic costs 42% at batch 1**, because DirectML can no longer
+specialise on a fixed shape, and batch 3 wins only 7% back. A room usually holds one or two people.
+This is a large regression in the common case for a rounding error in the rare one.
+
+*(Recorded because it is not obvious and will be proposed again. The first measurement of this, with
+only 8 warm-up iterations, showed batch-2 at +129% — badly wrong in the other direction. DirectML
+needs a long warm-up per shape; anything measuring it wants 40+ iterations.)*
+
+### TensorRT — assessed, NOT NEEDED
+
+It would mean replacing `onnxruntime-directml` with `onnxruntime-gpu` — they cannot coexist, both
+own the `onnxruntime` module — plus CUDA, cuDNN and TensorRT. On this machine `nvcc` is not on PATH,
+no cuDNN is present and the `tensorrt` package is not installed. That is a multi-GB install and a
+real risk to a working capture path.
+
+And after FP16 it buys nothing visible: **three people now run at 37 fps against a 30 fps camera.**
+The GPU is no longer the bottleneck. TensorRT would allow MORE people, not faster ones — worth
+revisiting only if `--max-poses` is raised past 4.
+
+### Decision — FP16
+
+The bottleneck is arithmetic, so change the arithmetic:
+
+| | fp32 | fp16 | |
+|---|--:|--:|--|
+| GPU stage | 18.59 ms | **6.25 ms** | **2.97×** |
+| per person, end to end | 21.51 ms | **8.99 ms** | |
+| 1 person | 46.5 fps | 111.3 fps | |
+| **3 people** | **15.5 fps** | **37.1 fps** | past the camera |
+| 5 people | 9.3 fps | 22.3 fps | |
+
+`keep_io_types` leaves the graph taking and returning fp32, so `rtmw3d_pose.py`'s blob and decode
+are untouched and nothing upstream or downstream knows it happened.
+
+### Accuracy — measured on real people, not on noise
+
+Random input proves nothing here: SimCC takes an argmax over an activation map, and the argmax of a
+near-flat random map flips under any perturbation at all. Measured instead over 60 frames of
+`123.webm`, the clip F-29's correction established IS a genuine single subject at 1.96 m, with the
+same crop box fed to both models:
+
+```
+confident joints (conf > 0.3), 7,740 samples
+  median 0.000 px | p95 2.652 px | max 78.772 px
+  moved >  2 px :  5.620%
+  moved >  5 px :  0.426%
+  moved > 20 px :  0.090%      <- 7 samples; 7 frames of 60, median 1 joint of 133
+```
+
+**The median joint does not move at all.** The tail is roughly one joint in a thousand making a
+larger excursion — which is exactly what P0's One-Euro smoother and the `--arm-max-jump` /
+`--leg-max-jump` displacement caps already exist to absorb, and it is bought with a frame rate that
+removes far more jitter than it adds.
+
+### Consequences
+
+* `evidence_paths.DEFAULT_MODEL` prefers `rtmw3d-x-fp16.onnx` **when it exists**, because the
+  `.onnx` files are NOT in version control — a hard default would break every machine that has not
+  run the converter, with a missing-file error on a path nobody chose.
+* Both senders print the weights they loaded (`model: rtmw3d-x-fp16.onnx (185 MB)`), so a machine
+  that never converted cannot look identical to one that did.
+* Sidecar readiness improved as a side effect: 13.8 s → 6.8 s in F-20B, because 185 MB loads faster
+  than 369 MB.
+* `--max-poses` stays at 3. The GPU now affords more; F-34's experiences were designed around three,
+  and that is a separate decision.
+
+### DO NOT REVERT / how to tune
+
+* **Do not re-propose batching without re-reading the table above**, and do not benchmark DirectML
+  with a short warm-up.
+* **Rebuild the model with `tools/model/f45_make_fp16.py`**; it re-runs the accuracy check itself.
+* **Fall back by deleting `rtmw3d-x-fp16.onnx`** or setting `VIRTUAL_MIRROR_MODEL` to the fp32 file.
+  Nothing else has to change — the model path is the selector.
+* **numpy hazard.** `onnx` + `onnxconverter-common` are build-time only, and installing them
+  upgraded numpy 1.26.4 → 2.2.6, a major version under a system whose entire measured evidence base
+  (F-19, F-33) was produced on numpy 1.x. It was pinned back to 1.26.4, and the converter still runs
+  there; `ml-dtypes` warns that it wants numpy ≥ 2 and can be ignored. **Do not let a model-tooling
+  install move numpy under the capture path.**
+
+---
+
+## ADR-083 — F-21 ownership gates the WIRE, and it cannot tell "my subject walked" from "a different person"
+
+**Date:** 2026-09-18 · **Status:** Accepted (diagnosis; the production fix is specified and DEFERRED)
+· **Extends:** F-21 (target ownership), ADR-052/057/061 · **Provoked by:** F-40 `FollowPosition`,
+F-44 working volume, F-46's run of show
+
+### Context — SR6
+
+Three symptoms, reported together: tracking quality degrading over a session; **Unity not reacting
+while the sidecar preview tracked perfectly**; and the sidecar sometimes losing the subject entirely.
+
+The middle one is the diagnostic one, and it is not a tracking failure at all. In
+`wholebody_udp_sender.py`:
+
+```python
+if not should_emit:
+    if args.show:
+        _preview(frame, uv, conf, ...)   # <- the preview still draws the pose
+        ...
+    # the sendto block is skipped entirely  ->  Unity receives nothing
+```
+
+**The preview is drawn whether or not the packet is sent.** A perfect preview and a frozen Unity is
+the expected appearance of a withheld frame, not a contradiction.
+
+Measured from `Assets/Games/video/SR6.mp4`, one person, one room, six minutes:
+
+| t | sidecar HUD | Unity HUD |
+|---|---|---|
+| 0:10 | — | `rx=2`, ATTRACT synthetic figure |
+| 2:30 | `F-21 NO TARGET owner=None` | `packetAgeMs=994.0 clampNewest=2048` |
+| 5:20 | `F-21 LOCKED owner=13 switches=12` | partial skeleton, wrong limbs |
+| 6:15 | `F-21 NO TARGET owner=None switches=13` | skeleton collapsed |
+
+**Thirteen ownership switches with one person in the room**, and an interpolator that had run dry
+2048 times.
+
+### The mechanism
+
+In `LOCKED`, `_matches_owner()` rejects an observation when the hip has moved more than
+`SWITCH_MARGIN_M = 0.35` from the owner's last accepted position (`position_jump`), or the torso
+scale differs by more than `SCALE_MARGIN_RATIO = 0.45` (`scale_mismatch`).
+
+The trap is what happens on rejection: **`owner_pos` is not updated.** So once the subject is outside
+the margin they remain outside it, every subsequent frame is rejected the same way, and after
+`RELEASE_TIMEOUT_S = 4.0` the machine releases and re-acquires them as a NEW owner. That is one
+`switch`, preceded by up to four seconds of a frozen Unity. It is a positive-feedback trap, not a
+threshold that is merely set too tight.
+
+And symptom 3 falls out of the same state: on `NO_TARGET`/`RELEASED` the sender resets the crop to
+`R.center_bbox(rgb_w, rgb_h)`. If the subject is not centre-frame, the pose model then runs on a crop
+that does not contain them — so the **preview** loses them too, which reads as the camera failing.
+
+Symptom 1 is simply these accumulating over a session.
+
+### Why this surfaced now, and it is our own doing
+
+F-21 was designed and measured for a subject **standing at 0.90 m in front of a mirror**, where
+0.35 m of hip travel genuinely does mean somebody else. Three changes in one week made walking the
+normal case:
+
+* **F-40** added `FollowPosition`, so the staged body tracks the subject in X/Z at all.
+* **F-44** took the usable band from ~1.4–2.5 m to ~1.4–4.5 m, roughly 3–4x the floor area.
+* **F-46's run of show** instructs the subject, in writing, to *"walk left, right, toward the camera,
+  away"* and to *"walk out to the 4 m mark and back."*
+
+The demonstration script is what triggers the defect. Nothing about F-21 changed; what changed is
+that the subject is now expected to move, and F-21's core assumption is that they do not.
+
+### Decision
+
+1. **For the demonstration shoot: `--no-ownership`.** A solo shoot contains no second person, so
+   F-21 is defending against a risk that cannot occur while actively breaking the take. The
+   supervisor **deliberately refuses to forward** `--ownership` (SS31: a supervised process that
+   accepts arbitrary flags is no longer the configuration under test), so the sender is started by
+   hand and `SidecarBootstrap` attaches to it — the documented "something is already sending poses
+   on UDP 8899" path. Uncheck `Auto Start Sidecar` first to remove the spawn race.
+2. **Middle path, if the protection must stay: `--ownership-switch-margin 1.2`.** 0.35 m is about one
+   step. 1.2 m tolerates walking while still refusing somebody across the room. Less proven, but the
+   right shape.
+3. **The production fix is DEFERRED and specified below.** It is not made here because it is a
+   behavioural change to a layer that exists to prevent a measured F-19 failure, and it deserves its
+   own evidence rather than being tacked onto a demo unblock.
+
+### The production fix, when it is done
+
+`position_jump` conflates two different questions — *"did my subject move?"* and *"is this somebody
+else?"* — and answers both with one absolute distance. Candidates, in preference order:
+
+* **Update `owner_pos` on a rejected-but-plausible observation**, or decay it toward the candidate,
+  so a single fast movement cannot strand the owner outside its own margin permanently. This closes
+  the feedback trap without widening the gate at all, and is the smallest correct change.
+* **Make the margin velocity-aware** — scale it by the owner's recent speed and the time since the
+  last accepted frame, rather than a fixed metre count. ADR-061's own note already observes that a
+  per-frame distance cannot separate a walk from a hand-over; the converse is also true.
+* **Do not** simply raise `SWITCH_MARGIN_M`. ADR-061 measured a real migration at 0.015 m/frame,
+  23x under the existing margin; widening it makes that case worse while only partly helping this
+  one.
+
+### DO NOT REVERT / how to tune
+
+* **Do not delete F-21.** F-19 §19 measured the failure it prevents: with a second person in frame
+  the tracker moved to them after ~25 s and **never came back**. For an unattended installation that
+  is disqualifying.
+* **`--no-ownership` is a SHOOT setting, not a production one.** Anything filmed with it demonstrates
+  tracking, not target ownership.
+* The sender already logs the reason (`[wb] TARGET ... reason=...`) and `--ownership-log-dir` writes
+  it per event. **Capture that before re-tuning** — this ADR establishes the mechanism, not which of
+  `position_jump` / `scale_mismatch` dominates in practice.
+
+---
+
+## ADR-084 — Out-of-range data is REFUSED, never clamped; calibration learns only from MEASURED depth
+
+**Date:** 2026-10-09 · **Status:** Accepted · **Extends:** F-27 (humanized skeleton), F-29 (trust
+channel), F-40 (`FollowPosition`), F-44 (working volume) · **Provoked by:** SR7 · **Does NOT touch:**
+ADR-083 / F-21 (still open)
+
+### Context — SR7
+
+`SR7.mp4` (200.6 s, one person) was shot with `--no-ownership`, so SR6's failure — F-21 gating the UDP
+send — is bypassed, and with it out of the way the transport was healthy: `packetAgeMs` 8-31 ms, ~40 ms
+end to end, `parseErr=0`, sender 29.0-29.6 fps, Unity 163-194 fps. (Quoted from the SR7 analysis in the
+task brief, not re-extracted.) **SR7 therefore proves the workaround, not F-21.**
+
+The bad frames were not late; they were out of range. The subject spent minutes at 0.91 m, 1.07-1.28 m
+and finally 0.66 m, against F-44's usable ~1.4-4.5 m. The TRUST HUD read 17-21 of 33 joints measured.
+Every stage downstream treated that as ordinary input:
+
+* **`LearnBoneLengths`** accepted a bone whenever both endpoints were *valid* (finite, non-zero
+  confidence, inside the body radius). Validity says nothing about where a joint's depth came from, so a
+  joint placed on the hip plane or at the model's monocular guess produced a distance that is a DEPTH
+  error, and it entered the median as a bone.
+* **The calibration band was 0.01-0.80 m for every bone.** A 0.55 m forearm — longer than any human one —
+  was inside it. Left and right were averaged, so a bad side moved its mirror.
+* **The avatar and the staged figure followed the hip.** `ApplyRootPosition` and
+  `TrackedStage.UpdateFollow` read `RootPositionMetres` unconditionally; at 0.66 m the figure walked
+  toward the lens.
+* **`HandPose` validated one segment.** A 147 mm palm passed while the thumb-index gap was 2273 mm.
+* **The HUD that would have shown any of it ran off the edge** of an 1100 px capture, which is why
+  `maxCorr` and the bone error were missing from the evidence.
+
+Transport latency was never the cause: `HumanizedSkeleton` rebuilds each bone at a fixed calibrated
+length and does no temporal smoothing of it.
+
+### Decision
+
+1. **There is ONE definition of the working range, and it is configurable.** `OperatingVolume`
+   (static, the `CameraMount` shape for the same reason) holds near 1.35 m, far 4.5 m, hold 0.75 s,
+   settle 6 poses; `AppBootstrap` publishes them from the Inspector. The judged quantity is `|root.z|`,
+   the figure the TRUST HUD already prints.
+2. **Outside the range a pose is REFUSED. It is never clamped.** Pinning a 0.66 m hip to 1.35 m
+   invents motion the subject did not make and hides a camera fault behind a plausible picture.
+   Instead: the last good body is held for a bounded 0.75 s, the walk-follow does not move and never
+   captures its neutral from such a frame, the calibration learns nothing, and after the hold the stage
+   withholds the body and says why (`TOO CLOSE - step back`).
+3. **A subject who is too close is still PRESENT.** The attract figure is suppressed while `live`, so a
+   synthetic body never appears over a real person who is merely out of range.
+4. **The gate counts POSES, not render frames, and does not look at the transport.** The counters
+   (`near`, `far`, `invalid`, `held`, `expired`) exist so the next recording can tell "too close" from
+   starvation without guessing.
+5. **Provenance goes through the existing trust channel.** `HumanizedSkeleton.Process(frame, dt,
+   TrackingTelemetry, PoseAdmission)` reads `TrackingTelemetry.DepthMeasured(joint)`; no second source
+   of truth was created. A bone is learned only when both endpoints are valid AND measured AND the pose
+   is `Trusted`. **Inferred joints are still output, rebuilt and held exactly as before** — the rule
+   gates learning, not output. The two-argument `Process` is kept and means *provenance unknown*.
+6. **Unknown provenance is treated as measured.** A stream with no depth channel (the deprecated body-only
+   sender) cannot report what it does not know, and refusing to calibrate on it would be a regression to
+   guard against a fault it cannot exhibit. A stream that reports the channel with nothing measured (a
+   video file) correctly never calibrates and passes the tracker's own lengths through.
+7. **Per-bone anatomical bands** (`HumanBodyModel.MinBoneLengthM/MaxBoneLengthM`) replace the global one,
+   with the sources in the table next to them. The global constants stay as the outer backstop.
+8. **Mirror averaging requires agreement.** Left/right medians are averaged only within 20 %; otherwise each
+   keeps its own. One validated side still serves an occluded other, as before.
+9. **Re-entry drops the temporal memory** of the held gap, so walking back in is not velocity-clamped as a
+   teleport, and re-arms the 0.15 s re-acquire blend so the return does not snap. Calibration additionally
+   waits `SettlePoses` consecutive in-range poses before it may learn again.
+10. **Hands are validated per landmark against their own wrist** (2.8 palms and 0.30 m; thumb-index 3.0
+    palms), per hand, counted per datagram. Advice distinguishes TOO FAR (palm too small — move closer)
+    from TOO CLOSE or depth unreliable (palm too large, or a landmark has left the hand — never "step
+    closer").
+
+### Consequences
+
+* **The product's 0.90 m operating point is now outside the volume.** F-43 and F-46 both say a single person
+  stands at 0.90 m. With the near limit at 1.35 m the Mirror holds and then stops being driven there. If
+  0.90 m is still wanted, F-44's 800p/ISP 1:1 change needs a capture at 0.90 m and the near limit becomes a
+  per-scene setting. Flagged, not decided.
+* 1.35 m and 4.5 m are DERIVED (F-44's 1.4 m edge plus SR7's degradation; F-44's pixels-on-target
+  arithmetic for the far edge, which F-44 itself marks as not a capture). They are fields, so moving them
+  after the 3-4 m take costs nothing.
+* A monocular source never calibrates. Acceptable: its lengths are the tracker's own either way.
+* Crowd bodies (`UpdateCrowd`) are not gated; only the primary person's root is judged.
+* The avatar's finger curls / palm rotation (`ParseHands` -> `HandFrame`) are not covered by the hand
+  validation, which protects `HandPose`.
+* `OperatingVolume.Enabled = false` restores the pre-F-48 behaviour for A/B; it does NOT disable rule 5,
+  which has its own reason.
+
+### Evidence
+
+60 tests in `NearFieldSafetyF48Tests`; 47 run on the bare runtime and 13 need `Quaternion.LookRotation`, a
+native call, so they were run under a managed stand-in for `Vector3/Quaternion/Mathf` (60/60) and are
+written to run unchanged in the Editor Test Runner. Three mutations were each caught: disabling the
+measured-depth rule (calibration samples 30 -> 90); letting near-field frames drive the follow position
+(the figure reaches **z = -1.28 m**, SR7's camera-rush); keeping temporal memory across the gap
+(`VelocityClamped` 0 -> 10). The F-27 `HumanizedSkeletonSelfTest` still passes 32/32. **Not camera-verified.**
+
+### DO NOT REVERT / how to tune
+
+* **Do not clamp the root to the near limit**, and do not "smooth" an out-of-range pose into range. That
+  is the failure this ADR exists to prevent.
+* **Do not run `Process` on an `Outside` pose as if it were admitted.** The layer returns the previous body
+  untouched for that admission; feeding it the bad frame re-creates SR7 inside the correction layer.
+* **Do not widen the per-bone bands back toward 0.01-0.80 m to "make more bones calibrate".** If bones do not
+  calibrate, read `rejected unmeasured-depth / out-of-volume / impossible-length` on the HUD first — they say
+  which gate refused, and each has a different fix.
+* **Do not treat unknown provenance as inferred** (decision 6) without first deciding what the deprecated
+  sender's users are to do instead.
+* **Do not remove `DropTemporalMemory`.** The recovery test fails without it (mutation-checked).
+* **Do not make `HandRangeAdvice` say "step closer" for a large palm or a blown-up landmark.** Moving closer
+  makes both worse; that was SR7's wording.
+* **To tune the range:** the four `Operating Volume (F-48)` fields on `AppBootstrap`. Read the VOLUME line
+  (`hip 1.62m [1.35-4.50] near 3 far 0 invalid 0 held 3 expired 0`) from a recording at each marked distance.
+* **ADR-083 is still open.** This ADR does not make F-21 work and a recording shot with `--no-ownership` is
+  not evidence about it.
+
+---
+
+## ADR-085 — A video is a PRODUCER, not a provider: test against it by making the sidecar send the same wire
+
+**Date:** 2026-10-09 · **Status:** Accepted · **Extends:** ADR-064 (Unity owns the sidecar), ADR-075/076
+(supervised senders, the scene picks the sender) · **Relates to:** F-23, F-32 (the evidence tools this grew from)
+
+### Context
+
+The request: give Unity a video link and a boolean, and have the skeleton scene, any experience and the VRM
+avatar run exactly as they do live. Three designs were possible:
+
+1. A second **tracking provider inside Unity** that decodes a video and runs a model in-process. Rejected:
+   Unity already has `SentisPoseProvider` and a MediaPipe path, and neither is the production pipeline — the
+   production pipeline is the Python sidecar, and a Unity-side model would test a *different* tracker.
+2. Pointing the **existing evidence tools** (`f23_video_to_unity.py`, `f32_multiperson_video.py`) at Unity.
+   Rejected as the product answer: neither is supervised, neither prints the readiness markers, neither loops, and
+   `f32` needs the OAK-D's VPU for its detector, so it cannot run without a camera at all.
+3. **Make the sidecar's producer a video** and leave everything after the datagram untouched. Chosen.
+
+### Decision
+
+1. **`tools/video/video_udp_sender.py` is a producer**, not a Unity component. It emits the production datagram
+   (`lm lh rh xyz src st lat seq sid t`), so the pose buffer, F-48 gate, humanize layer, every scene and the VRM
+   avatar run unchanged. The wire contract is NOT changed — hence no cross-repo ADR is required.
+2. **It is supervised.** `sidecar_supervisor.py` selects a third command shape from the script's basename, forwarding
+   only flags the video sender defines (the same rule as ADR-075; a camera flag would make Python exit before the
+   clip opens). It prints the readiness markers and a heartbeat — through a download and a model load too — because
+   the supervisor kills a child whose stdout stops growing for 10 s.
+3. **One boolean, applied live.** `AppBootstrap.trackFromVideo` is read at boot and watched in Play mode; a change
+   restarts the sidecar after the value has been stable for 1 s (the URL changes per keystroke). It reuses the
+   existing `EnsureSidecarForScene` rule: a sidecar Unity did not spawn is never restarted.
+4. **The label stays honest.** The sender has no stereo, so every `src` flag is 0 and the TRUST HUD reads 0/33
+   measured. `--assume-measured` exists so the F-48 calibration path can be exercised, but it changes the LABEL only
+   and is OFF by default; a recording made with it on is not evidence about the sensor.
+5. **The Inspector text is untrusted.** It is validated in Unity (`VideoSourceSpec`) and again in Python: http/https
+   or an existing file, nothing else; no quote or control character; bounded length; downloads are atomic, bounded
+   to 2 GiB and never run through a shell; yt-dlp is invoked with an argv list.
+6. **One person.** There is no host-side person detector, so crowd scenes see a crowd of one, and a video never
+   triggers the 15–20 s sender swap between the single and crowd columns.
+7. **F-21 ownership is OFF and the hip depth is estimated.** A walking subject in a clip is ADR-083's exact failure,
+   and a video has no second person to defend against. Depth comes from the subject's apparent height; a clamp keeps
+   it inside the F-48 volume by default and can be turned off to test the volume against the clip.
+
+### Addendum — live sources (phone, webcam, stream), same day
+
+A phone is just a producer of RGB frames, so it is the same sender with a live source: `camera:N`, `rtsp://…`, an http link
+to a LAN address (read as a stream, not a page) or `stream:<url>`. Three rules came with it:
+
+* **A live source is processed newest-frame-only**, on a reader thread, and reconnects forever. Reading a camera's queue in
+  order turns every moment the model is slower than the camera into lag that never drains.
+* **The image is oriented BEFORE the model** (`--rotate`, `--flip`): the model reads pixels, so a sideways portrait phone or a
+  mirrored selfie camera cannot be repaired afterwards. This is separate from the scenes' `flipX`, which is a display mirror.
+* **Credentials never leave the process in clear.** IP-camera links carry logins; every printed or logged link is redacted.
+
+**DO NOT** read a LAN `http://` link as a page for yt-dlp (it is a camera), do not pace a live source (the camera is the clock),
+and do not queue frames to "avoid drops" — a dropped frame is the correct response to a slow consumer.
+
+### Consequences
+
+* Everything downstream is genuinely the production code, so a bug found against a video is a bug in production code.
+  What is NOT production is the *input*: monocular depth, one camera, an assumed field of view.
+* On the default settings the calibration never becomes ready (0/24), because F-48 refuses unmeasured joints. That
+  is correct and visible (`unmeasured-depth` counter); tick `Video Assume Measured Depth` to see it calibrate
+  (18/24, trunk+head 0.73 m on SR7).
+* Monocular hand depth is noisy; F-48's hand gate refused ~20 % (left) and ~24 % (right) of hand frames on SR7 (389 and 468 of 1930 datagrams). That describes
+  the source, not the gate.
+* The download cache lives in the OS temp folder; nothing is added to the project tree.
+
+### DO NOT REVERT / how to tune
+
+* **Do not move this into Unity as a tracking provider** (option 1). It would test a different tracker from the one
+  that ships.
+* **Do not forward camera flags to the video sender**, and do not add `--show` to it through the supervisor.
+* **Do not let the sender exit when the clip ends.** The supervisor restarts an exited child, so "play once" would
+  become "play forever"; it idles with a heartbeat instead.
+* **Do not turn `--assume-measured` on by default** to make the HUD look healthier. It makes a video read 33/33
+  measured.
+* **Do not pace only the frames that produce a pose.** A clip that opens on an empty room otherwise runs at inference
+  speed and arrives at the subject far ahead of the wall clock (seen on SR7's first 19 s).
+* **To use it:** `AppBootstrap > Video Test Source`: tick `Track From Video`, set `Video Source`, press Play (or edit
+  while playing). To test F-48's volume against a clip, untick `Video Clamp Depth` and change
+  `Video Subject Height Metres`.
+
+---
+
+
+## ADR-086 — A phone over WebRTC is a frame SOURCE inside the video sender, and its PIN travels in the environment
+
+**Date:** 2026-10-10 · **Status:** Accepted · **Extends:** ADR-085 (a video is a producer; live sources) · **Relates to:**
+ADR-064 (Unity owns the sidecar), ADR-075 (supervised senders)
+
+### Context
+
+A phone could reach the sidecar only as a webcam (DroidCam/Iriun/Camo) or an MJPEG "IP camera" app. The LAN Camera Streaming
+project streams the phone's camera from a browser page over WebRTC with nothing to install. The request: run that server,
+paste the **viewer link** into `AppBootstrap`, type the **PIN in its own field**, and have the sidecar track the phone like a
+webcam. A standalone receiver (`cam_receiver`) was built first; the decision was to bring it in as a **utility**, not a second
+program.
+
+### Decision
+
+1. **`tools/video/lan_camera.py` is a frame source, not a sender.** `video_udp_sender.py` stays the only producer. The
+   reader has the same surface as `LatestFrameReader`, so the frame loop does not know which one it reads. No new process,
+   no new supervisor command shape, no wire change — therefore no cross-repo ADR is required.
+2. **A viewer link is classified before the generic http rule.** `http(s)://…/viewer?room=ID` (or `lan:<url>`) is a LAN
+   camera. Read by the generic rule it would be an MJPEG stream (LAN host) or a yt-dlp page (public tunnel host), and both
+   fail without ever naming the cause. Unity and Python each implement the rule; **both test suites pin the same examples.**
+3. **The PIN is never in the link and never on a command line.** A link carrying `pin=` is REFUSED, not stripped (silently
+   using it would teach people that a PIN in a link is fine, and links get logged and screenshotted). The PIN is its own
+   `AppBootstrap` field, masked in the Inspector, and reaches the sidecar as the `CAMERA_PIN` **environment variable**, set in
+   Unity for exactly the duration of `NativeProcess.Start()` and restored (verified: the child sees it only then). It is
+   handed only to a LAN camera source. The supervisor and its restarts inherit it from their own environment.
+4. **Fatal vs retry is decided by the server's own words.** Wrong PIN, invalid room, media-mode mismatch: exit 2 with one
+   line — retrying cannot fix them and the supervisor would only loop. Occupied room ("already has an active viewer"),
+   the server's 30 s rate-limit block and an internal error: retry (2, 5, then 10 s; five refusals make the server block the
+   socket, so faster only lengthens the wait). An unreachable server: retry forever.
+5. **Newest frame only, like every live source (ADR-085).** The loop thread drains the track and overwrites one slot; the
+   conversion to a BGR array happens in `read()`, only for the frame taken.
+6. **A resolution change is handled, not assumed away.** The crop box, the focal length and the per-person state come from
+   the first frame; a WebRTC sender changes resolution with the bandwidth, so the loop re-derives them when the size changes.
+7. **`RTCPeerConnection.close()` is bounded (3 s).** MEASURED hang (see tasks.md F-50); it would otherwise freeze the offer lock.
+8. **One viewer per room** is the server's rule, and a browser viewer open in the same room blocks the sidecar.
+
+### Consequences
+
+* The phone is one more `Video Source` value; every scene, the skeleton show and the VRM avatar run unchanged. The same
+  honesty rules as ADR-085 apply: no stereo (`src` all 0), one person, estimated depth.
+* The sidecar venv gained `aiortc` (+ PyAV, cryptography) and `python-socketio` (+ aiohttp): 27 pins in
+  `requirements.lock.txt`. They are imported only when a LAN camera starts.
+* The PIN is masked in the Inspector but **serialised into the scene as plain text**. `CAMERA_PIN` on the machine with the
+  field empty is the way to keep it out of the project.
+* WebRTC media is peer-to-peer. Behind router client isolation, or with the phone on another network and no TURN server, the
+  connection fails and the log says why; there is no fallback transport here.
+
+### DO NOT REVERT / how to tune
+
+* **Do not put the PIN back into the link or onto the command line** to "simplify" the field. Both end up in logs and in
+  process listings. Do not strip a `pin=` silently instead of refusing it.
+* **Do not classify a viewer link with the generic http rule**, and do not make the Unity and Python rules diverge: change
+  one, change the other, and extend BOTH test tables.
+* **Do not retry a wrong PIN.** It cannot succeed, and it turns a one-line error into a supervisor crash loop.
+* **Do not remove the 3 s bound on `pc.close()`** because it "never hangs": it did, three times in one run.
+* **Do not build a second program for the phone.** It is a source inside `video_udp_sender.py`.
+* **The server's side of the contract is documented in the LAN camera project** (`lan-camera-streaming/docs/receiver-guide.md`, written
+  after this work). It is technology-neutral and lists the pitfalls this receiver hit; change the receiver and that guide together.
+* **To use it:** run the LAN camera server, open its sender page on the phone, press start; in `AppBootstrap > Video Test
+  Source` tick `Track From Video`, paste the **viewer** link (`…/viewer?room=…`) into `Video Source`, type the server's
+  `ACCESS_PIN` into `Lan Camera Pin`, press Play. Close any browser viewer in that room first. If the avatar lies on its
+  side set `Video Rotate Degrees` to 90 or 270; for a selfie camera tick `Video Flip Horizontal`.
+
+---
+
+
+## ADR-087 — Status lights read the supervisor's state file; they never listen, never act, and never trust READY
+
+**Date:** 2026-10-10 · **Status:** Accepted · **Extends:** ADR-075 (supervised senders; nothing outside a scene binds the pose port),
+ADR-086 · **Relates to:** F-20B (the supervisor and its state file)
+
+### Context
+
+The sidecar has no window — on purpose: its preview window once bound ESC to quit and ended tracking for the session. The consequence
+was that a healthy system and a silently failed one looked the same, and after F-50 a working phone and a phone that never produced a
+person were indistinguishable. The user asked for lights in the Unity scene and kept the no-window rule.
+
+### Decision
+
+1. **Five lights**, in the order things fail: SIDECAR (the process), WATCHDOG (the supervisor), SOURCE (camera or phone), MODEL (loaded and
+   consuming frames), TRACKING (a person found and sent). Drawn top right in every scene, F8 hides, every change also logged once.
+2. **The source of truth is the supervisor's `supervisor_state.json`**, which now carries the sender's latest heartbeat as `Child`
+   (`Frames`, `Sent`, `Skipped`, `Live`, `Note`, `LineAgeSeconds`). The supervisor already tails the child's log; it copies the last
+   `frames= sent=` line there every ~2 s. Unity reads the file once a second, plus its own launcher state.
+3. **The lights do not listen on UDP.** Every scene binds the pose port for itself and a second bind is the failure ADR-075 removed.
+4. **The rules are a pure model** (`SidecarStatusModel`, System + Newtonsoft only) so each is asserted without a player.
+5. **READY is not "the model is loaded".** The senders print their first `frames=` line before loading the model, and the supervisor
+   marks READY on it (measured: READY at 1.5 s with "loading RTMW3D" immediately before). MODEL is therefore judged from the heartbeat:
+   `loading` in the note, then the frame counter moving.
+6. **"Moving" needs two observations and a window.** A counter that changed within 6 s is moving; the first sighting of a counter proves
+   nothing (a stalled sender's last line would read as healthy) and reads `checking...`. `frames` moving while `sent` stands still is
+   *no person found* — the case that previously looked like success.
+7. **Read-only and advisory.** The lights change nothing: not the sidecar, not the supervisor, not what any scene draws.
+
+### Consequences
+
+* A user can tell "starting", "loading", "waiting for the phone", "running but nobody found" and "crashed" apart without a terminal.
+* The supervisor's state file gained a key. Existing readers (the F-20B failure tests) read it by key and are unaffected.
+* The lights report what the SENDER says. They do not prove Unity receives the poses; that needs a hook in the pose provider and is open
+  work.
+* The state file is the contract between the two repositories for this feature; renaming `Child` or its fields breaks the lights
+  (`SidecarStatusModelF51Tests` and `test_supervisor_state.py` pin both ends).
+
+### DO NOT REVERT / how to tune
+
+* **Do not give the sidecar a window** to solve this; that is the problem ADR-075 and F-20B exist to prevent.
+* **Do not bind the pose port from the lights**, even "just to count". Add a counter in the pose provider instead.
+* **Do not read `SidecarReady` as inference started.** Do not turn the first sighting of a counter into "running".
+* **Do not let a light control anything.** If a state should trigger an action, that belongs in the supervisor or the bootstrap, tested
+  there.
+* **To tune:** `ActivitySeconds` (6), `StaleStateSeconds` (10) and `SilentChildSeconds` (8) in `SidecarStatusModel`, each derived from the
+  sender's 2 s heartbeat and the supervisor's 2 s write; change them only with a measurement of those cadences.
+
+---
+
+
+## ADR-088 — Multi-person without an OAK-D: a host YOLOX-s detector feeding the existing F-32 tracker, with the SINGLE-person video chain per person
+
+**Status:** Accepted (2026-10-10); wired into Unity the same day as `AppBootstrap > Video Max People`. **Extends** ADR-070/071 (the F-32/F-33 multi-person path) and
+ADR-085 (the video sender); **does not touch** the wire format.
+
+### Context
+
+After a phone worked as a one-person camera (ADR-085/086), the next ask was several people through the SAME route (a video, then a phone or a
+USB RGB camera, no OAK-D). The multi-person chain needs a list of person boxes per frame; on the OAK-D that comes from a VPU detector, which a
+phone, webcam or file does not have, so `video_udp_sender.py` posed one crop. Target: 2-3 people, a fixed wall-mounted USB camera.
+
+### Decision
+
+1. **Add a host-side person detector and nothing else new:** YOLOX-s (Megvii, Apache-2.0), 640x640, on the same DirectML GPU. Its output is fed to
+   the unchanged `PersonTracker`. Weights are fetched by a script with a pinned size and SHA-256 and live outside version control and outside
+   Unity's import path (`python-sidecar~/models/`).
+2. **Per person, run the single-person VIDEO chain** (hip depth from apparent height, a One-Euro filter on the model's own per-joint z, P1-1 joint
+   states), keyed by track id — **not** F-33's chain, which needs stereo depth.
+3. **Opt-in:** `--max-poses N` on `video_udp_sender.py`, default 1 = the existing path byte-for-byte. The detector modules are imported only for N > 1.
+4. **Same wire as F-32:** `persons[]`, with `persons[0]` also at the root in the single-person shape (translation scaled by `--sway-gain` as in
+   the single-person video sender), so every existing scene consumes it unchanged.
+
+### Measured
+
+Detector 8-12 ms; finds a mean 6.26 of 8 dancers. Throughput with decode excluded: 2 / 3 / 5 / 8 people = **35.5 / 26.3 / 17.5 / 14.8 fps**.
+On a one-person clip the multi path matches the single path (shoulder width 334 vs 333 mm, jitter 14.1 vs 13.9 mm). 71 tests, 15 mutations
+caught, the LAN chain test (103/103) unchanged. Full table: `tasks.md` F-52.
+
+### Alternatives rejected
+
+* **Ultralytics YOLO:** AGPL-3.0, a real problem for a shipped product. (RTMDet, also Apache-2.0, was **not evaluated**, only not chosen.)
+* **F-33's synthetic depth frame** (the F-32 video harness's way): it paints each box with one flat distance, so every joint reads "measured" and
+  the model's coherent z is thrown away — measured as the reason single-person video looked good (F-49 finding). Rejected for any source without stereo.
+* **Squashing the frame into the detector:** the repo already measured 0.95 against 7.06 people per frame on the same clip (squashed vs letterboxed).
+* **Rewriting the single-person loop to share code:** that loop is validated on live evidence; the multi path duplicates ~25 lines of its recipe
+  (all of it calls into the shared `build_*` builders) rather than risk it.
+
+### Consequences
+
+* A phone, webcam or file can drive several skeletons without an OAK-D; 2 people run past the camera's 30 fps, 3 do not (26.3).
+* New 35.9 MB weights file to fetch once per machine; the detector is a second GPU model, so GPU contention with Unity's rendering is possible
+  (not measured on a loaded machine).
+* The sender's heartbeat gained fields (`people= tracks= dets= detect~ pose~`); the supervisor's parser strips `key=value` tokens, so the note
+  Unity's MODEL light reads is unchanged (pinned in `test_host_multiperson.py`).
+
+### DO NOT REVERT / how to tune
+
+* **Do not use the synthetic depth frame** for a source with no stereo. **Do not pose LOST tracks** (a box drifting away from a body).
+* **Do not lower `--det-conf` or the NMS bar** without re-measuring phantom people on a clip with nobody in it and on the 8-dancer clip; NMS 0.45
+  keeps two shoulder-to-shoulder people (IoU ~0.2) separate and merges duplicates.
+* **Do not treat `456.webm` (8 dancers, heavy occlusion) as a pass/fail bar** for a 2-3 person product; it is a stress test. Do not quote the ~17 fps
+  file figure as the pipeline's speed (it is the clip's decode cost).
+* **To tune:** the cap (`--max-poses`) is the GPU budget: each person is ~9 ms. To reach 30 fps at 3 people, measure first: detecting every other frame
+  (~4 ms), an FP16 detector.
+* **How Unity exposes it:** `AppBootstrap > Video Max People` -> `SidecarLaunchOptions.VideoMaxPeople` -> the supervisor's `--video-max-poses` -> the sender's
+  `--max-poses`. **Never forward the OAK `--max-poses` to the video sender**: Unity always sends it (default 3) and that would switch multi-person on for
+  every video session. The count is clamped to 1-8 in both languages (`VideoSourceSpec.MaxPeople`, `sidecar_supervisor.VIDEO_MAX_PEOPLE`), and Unity refuses to start
+  the sidecar for more than one person when the detector weights are missing (one error line, not a watchdog loop).
+* **Not decided here:** which crowd scenes should consume host-detected people.
+
+---
+
+
+## ADR-089 — Long Inspectors are grouped by an attribute and split into partial files; never by moving fields into nested classes
+
+**Status:** Accepted (2026-10-10). **Context:** `AppBootstrap` had 105 serialized fields (75 visible) in one list, in a 1,966-line file.
+
+### Decision
+
+1. `[InspectorGroup]` on the first field of each section, a pure reflection rule (`InspectorGrouping`) to assign the rest, and a generic `GroupedInspectorEditor`
+   that draws the sections as foldouts.
+2. Declare each section's fields in its own `partial class` file named for the section.
+3. The section order comes from `Order`, never from file or declaration order.
+
+### Why not the obvious alternative
+
+Moving the fields into `[Serializable]` settings classes (`video.videoSource`, `kalidokit.lerp`) would shorten the script just as well, but it renames every
+serialized property path, so `Bootstrap.unity` would silently reset to defaults - including the user's `videoSource`, PIN and tuning values - unless the scene YAML
+were migrated by hand. A partial class and an editor-side grouping change nothing that is serialized.
+
+### Consequences
+
+* Nothing in a scene or prefab changes. The Inspector is nine collapsible sections, three of them open by default.
+* A setting is found by file name (`AppBootstrap.VideoSource.cs`).
+* `Order` is load-bearing: the order partial files are compiled in is not specified, so `InspectorGroupingTests` pins the nine titles in order.
+
+### DO NOT REVERT / how to extend
+
+* **Do not turn `InspectorGroupAttribute` into a `PropertyAttribute`**: Unity applies one property drawer per field, so it would fight `[Range]` and `[MaskedString]`.
+* **Do not rename or retype a field when moving it between files.** The move script asserted the declarations were byte-identical for a reason.
+* **To add a setting:** put it in the partial file for its section (or a new file with a new `[InspectorGroup]` and an unused `Order`).
+* **To group another component:** add `[InspectorGroup]` to its fields and `[CustomEditor(typeof(X))] sealed class XEditor : GroupedInspectorEditor { }`.
+
+---

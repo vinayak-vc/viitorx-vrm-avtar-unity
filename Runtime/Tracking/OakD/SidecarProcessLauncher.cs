@@ -60,6 +60,7 @@ namespace VirtualMirror.Tracking.OakD {
         private SidecarLaunchState state = SidecarLaunchState.Disabled;
         private string lastError = string.Empty;
         private int childPid = -1;
+        private string lastStderrLine = string.Empty;
         private bool disposed;
 
         /// <summary>Current state. Safe to read from the main thread while stdout arrives on another.</summary>
@@ -130,6 +131,19 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             List<string> problems = SidecarPaths.Validate(paths);
+            if (!string.IsNullOrEmpty(options.DirectScript)) {
+                string direct = ResolveDirectScript(paths);
+                if (!System.IO.File.Exists(direct)) {
+                    problems.Add("Sender script is missing: " + direct);
+                }
+            } else if (!string.IsNullOrEmpty(options.SupervisedSenderScript)) {
+                // Validate::SenderScript only ever checks the PACKAGED sender, so a typo'd override
+                // would otherwise surface as the supervisor dying on a missing file after launch.
+                string supervised = ResolveSupervisedSender(paths);
+                if (!System.IO.File.Exists(supervised)) {
+                    problems.Add("Sender script is missing: " + supervised);
+                }
+            }
             if (problems.Count > 0) {
                 string detail = string.Join(" | ", problems.ToArray());
                 SetState(SidecarLaunchState.Failed, detail);
@@ -172,7 +186,29 @@ namespace VirtualMirror.Tracking.OakD {
             // NativeProcess starts its reader threads inside Start() when the Redirect* flags are
             // set; BeginOutputReadLine/BeginErrorReadLine are no-ops kept only for API compatibility,
             // so there is deliberately nothing to call here.
-            if (!process.Start()) {
+            // F-50: the LAN camera's access PIN travels in the CHILD's environment, never on its command
+            // line (visible to every process on the machine) and never in a log. NativeProcess starts the
+            // child with the parent's environment (CreateProcessW, lpEnvironment = null), so it is set
+            // for exactly the duration of Start() and put back, which also keeps it out of any other
+            // process Unity launches later. A supervisor restart inherits it from the supervisor itself.
+            string pin = PinForChild(options);
+            string previousPin = null;
+            bool pinApplied = false;
+            if (pin.Length > 0) {
+                previousPin = Environment.GetEnvironmentVariable(LanCameraPinEnvironmentVariable);
+                Environment.SetEnvironmentVariable(LanCameraPinEnvironmentVariable, pin);
+                pinApplied = true;
+            }
+            bool started;
+            try {
+                started = process.Start();
+            } finally {
+                if (pinApplied) {
+                    // null removes the variable, which is the right restore when there was none.
+                    Environment.SetEnvironmentVariable(LanCameraPinEnvironmentVariable, previousPin);
+                }
+            }
+            if (!started) {
                 SetState(SidecarLaunchState.Failed, "NativeProcess.Start returned false");
                 return false;
             }
@@ -183,8 +219,30 @@ namespace VirtualMirror.Tracking.OakD {
             AssignToJobObject(childPid);
 
             SetState(SidecarLaunchState.Starting, string.Empty);
-            Info("sidecar supervisor started, pid " + childPid);
+            Info((string.IsNullOrEmpty(options.DirectScript)
+                  ? "sidecar supervisor started, pid "
+                  : "sidecar started UNSUPERVISED (no watchdog), pid ") + childPid);
             return true;
+        }
+
+        /// <summary>The environment variable the sidecar reads the LAN camera's PIN from
+        /// (<c>lan_camera.PIN_ENV</c>). The same name the standalone receiver uses, so a machine that
+        /// already exports it needs no PIN in Unity at all.</summary>
+        public const string LanCameraPinEnvironmentVariable = "CAMERA_PIN";
+
+        /// <summary>
+        /// The PIN to put in the child's environment, or empty. Only a LAN camera source gets one: any
+        /// other source has no use for it, and a secret that is not needed is not handed over.
+        /// </summary>
+        public static string PinForChild(SidecarLaunchOptions launchOptions) {
+            if (launchOptions == null || string.IsNullOrEmpty(launchOptions.VideoSource)
+                || string.IsNullOrEmpty(launchOptions.LanCameraPin)) {
+                return string.Empty;
+            }
+            if (VideoSourceSpec.KindOf(launchOptions.VideoSource) != VideoSourceKind.LanCamera) {
+                return string.Empty;
+            }
+            return launchOptions.LanCameraPin.Trim();
         }
 
         /// <summary>
@@ -193,10 +251,13 @@ namespace VirtualMirror.Tracking.OakD {
         /// project and we already know the answer.
         /// </summary>
         private string BuildArguments(SidecarPathSet paths) {
+            if (!string.IsNullOrEmpty(options.DirectScript)) {
+                return BuildDirectArguments(paths);
+            }
             StringBuilder sb = new StringBuilder();
             sb.Append("-u ").Append(Quote(paths.SupervisorScript));
             sb.Append(" --python ").Append(Quote(paths.PythonExe));
-            sb.Append(" --script ").Append(Quote(paths.SenderScript));
+            sb.Append(" --script ").Append(Quote(ResolveSupervisedSender(paths)));
             sb.Append(" --model ").Append(Quote(paths.ModelFile));
             sb.Append(" --host ").Append(options.Host);
             sb.Append(" --port ").Append(options.UdpPort);
@@ -205,14 +266,112 @@ namespace VirtualMirror.Tracking.OakD {
                 ? " --portrait --portrait-dir " + options.PortraitDirection
                 : " --no-portrait");
             sb.Append(" --subpixel-bits ").Append(options.SubpixelBits);
+            // F-44. Forwarded to BOTH senders by the supervisor, like --subpixel-bits and for the
+            // same reason: these change the depth and the crop the sender measures from, so one
+            // sender running native while the other runs half-res would make the two columns
+            // disagree about the same room.
+            if (!string.IsNullOrEmpty(options.MonoResolution)) {
+                sb.Append(" --mono-res ").Append(options.MonoResolution);
+            }
+            if (!string.IsNullOrEmpty(options.RgbIspScale)) {
+                sb.Append(" --rgb-isp ").Append(options.RgbIspScale);
+            }
+            // Which of these the supervisor actually forwards depends on the sender it was pointed
+            // at - the portrait/subpixel pair for the single-person sender, --max-poses for the
+            // multi-person one. That decision lives in ONE place (sidecar_supervisor.build_command)
+            // rather than being duplicated here, so the two cannot drift into a combination that
+            // makes Python exit on an unrecognised flag before the camera is ever opened.
+            sb.Append(" --max-poses ").Append(Math.Max(1, Math.Min(8, options.MaxPoses)));
             // Unity is listening on the destination port while in Play mode. The supervisor's port
             // probe binds that port to look for a stale producer, so it reads our healthy listener
             // as "port in use" and refuses to launch. This flag exists for exactly this case.
             sb.Append(" --allow-port-listener");
+            // F-49. Only when a video is the source. The supervisor forwards these to the video sender
+            // alone and ignores them for the camera senders, so adding them here cannot change what a
+            // camera session is launched with.
+            if (!string.IsNullOrEmpty(options.VideoSource)) {
+                System.Globalization.CultureInfo ci = System.Globalization.CultureInfo.InvariantCulture;
+                sb.Append(" --video ").Append(Quote(options.VideoSource));
+                sb.Append(" --video-loop ").Append(Math.Max(0, options.VideoLoopCount));
+                sb.Append(" --video-subject-height ").Append(options.VideoSubjectHeightMetres.ToString("F2", ci));
+                sb.Append(" --video-hfov ").Append(options.VideoHorizontalFovDegrees.ToString("F1", ci));
+                if (options.VideoDepthMinMetres > 0f && options.VideoDepthMaxMetres > options.VideoDepthMinMetres) {
+                    sb.Append(" --video-depth-range ")
+                      .Append(options.VideoDepthMinMetres.ToString("F2", ci)).Append(' ')
+                      .Append(options.VideoDepthMaxMetres.ToString("F2", ci));
+                }
+                // 0/180/270 only; anything else was never meant and is dropped rather than forwarded.
+                if (options.VideoRotateDegrees == 90 || options.VideoRotateDegrees == 180
+                    || options.VideoRotateDegrees == 270) {
+                    sb.Append(" --video-rotate ").Append(options.VideoRotateDegrees);
+                }
+                if (options.VideoFlipHorizontal) {
+                    sb.Append(" --video-flip");
+                }
+                if (options.VideoCameraWidth >= 160 && options.VideoCameraHeight >= 120) {
+                    sb.Append(" --video-camera-size ").Append(options.VideoCameraWidth).Append(' ')
+                      .Append(options.VideoCameraHeight);
+                }
+                if (options.VideoAssumeMeasuredDepth) {
+                    sb.Append(" --video-assume-measured");
+                }
+                // F-52. Its own flag, NOT --max-poses above (the OAK multi-person cap, always sent and
+                // ignored by the video sender): 1 sends nothing, so a one-person session is launched
+                // exactly as before.
+                int videoPeople = VideoSourceSpec.ClampPeople(options.VideoMaxPeople);
+                if (videoPeople > 1) {
+                    sb.Append(" --video-max-poses ").Append(videoPeople);
+                }
+            }
             if (!string.IsNullOrEmpty(options.ExtraArguments)) {
                 sb.Append(" ").Append(options.ExtraArguments);
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Command line for the DIRECT path. Deliberately minimal: only the three flags every sender
+        /// here accepts, plus whatever the caller named explicitly. The supervisor's portrait and
+        /// subpixel flags are absent because the multi-person sender does not take them - it handles
+        /// portrait internally - and passing an unrecognised flag makes Python exit before the camera
+        /// is ever opened.
+        /// </summary>
+        private string BuildDirectArguments(SidecarPathSet paths) {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("-u ").Append(Quote(ResolveDirectScript(paths)));
+            sb.Append(" --host ").Append(options.Host);
+            sb.Append(" --port ").Append(options.UdpPort);
+            sb.Append(" --model ").Append(Quote(paths.ModelFile));
+            if (!string.IsNullOrEmpty(options.DirectArguments)) {
+                sb.Append(" ").Append(options.DirectArguments);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>The direct script as an absolute path: taken as-is when rooted, otherwise
+        /// resolved against the sidecar root.</summary>
+        public string ResolveDirectScript(SidecarPathSet paths) {
+            return ResolveAgainstRoot(paths, options.DirectScript);
+        }
+
+        /// <summary>
+        /// The sender the SUPERVISOR should launch. Falls back to the packaged single-person sender,
+        /// so a caller that names nothing gets exactly the behaviour it always had.
+        /// </summary>
+        public string ResolveSupervisedSender(SidecarPathSet paths) {
+            string resolved = ResolveAgainstRoot(paths, options.SupervisedSenderScript);
+            return string.IsNullOrEmpty(resolved) ? paths.SenderScript : resolved;
+        }
+
+        /// <summary>A sidecar-relative script name as an absolute path; empty stays empty.</summary>
+        private static string ResolveAgainstRoot(SidecarPathSet paths, string script) {
+            if (string.IsNullOrEmpty(script)) {
+                return string.Empty;
+            }
+            if (System.IO.Path.IsPathRooted(script)) {
+                return script.Replace('\\', '/');
+            }
+            return (paths.Root.TrimEnd('/') + "/" + script).Replace('\\', '/');
         }
 
         /// <summary>
@@ -294,26 +453,11 @@ namespace VirtualMirror.Tracking.OakD {
         /// trying to bind it. A successful bind means nobody owns it, so we are clear to spawn.
         /// </summary>
         private bool IsLockPortHeld() {
-            TcpListener listener = null;
-            try {
-                listener = new TcpListener(IPAddress.Loopback, options.LockPort);
-                listener.Start();
-                return false;
-            } catch (SocketException) {
-                return true;
-            } catch (Exception) {
-                // Unknown failure - assume free and let the supervisor arbitrate. It aborts cleanly
-                // and says so on stderr if it loses the race.
-                return false;
-            } finally {
-                try {
-                    if (listener != null) {
-                        listener.Stop();
-                    }
-                } catch (Exception) {
-                    // Nothing useful to do.
-                }
-            }
+            // F-36: the probe moved to SidecarSingleInstanceLock, because the lock is now something
+            // that can be HELD as well as tested - SidecarBootstrap owns a sidecar without ever
+            // starting a supervisor, and has to be visible to this check. Same bind test, one
+            // definition, so both sides agree on what "already owned" means.
+            return SidecarSingleInstanceLock.IsHeldByAnyone(options.LockPort);
         }
 
         // ---- supervisor output -> ILogService --------------------------------------------------
@@ -335,6 +479,7 @@ namespace VirtualMirror.Tracking.OakD {
             if (e == null || string.IsNullOrEmpty(e.Data)) {
                 return;
             }
+            lastStderrLine = e.Data;
             log?.Log(LogLevel.Warning, LogTag + e.Data);
         }
 
@@ -350,8 +495,15 @@ namespace VirtualMirror.Tracking.OakD {
             }
             // An exit during teardown is expected; only an unrequested one is a failure.
             if (State == SidecarLaunchState.Starting || State == SidecarLaunchState.Running) {
-                SetState(SidecarLaunchState.Failed, "sidecar exited with code " + code);
-                log?.Log(LogLevel.Error, LogTag + "sidecar supervisor exited unexpectedly, code " + code);
+                string name = string.IsNullOrEmpty(options.DirectScript)
+                    ? "sidecar supervisor"
+                    : "sidecar (" + options.DirectScript + ")";
+                string detail = name + " exited unexpectedly, code " + code;
+                if (!string.IsNullOrEmpty(lastStderrLine)) {
+                    detail += " | Last error: " + lastStderrLine;
+                }
+                SetState(SidecarLaunchState.Failed, detail);
+                log?.Log(LogLevel.Error, LogTag + detail);
             }
         }
 
@@ -531,8 +683,99 @@ namespace VirtualMirror.Tracking.OakD {
         public bool Portrait = true;
         public string PortraitDirection = "ccw";
         public int SubpixelBits = 3;
+
+        /// <summary>
+        /// F-44 WORKING VOLUME. Both OV9782 sensors are 1280x800 and the pipeline used to discard
+        /// half the linear resolution on each path. `MonoResolution` 800p halves depth error at every
+        /// range (mono fx 287 -> 574, so f·B doubles); `RgbIspScale` 1/1 keeps the native frame at
+        /// FULL FOV and doubles the pixels on a body, which is what sets the distance at which the
+        /// pose model still sees a person. Measured cost of both together: 30.0 -> 29.2 fps.
+        /// The pose solve is unaffected — RTMW3D always resizes its crop to 288x384.
+        /// </summary>
+        public string MonoResolution = "800p";
+        public string RgbIspScale = "1/1";
+
         public string ExtraArguments = string.Empty;
+
+        /// <summary>
+        /// Which sender the SUPERVISOR launches, relative to the sidecar root (or absolute). Empty
+        /// means the packaged single-person sender, which is what this always did.
+        ///
+        /// Prefer this over <see cref="DirectScript"/>. Both can reach the multi-person sender; only
+        /// this one keeps the watchdog, and an unsupervised sidecar has no way back from anything
+        /// that ends the process.
+        /// </summary>
+        public string SupervisedSenderScript = string.Empty;
+
+        /// <summary>People posed per frame, forwarded to the multi-person sender. The single-person
+        /// sender has no such flag and the supervisor does not forward it there.</summary>
+        public int MaxPoses = 3;
+
+        /// <summary>
+        /// F-36 — run this sender DIRECTLY instead of going through the supervisor. Empty (the
+        /// default) keeps the supervised production path exactly as it was.
+        ///
+        /// PREFER <see cref="SupervisedSenderScript"/>. This existed because the supervisor built its
+        /// child command from a fixed set of flags — `--portrait`, `--portrait-dir`,
+        /// `--subpixel-bits`, `--seconds` — that only `wholebody_udp_sender.py` accepts, so the
+        /// multi-person sender could not be supervised at all. That is no longer true: the supervisor
+        /// now picks the command shape from the sender it is given, and both senders print the
+        /// readiness markers it waits on.
+        ///
+        /// What the direct route costs, measured the hard way: a sidecar launched this way has NO
+        /// watchdog, so anything that ends the process — a crash, a USB unplug, or the preview
+        /// window's own quit key — takes tracking down for the rest of the session with nothing to
+        /// bring it back. Keep this only for one-off experiments that genuinely must not restart.
+        ///
+        /// Everything else this class does still applies — the kill-on-close job object, the
+        /// taskkill of the whole tree, path validation, the log tag. Those are what make it worth
+        /// reusing rather than writing a second launcher.
+        ///
+        /// A path relative to the sidecar root, or absolute.
+        /// </summary>
+        public string DirectScript = string.Empty;
+
+        /// <summary>Extra arguments for <see cref="DirectScript"/>, appended after host/port/model.
+        /// Ignored unless DirectScript is set.</summary>
+        public string DirectArguments = string.Empty;
         /// <summary>Overrides the model location; empty means use the packaged path.</summary>
         public string ModelPathOverride = string.Empty;
+
+        // ---- F-49: a video in place of the camera ------------------------------------------------
+        // Empty VideoSource means the camera, exactly as before. When set it must already have been
+        // through VideoSourceSpec.TryResolve, and SupervisedSenderScript must name the video sender.
+
+        /// <summary>The clip: an http(s) link or an absolute path. Validated by
+        /// <see cref="VideoSourceSpec"/> before it gets here.</summary>
+        public string VideoSource = string.Empty;
+        /// <summary>Replays; 0 loops forever.</summary>
+        public int VideoLoopCount;
+        /// <summary>Label every joint's depth as measured (label only; see video_udp_sender.py).</summary>
+        public bool VideoAssumeMeasuredDepth;
+        /// <summary>Rotate each frame clockwise before inference: a portrait phone arrives sideways.
+        /// 0, 90, 180 or 270; anything else is ignored.</summary>
+        public int VideoRotateDegrees;
+        /// <summary>Mirror each frame horizontally before inference: a front camera swaps left and right.</summary>
+        public bool VideoFlipHorizontal;
+        /// <summary>Requested webcam resolution; 0 leaves the sender's 1280x720. Ignored by files and streams.</summary>
+        public int VideoCameraWidth;
+        public int VideoCameraHeight;
+        /// <summary>Assumed subject height, metres. Sets the estimated hip depth.</summary>
+        public float VideoSubjectHeightMetres = 1.70f;
+        /// <summary>Assumed horizontal FOV of the clip's camera, degrees.</summary>
+        public float VideoHorizontalFovDegrees = 60f;
+        /// <summary>Clamp the estimated hip depth to [min, max] metres. Either 0 disables the clamp.</summary>
+        public float VideoDepthMinMetres;
+        public float VideoDepthMaxMetres;
+        /// <summary>F-52. People the video sender poses per frame. 1 is the single-person path; 2 or more makes
+        /// it run a host-side person detector and tracker. Clamped to 1..<see cref="VideoSourceSpec.MaxPeople"/>.</summary>
+        public int VideoMaxPeople = 1;
+
+        // ---- F-50: a phone over WebRTC -------------------------------------------------------------
+        /// <summary>The LAN Camera Streaming server's access PIN. Read only when <see cref="VideoSource"/>
+        /// is a LAN camera link, and handed to the sidecar through its ENVIRONMENT (see
+        /// <see cref="SidecarProcessLauncher.PinForChild"/>) - it is deliberately never part of
+        /// <see cref="VideoSource"/> or of any command line, because both end up in logs.</summary>
+        public string LanCameraPin = string.Empty;
     }
 }

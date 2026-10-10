@@ -19,6 +19,28 @@ Read in order when onboarding. Update the matching document when a subsystem cha
 
 ---
 
+## Demonstration branch (the skeleton as the product)
+
+F-26 established that the tracking is sound and the **retarget** is not, so the avatar is parked and
+the debug skeleton is being built into the product. These are the current reports, newest first.
+
+| Doc | Covers |
+|-----|--------|
+| [F36_SIDECAR_BOOT_2026-09-17.md](F36_SIDECAR_BOOT_2026-09-17.md) | One boot scene that starts the multi-person sidecar and opens the launcher |
+| [F35_SCENE_LAUNCHER_2026-09-17.md](F35_SCENE_LAUNCHER_2026-09-17.md) | One launcher scene for all twenty scenes, split by how many people each one needs |
+| [F34_CROWD_EXPERIENCES_2026-09-17.md](F34_CROWD_EXPERIENCES_2026-09-17.md) | Nine crowd experience scenes, and the rule that decided which multi-person ideas are buildable |
+| [F33_PER_PERSON_FILTERS_2026-09-17.md](F33_PER_PERSON_FILTERS_2026-09-17.md) | Per-person P0/P1-1/F-22 filter chains keyed on the track id, and a self-measured sample rate |
+| [F32_MULTIPERSON_2026-09-17.md](F32_MULTIPERSON_2026-09-17.md) | Multi-person detection, tracking with stable ids, and the first two-person experience |
+| [F30_EXPERIENCES_2026-09-16.md](F30_EXPERIENCES_2026-09-16.md) | Seven interactive experience scenes on one shared tracking core (`TrackedStage`) |
+| [F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md](F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md) | The trust channel, hands and feet drawn, the attract loop, and the measured range limits |
+| [F28_SKELETON_SHOW_MODES_2026-09-16.md](F28_SKELETON_SHOW_MODES_2026-09-16.md) | The show scene and its first three modes |
+| [F27_HUMANIZED_SKELETON_2026-09-16.md](F27_HUMANIZED_SKELETON_2026-09-16.md) | The humanized skeleton layer |
+| [F26_AVATAR_VS_DEBUG_SKELETON_2026-09-16.md](F26_AVATAR_VS_DEBUG_SKELETON_2026-09-16.md) | Why the avatar diverges while the skeleton does not |
+
+Measurements behind them: `evidence/f29/` and `evidence/f30/`.
+
+---
+
 ## Design Specs (SDS)
 
 | # | Document | Covers |

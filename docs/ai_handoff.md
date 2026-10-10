@@ -1,7 +1,238 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-09-16
+Last updated: 2026-10-10 (F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## 🔷 F-52 follow-up — first real 2-person clip (`147.webm`, 4K) live in Unity; three fixes (2026-10-10)
+
+Full record: [`tasks.md`](tasks.md) "F-52 FOLLOW-UP". Offline: both people posed on 1931/1934 frames with exactly 2 ids and no id change. Live: (1) the first sidecar launch
+was killed by the supervisor's 10 s silence limit while the FP32 model loaded (13.8 s) -> `LoadTicker` keeps the heartbeat going; (2) **Unity was passing the FP32
+model** even though ADR-082 made FP16 the default -> `SidecarPaths.PreferFp16` / `SidecarLocator` now use `rtmw3d-x-fp16.onnx` when present; (3) a 4K file decoded serially
+with inference (13.4 fps) -> `PrefetchCapture` (21.8 fps; 4K decode caps at ~24 fps, so use a 1080p copy for real-time). **Do not** downscale a 4K source "for speed": measured no gain
+and no loss. Tests: `test_video_source.py` 129/129, `SidecarModelPreferenceTests` 6/6. What the scene shows was watched by the user.
+
+**Follow-up 2 (the skeleton lagged the video):** correct — a file was processed frame by frame, so the 4K clip ran at 0.62x. A file is now held to its own clock by dropping late frames (`--drop-late`, heartbeat `speed=`/`late=`), but ONLY when the
+next frame is already decoded (dropping never saves decode time; the first version posed 13 of 1,934 on the 4K file). A decode-bound file plays at the decoder's speed and the sender says so. **Use `Assets/Games/video/147_1080p.mp4`** (speed 0.99 live in Unity).
+
+---
+
+## 🔷 F-53 — the AppBootstrap Inspector is nine collapsible sections, and its settings live in named files (2026-10-10)
+
+Full record: [`tasks.md`](tasks.md) F-53, [`decisions.md`](decisions.md) **ADR-089**. **Nothing is serialized differently** - every saved scene value is intact.
+
+Settings now live in `Runtime/Bootstrap/AppBootstrap.<Section>.cs` (a `partial class`): TrackingSource, VideoSource, KalidokitBody, HumanizedSkeleton, OperatingVolume,
+PoseMapping, Features, Debug; `AppBootstrap.cs` keeps the plumbing and behaviour. The Inspector draws them as foldouts via `[InspectorGroup]` +
+`Editor/GroupedInspectorEditor.cs`. **To add a setting, put it in the file for its section.** **Do not** move fields into nested serializable classes (it renames the
+serialized paths and resets the scene) and **do not** make the attribute a `PropertyAttribute`. Tested: `InspectorGroupingTests` 9/9, 8 mutations caught, and a
+real `SerializedObject` showed 75 visible = 75 grouped. **Never seen drawn.** The new files need their `.meta` files committed.
+
+---
+
+## 🔷 F-52 — several people from a phone / webcam / video: a host-side detector in front of the F-32 tracker (2026-10-10) — START HERE
+
+Full record: [`tasks.md`](tasks.md) F-52, [`decisions.md`](decisions.md) **ADR-088**.
+
+**State in four sentences.** `video_udp_sender.py --max-poses N` (N >= 2) now runs a YOLOX-s person detector on the GPU, the unchanged F-32
+`PersonTracker`, and one pose per confirmed person, and sends the F-32 `persons[]` datagram. **Unity can ask for it: `AppBootstrap > Video Max People`
+(1-8, default 1)** -> `--video-max-poses` -> the sender's `--max-poses`. Measured on files and through the real supervisor with a fake phone: 2 people 35.5 fps,
+3 people 26.3, 5 people 17.5, 8 people 14.8 (decode excluded); on a one-person clip it matches the single-person path. **Never seen in the Editor; no real
+phone, USB camera or real 2-3 person recording has been run.**
+
+**To try it with the phone:** (1) once, `python-sidecar~/.venv/Scripts/python.exe tools/model/fetch_yolox_s.py` (35.9 MB); (2) on `AppBootstrap` set `Track From
+Video`, `Video Source` = the viewer link, `Lan Camera Pin`, `Video Max People` = 2 or 3; (3) Play and watch the status lights. A single-person scene shows the first
+person only; open a crowd scene (the F-35 launcher) to see several. If the weights are missing the console says so and the sidecar is not started.
+
+**To try the sender by hand:** `.venv/Scripts/python.exe tools/model/fetch_yolox_s.py` once, then
+`.venv/Scripts/python.exe tools/video/video_udp_sender.py --video ..\..\video\456.webm --max-poses 3 --port 18899` (a spare port so a running
+Unity is not disturbed).
+
+**Do not:** use F-33's synthetic depth here (it flattens the model's z); pose LOST tracks; lower `--det-conf` without a phantom-people check;
+use `456.webm` (8 dancers, heavy occlusion) as a pass/fail bar for 2-3 people; quote ~17 fps for a file as the speed (decode cost).
+
+**Files (sidecar repo):** `tools/video/host_person_detector.py` (new), `tools/video/host_multiperson.py` (new), `tools/video/video_udp_sender.py`,
+`sidecar_supervisor.py` (`--video-max-poses`), `tools/model/fetch_yolox_s.py` (new), `tests/test_host_multiperson.py` (new, 73/73), `tests/test_video_source.py` (105/105).
+**Unity repo:** `Runtime/Tracking/OakD/VideoSourceSpec.cs`, `SidecarProcessLauncher.cs`, `Runtime/Bootstrap/AppBootstrap.cs`, `Tests/EditMode/VideoSourceF49Tests.cs` (35/35).
+
+**Next recommended:** (1) try it in the Editor with the real phone and look at the lights and a crowd scene; (2) record a clip of 2-3 real people from the
+target camera for a proper test (small people at phone resolution fragment ids); (3) only then 30 fps at 3 people (detect every other frame / FP16 detector, measure first).
+
+---
+
+## 🔷 F-51 — status lights: see that the sidecar, its watchdog, the source, the model and the tracking are up (2026-10-10)
+
+Full record: [`tasks.md`](tasks.md) F-51, [`decisions.md`](decisions.md) **ADR-087**.
+
+**What you see:** five lights top right in every scene (F8 hides) — `SIDECAR`, `WATCHDOG`, `SOURCE`, `MODEL`, `TRACKING` — and one
+console line per change (`[SidecarStatus] TRACKING: no person found yet`). The sidecar still has **no window**. Green healthy, pulsing
+amber in progress, red needs a person, blue external, grey off. `TRACKING: no person found yet` means the source delivers and the model
+runs but nobody was posed (hips must be visible; try the rotate field for a sideways phone).
+
+**How it works:** the supervisor copies the sender's latest `frames= sent=` heartbeat into `supervisor_state.json` as `Child`;
+`SidecarStatusLights` (OnGUI) polls it once a second with Unity's own launcher state and feeds the pure `SidecarStatusModel`. No UDP
+listener. **`SidecarReady` does NOT mean the model is loaded** (READY comes before the model loads) — the heartbeat does.
+
+**Measured:** `test_supervisor_state.py` 32/32, `SidecarStatusModelF51Tests` 23/23, 4 mutations caught, and a real state file from a live
+chain turned all five lights green in the real model. **Not seen on screen** (layout, overlap with HUDs, F8, scene-load survival), not run
+with a real OAK-D, and the lights do not prove Unity *receives* the poses (needs a counter in the pose provider).
+
+**Files (Unity repo):** `Runtime/Tracking/OakD/SidecarStatusModel.cs` (new), `Runtime/SkeletonShow/SidecarStatusLights.cs` (new),
+`SidecarBootstrap.cs`, `Runtime/Bootstrap/AppBootstrap.cs`, `Tests/EditMode/SidecarStatusModelF51Tests.cs` (new). **Sidecar repo:**
+`sidecar_supervisor.py` (`parse_heartbeat`, `Child`), `tests/test_supervisor_state.py` (new). Three new `.cs` files need their `.meta`
+files committed after Unity refreshes.
+
+**Next recommended:** run it in the Editor and look at the lights over a real session (including killing the sidecar and unplugging the
+phone); then a "Unity is receiving" light fed by a counter in `OakDUdpPoseProvider`.
+
+---
+
+## 🔷 F-50 — a phone over WebRTC: paste the LAN Camera viewer link, type the PIN (2026-10-10)
+
+Full record: [`tasks.md`](tasks.md) F-50, [`decisions.md`](decisions.md) **ADR-086**.
+
+**To use it:** start the LAN camera server (`lan-camera-streaming`), open its sender page on the phone, press start. In
+`AppBootstrap` (`Bootstrap.unity`) → `Video Test Source (F-49)`: tick **Track From Video**, paste the **viewer** link
+(`http://<server>/viewer?room=<id>`) into **Video Source**, type the server's `ACCESS_PIN` into **Lan Camera Pin**, press
+Play. Close any browser viewer in that room first (the server allows one). Sideways avatar -> `Video Rotate Degrees` 90/270.
+
+**How it works:** `python-sidecar~/tools/video/lan_camera.py` is a frame source with the same surface as `LatestFrameReader`;
+`video_udp_sender.py` gained a `lan` source kind and nothing else of substance. The PIN is its own field, masked, and reaches
+the sidecar as the `CAMERA_PIN` **environment variable** (set around `NativeProcess.Start()` only, handed only to a LAN
+source) — never in the link, never on a command line. A link carrying `pin=` is refused. No PIN and no `CAMERA_PIN` = one
+console error and no sidecar.
+
+**Measured:** Python `tests/test_lan_camera.py` 78/78 alone, **103/103** against the real Node server + a fake phone (incl. the
+real sender + real model on `123.webm`, a mid-run resolution change, and a run through the real supervisor); C#
+`VideoSourceF49Tests` 30/30; both sides mutation-checked; the PIN appears nowhere in any command line or log.
+
+**Know before quoting a result:** the "phone" was an aiortc process on loopback. **No real phone, browser, Wi-Fi, firewall
+prompt or zrok tunnel was involved**; real latency, a portrait phone's orientation and throughput are **unmeasured** (the
+23 ms in tasks.md excludes the phone and network). Not run in the Editor; `MaskedStringAttribute.cs` / `MaskedStringDrawer.cs`
+need their `.meta` files committed after Unity next refreshes. `RTCPeerConnection.close()` was seen to hang (bounded at 3 s,
+root cause unknown). The standalone `D:\Unity\cam-receiver` it was ported from is redundant — delete once agreed.
+
+**Files (Unity repo):** `Runtime/Tracking/OakD/VideoSourceSpec.cs`, `SidecarProcessLauncher.cs`,
+`Runtime/Bootstrap/AppBootstrap.cs`, `Runtime/Core/MaskedStringAttribute.cs` (new), `Editor/MaskedStringDrawer.cs` (new),
+`Tests/EditMode/VideoSourceF49Tests.cs`. **Sidecar repo:** `tools/video/lan_camera.py` (new), `tools/video/video_udp_sender.py`,
+`tests/test_lan_camera.py` (new), `tests/_lan_fake_sender.py` (new), `requirements.txt`, `requirements.lock.txt`, `README.md`.
+
+**The server's side is documented in the LAN camera project** (`lan-camera-streaming/docs/receiver-guide.md` and `architecture.md` §4, written
+after this work): the contract any receiver must follow, in any language, with the pitfalls this one hit. Keep the two in step.
+
+**Next recommended:** (1) try it with a real phone and the real sender page; read the `[lan]` log lines (`path: …` says
+direct vs relayed) and note the orientation and latency; (2) run it once in the Editor; (3) decide whether a fallback
+transport is wanted if the venue's Wi-Fi isolates clients.
+
+---
+
+## 🔷 F-49 — test against a VIDEO instead of the OAK-D (2026-10-09)
+
+Full record: [`tasks.md`](tasks.md) F-49, [`decisions.md`](decisions.md) **ADR-085**.
+
+**To use it:** `AppBootstrap` (in `Bootstrap.unity`) → `Video Test Source (F-49)`: tick **Track From Video**, set
+**Video Source** (an http(s) link to a video file, an absolute path, or `Assets/Games/video/SR7.mp4`), press Play.
+Edit any field while playing and the sidecar restarts a second after you stop typing (~10 s model load). Every
+scene, the skeleton show and the VRM avatar then run on the video through the normal flow.
+
+How it works: `python-sidecar~/tools/video/video_udp_sender.py` is a *producer* that sends the production datagram, run by
+the supervisor like the camera senders. Unity code is unchanged downstream. **Know its limits before quoting a result:**
+no stereo (TRUST HUD reads 0/33 measured, F-48 calibration 0/24 — correct), one person only, depth estimated from
+`Video Subject Height`, F-21 off. `Video Assume Measured Depth` relabels `src` so calibration can run (18/24 on SR7) —
+label only, never evidence about the sensor. `Video Clamp Depth` (on) keeps the clip inside the F-48 volume; untick it to
+test the volume against the clip. Page links (YouTube) need `yt-dlp` in the sidecar venv — **not installed**; direct
+`.mp4/.webm/...` links and local paths work with nothing extra.
+
+**Phone / webcam / stream sources (added same day):** `Video Source` also accepts `camera:0` (a phone exposed as a webcam by
+DroidCam/Iriun/Camo), `http://<phone-ip>:8080/video` (IP-camera app, MJPEG), `rtsp://…`, with `Video Rotate Degrees` and
+`Video Flip Horizontal` for a sideways portrait phone / selfie camera. Live sources process the newest frame only and reconnect.
+**No real phone or webcam has been tried** (none usable on the dev machine); the stream path was tested against a local MJPEG
+server and the camera path against a fake capture. First thing to do with a real phone: run
+`python-sidecar~/.venv/Scripts/python.exe tools/video/video_udp_sender.py --list-cameras`.
+Use `123.webm` (portrait, single person) as the regression clip, **not** `SR7.mp4`, which is a screen recording.
+
+**FINDING (user, 2026-10-09): single-person tracking from video looks much better than the live OAK-D feed** — same model and
+scenes, so the difference is upstream: stereo-per-joint depth plus extra stages versus the model's own coherent z. Four ranked,
+UNTESTED hypotheses and the decisive same-pixels A/B (record live RGB, replay it through the video sender) are in tasks.md F-49
+FINDING. Possible new direction: model-z geometry + stereo only for root/floor. Multi-person video shows one glitching skeleton
+because the single-person sender holds one crop; that is by design, crowds need the OAK-D detector. Not decided; do not change
+the live path on this alone.
+
+Not yet run inside the Editor (see tasks.md F-49 NOT DONE). Files: `video_udp_sender.py`, `sidecar_supervisor.py`,
+`tests/test_video_source.py` (sidecar repo); `VideoSourceSpec.cs`, `SidecarProcessLauncher.cs`, `AppBootstrap.cs`,
+`Tests/EditMode/VideoSourceF49Tests.cs` (Unity).
+
+---
+
+## 🔶 F-48 — SR7: bad near-field input poisoned the calibration (2026-10-09)
+
+Full record: [`tasks.md`](tasks.md) F-48, [`decisions.md`](decisions.md) **ADR-084**. SR7 is `Assets/Games/video/SR7.mp4`.
+
+**The state in four sentences.** Transport is fine (SR7, `--no-ownership`: 8-31 ms packet age, ~40 ms end to
+end, 29 fps sender) and F-21 is **still broken and untouched** — `--no-ownership` bypasses it, so SR7 proves
+nothing about it. What was wrong was the INPUT: the subject stood at 0.66-1.28 m, below F-44's 1.4-4.5 m, and the
+calibration, the follow-position and the hand gestures all consumed it. F-48 refuses out-of-range poses (never
+clamps), teaches the calibration only from stereo-measured joints, bounds each bone by its own anatomy, and
+validates every hand landmark. **It is implemented and tested but has NOT been filmed.**
+
+### What to carry forward
+
+1. **`OperatingVolume` + `OperatingVolumeGate`** (`Runtime/Core/Humanize/`). Limits are Inspector fields on
+   `AppBootstrap` (`Operating Volume (F-48)`): near 1.35 m, far 4.5 m, hold 0.75 s, settle 6. The judged number is
+   `|root.z|`. One gate per consumer; all three humanize consumers use it (`TrackedStage`,
+   `SkeletonShowBootstrap`, `AppBootstrap`).
+2. **`HumanizedSkeleton.Process(frame, dt, TrackingTelemetry, PoseAdmission)`** is the provenance path.
+   `Outside` returns the previous body untouched; `Settling` draws but never learns; `Trusted` learns.
+   The two-argument overload still exists and means "provenance unknown" (treated as measured).
+3. **Where to look when a bone will not calibrate:** the HUD says which gate refused — `unmeasured-depth`,
+   `out-of-volume`, or `impossible-length`. Do not widen the bands first.
+4. **The 0.90 m conflict.** F-43/F-46 put one person at 0.90 m; that is now TOO CLOSE. This is a PRODUCT
+   decision (ADR-084 Consequences), not a bug. Do not "fix" it by lowering the near limit without a capture at 0.90 m.
+5. **Not covered:** crowd bodies, the avatar's finger curls/palm rotation (`ParseHands` -> `HandFrame`), and F-21.
+
+### Files modified (F-48)
+
+```text
+Runtime/Core/Humanize/OperatingVolume.cs          NEW  limits, verdicts, admission, Classify (static)
+Runtime/Core/Humanize/OperatingVolumeGate.cs      NEW  per-consumer state, hold/settle, counters, messages
+Runtime/Core/Humanize/HumanBodyModel.cs           +    per-bone anatomical bands
+Runtime/Core/Humanize/BoneLengthCalibrator.cs     +    per-bone gate, mirror-agreement guard, rejection count
+Runtime/Core/Humanize/HumanizedSkeleton.cs        +    provenance + admission Process overload, DropTemporalMemory, HudText
+Runtime/Core/Humanize/HumanizedStats.cs           +    calibration counters, ToHud()
+Runtime/SkeletonShow/TrackedStage.cs              +    Volume gate, follow/hold/expire, StatusLine, HumanizedLayer
+Runtime/SkeletonShow/SkeletonShowBootstrap.cs     +    same gate; HUD laid out to the screen's width
+Runtime/Bootstrap/AppBootstrap.cs                 +    Inspector fields, gate, provenance, root-follow guard, transition log
+Runtime/SkeletonShow/HandPose.cs                  +    per-landmark validation, HandRange, HandRangeAdvice, counters
+Runtime/SkeletonShow/HandsMode.cs                 +    three distinct refusal readouts + counters
+Runtime/Experiences/ExperienceBase.cs             +    VOLUME line, TOO CLOSE warning, screen-width rects
+Runtime/Experiences/AirGraffitiExperience.cs      +    advice via HandRangeAdvice
+Tests/EditMode/NearFieldSafetyF48Tests.cs         NEW  60 tests incl. 2 end-to-end TrackedStage tests over UDP
+docs/tasks.md, docs/decisions.md, docs/ai_handoff.md, docs/F46_DEMO_RUN_OF_SHOW.md, CHANGELOG.md
+```
+
+New `.cs` files were added by hand to the generated `VirtualMirror.Core.csproj` / `VirtualMirror.Tests.csproj`
+(explicit file lists; gitignored). Unity regenerates them.
+
+### How it was verified, so you can repeat it
+
+Editor open, no batch mode: `dotnet build VirtualMirror.Tests.csproj`, then a reflection runner. 47 of the 60 run on
+the bare .NET runtime; the other 13 hit `Quaternion.LookRotation` (a native ECall) inside `Process`, so they were
+run against a managed stand-in for `Vector3/Quaternion/Mathf` (60/60) and are written to pass unchanged in the Editor
+Test Runner. The stand-in is a scratch tool and is NOT in the repo: a ~300-line net9.0 class library named
+`UnityEngine.CoreModule` implementing `Vector3`, `Quaternion` and `Mathf` in managed code, dropped over the real one in
+the runner's folder. It must self-check its quaternion algebra (`LookRotation`, `AngleAxis`, `Inverse`, `RotateTowards`,
+`Slerp`) before any result under it is believed. `ArmAimSolverTests` fail on the bare runtime for the same ECall reason.
+
+### Next recommended task (in this order)
+
+1. **Film the acceptance take** — protocol in `F46_DEMO_RUN_OF_SHOW.md` §6. Read the VOLUME line, the three rejection
+   counters and `calibration n/24 bones ready` at 1.0 m, 1.6-2.0 m, 3-4 m and across the boundary. This is what turns
+   1.35 m / 4.5 m from derived into measured.
+2. **Decide the 0.90 m question** (ADR-084 Consequences) before the product Mirror ships on these defaults.
+3. **Stage E — F-21 production fix (ADR-083).** Capture the `[wb] TARGET ... reason=` events with
+   `--ownership-log-dir` FIRST, then update/decay `owner_pos` toward a plausible rejected observation. Do not just
+   raise `SWITCH_MARGIN_M`. Separate task; test it with ownership ENABLED.
+4. Gate the crowd bodies and the avatar's finger curls the same way, if the acceptance take shows they matter.
 
 **This file stopped being the live handoff after 2026-08-11.** The F-16 → F-20B line of work
 (OAK-D wall-probe sweeps, portrait, F-19 production validation, F-20A session/stale recovery, F-20B
@@ -11,9 +242,546 @@ for anything after 2026-08-11; the sections below are historical context for M0�
 
 ---
 
-## 🔷 CURRENT — v1 packaging and sidecar auto-launch (2026-09-16)
+## 🔷 CURRENT — Unified Bootstrap: Bootstrap -> Launcher -> any scene (2026-09-17)
 
-**This section is the live handoff. Read it before the historical material below.**
+**Start here: `Scenes/Bootstrap.unity`. Press Play.** It starts the multi-person sidecar, then
+opens `Launcher.unity`. Pick any scene (experience scenes or the avatar mirror in the PRODUCTION column);
+ESC brings you back to the Launcher. No terminal required.
+
+There is now ONLY ONE bootstrap scene: `Bootstrap.unity`.
+The temporary `SidecarBoot.unity` scene has been retired and removed.
+`AppBootstrap` lives directly in `Mirror.unity`, binding UDP 8899 only when in the avatar scene,
+and cleanly releases UDP 8899 on exit via ESC so all other scenes receive tracking without port collision.
+
+Build order: `License-Verifier → Bootstrap → Mirror → Launcher → …` (index 0 untouched).
+
+### The nine things to carry forward
+
+*(Points 1, 2 and 4 were rewritten on 2026-09-17 — see ADR-075. The versions they replace said the
+supervisor could not run the multi-person sender, that the demo path had no watchdog, and that Unity
+held the lock by hand. All three were true for about a day and are now wrong; if you find that
+wording anywhere else, it is stale.)*
+
+1. **THE SUPERVISOR RUNS EITHER SENDER.** `sidecar_supervisor.py` picks its child command shape from
+   the script it is given (`SENDER_BY_SCRIPT` → `build_command`), so the multi-person branch passes
+   only flags that sender's argparse defines and the single-person command is unchanged byte for
+   byte. Both senders print the `producer session id = ` banner and `frames=` lines, so one readiness
+   contract covers both. It USED to be true that only `wholebody_udp_sender.py` could be supervised;
+   that is what forced the `DirectScript` route, and it no longer applies.
+2. **EVERYTHING IS SUPERVISED. DO NOT GO BACK TO `DirectScript`.** Both bootstraps set
+   `SupervisedSenderScript`; `DirectScript` survives only for one-off experiments and defaults to
+   empty, pinned by a unit test. The cost of the direct route was not theoretical: with `--show` on,
+   the preview window bound ESC to quit while the app's own hint reads "ESC menu", so one keypress
+   ended tracking for the session with nothing to bring it back.
+3. **NOTHING OUTSIDE A SCENE MAY BIND UDP 8899.** `SidecarBootstrap` owns the sidecar PROCESS and
+   deliberately no socket, because every scene binds 8899 for itself. This is also why pointing
+   `AppBootstrap.mirrorSceneName` at the launcher does not work: it binds the port, loads additively,
+   and looks for an `AvatarRoot` the launcher does not have. `AppBootstrap` is the avatar app, not a
+   router — its code default was reverted to `"Mirror"`.
+4. **IT NEVER STARTS A SECOND PRODUCER, IN BOTH DIRECTIONS.** It listens on the port for 400 ms
+   first and attaches if anything is already sending. In the other direction the SUPERVISOR's own
+   `--lock-port` mutex does the work — it binds that port for as long as it lives, so launching the
+   avatar app from the menu makes `AppBootstrap` see an owner and attach. `Bootstrap.unity` ships
+   with `useOakUdpTracking: 1` and auto-start on, so this matters: two producers on one port
+   interleave poses from different sessions, which reads as violent jitter rather than as a
+   configuration error. Unity must NOT take that lock itself — the supervisor would then abort on
+   its own mutex.
+
+### 5. THE SCENE CHOOSES THE SENDER (ADR-076)
+
+One sidecar per session, but not one sender. `SceneLauncher.TrackingNeedFor()` reads the menu's own
+catalogue: single-person scenes and `Mirror` get `wholebody_udp_sender.py`, crowd scenes get
+`multiperson_udp_sender.py`, and anything unlisted returns `Unspecified` so the sidecar is left
+alone. That last part is load-bearing — `Launcher` is passed through on every navigation, and
+resolving it either way would restart the producer every time somebody backed out of a scene.
+`AppBootstrap.EnsureSidecarForScene` does the switching, only when the requirement changes, at a cost
+of ~15-20 s of no tracking.
+
+**Do not "simplify" this to `multiperson --max-poses 1`.** The cap limits how many people get posed;
+it does not remove the detector and per-person crop, which are exactly what makes the crowd pipeline
+worse for one person. And **do not reach for `depthai_blazepose/udp_pose_sender.py`** when somebody
+asks for MediaPipe: it sends no `lh`/`rh`, so the two pinch experiences (AIR GRAFFITI, OBJECTS) stop
+working. `OakDUdpPoseProvider:319` warns about it by name.
+
+### 6. THE TWO SENDERS SHARE `STEREO_CONFIG`, SO A FLAG MISSING FROM ONE IS A SILENT DOWNGRADE
+
+`multiperson_udp_sender.py` had no `--subpixel-bits` flag at all, so it inherited the shipped
+`subpixel: False` while the single-person sender acted on the `--subpixel-bits 3` Unity sends. Every
+crowd scene measured depth on whole-pixel disparity. Depth error is `z² × Δd / (f × B)` — the
+disparity step multiplies error at EVERY range, so that was 8× worse depth everywhere, not a
+far-field detail. Fixed in ADR-077.
+
+**The lesson is the diagnosis, not the fix:** it went unnoticed because the multi-person sender never
+printed its stereo configuration, and sub-pixel is invisible in the stream. If you add a pipeline
+setting, print it at startup — otherwise "configured" and "in effect" can differ for weeks. Both
+senders now print `stereo: preset=… subpixel=… LR-check=… mono=…`.
+
+Real calibration for this device, for any future depth arithmetic:
+`baseline 7.5 cm`, `mono fx 287.16 px` at 640×400 → `f·B = 21.54`, so `Δz ≈ z²/21.54` per pixel of
+disparity step.
+
+### 7. THE MIRROR, THE MOUNT AND THE WALK (ADR-078)
+
+* **`flipX` is ON in every experience scene and in the launcher.** A mirror installation that shows a
+  photograph has your right hand driving the figure's left. `Mirror.unity` and the VRM avatar are the
+  exception and stay unflipped — ADR-023: reflecting the input twists a rotation retarget, a true
+  avatar mirror is done output-side. Consequence worth knowing: `OakDUdpPoseProvider.PalmRotation`
+  builds a quaternion from a cross product, and a reflection inverts it. Nothing reads it today; if
+  an experience starts using palm orientation, fix it output-side rather than turning the mirror off.
+* **Camera orientation is PER SENDER**, because the physical mount differs: portrait for one person
+  (more pixels on a standing body), landscape for a crowd (more room, and the person detector runs on
+  the UNROTATED stream so a rotated mount makes it read people lying sideways). `O` in play mode
+  flips the running sender and restarts it.
+* **`TrackedStage.FollowPosition`** drives the staged body's X/Z from the measured mid-hip. Y belongs
+  to the grounding loop. It translates the whole group, so crowd pair geometry is unchanged.
+
+### 8. A SUPERVISED SENDER MUST KEEP TALKING WHEN THE ROOM IS EMPTY
+
+The multi-person sender's heartbeat sat below `if not persons: continue`, so nobody in frame meant no
+stdout, and `sidecar_supervisor.py` killed it after 10 s. Harmless unsupervised, fatal supervised —
+and the supervision was new. **If you add an early `continue` to a sender's main loop, check what is
+below it.** The watchdog contract is stdout growth, not process liveness.
+
+### 9. THE MOUNT IS NOW A FIRST-CLASS SETTING (ADR-079/080, F-43)
+
+* **`CameraMount.TiltDegrees` is the ONE place camera pitch lives.** Do not add a serialized tilt to
+  a component. Four components build a `PoseSpaceConverter` and `flipX` is declared in all four —
+  that cost twenty edited scene files in F-40. `AppBootstrap.Awake` publishes the tilt before the
+  first scene loads, which is the only reason a scene-launched converter agrees with the bootstrap's.
+* **Why it exists:** `SkeletonPose.FloorY` is a SINGLE SCALAR learned from foot contacts, and a
+  camera pitched by θ makes the floor appear `tan(θ)` metres higher per metre of depth. At 15° that
+  is 0.27 m/m and it crosses `PlantedBandMetres` (0.08 m) in 30 cm of walking. F-18 measured this
+  without naming it, at +0.338 m/m. **A level mount is still better than a corrected one** — this
+  removes the floor shear, not the foreshortening or the out-of-distribution poses at steep angles.
+* **The SIGN is not automated and must not be.** `mount.json` records magnitude only and says so;
+  F-19 §7 disproved the board's identity IMU-to-camera extrinsic directly. A wrong sign DOUBLES the
+  error. Positive = nose down. Default 0, and 0 is bit-identical to pre-F-43.
+* **The rotation runs BEFORE the mirror signs.** The signs are a display convention applied to
+  already-levelled data; reversing the order leans the body the wrong way whenever `flipZ` is on.
+  Both entry points get it — landmarks and the mid-hip `xyz` — because they share one back-projection
+  in the sender and splitting them would tear the root off the body.
+* **The IR dot projector is ON** (`--ir-dot 0.8`). It never had been. F-17's finding is what makes it
+  free on this board: CAM_A is IR-cut colour, the mono pair is unfiltered, so the dots reach the
+  matcher and never the pose model's input. Turn it off if a second OAK-D shares the room.
+
+### The tracking-quality rule this cost a day to learn
+
+**The detector must see the same picture the pose stage does.** `multiperson_udp_sender.py` feeds
+`cam.preview` → `ImageManip` → the person detector, and none of that is aspect- or crop-safe by
+default: `cam.preview` is 300x300 with `keepAspectRatio` ON unless you say otherwise, which
+centre-crops the 640x400 ISP and throws away 120 px of FOV on each side. Detections come back
+normalised to THAT frame, so anything mapping them onto the full frame is wrong by a fixed affine
+amount — which does not fail loudly, it just looks like a detector that cannot find people and fires
+on cartons and chair backs. The pipeline now letterboxes with `setResizeThumbnail` and inverts it
+through `letterbox_mapping`, one definition shared with the video harness. If you touch the preview
+size, the manip config or `detections_from`, re-check the round trip.
+
+5. **`Bootstrap.unity` IS STILL THE PRODUCT** and is not superseded. `SidecarBoot` owns only the
+   sidecar process; it builds no avatar, no UI and no tracking. The menu lists `Bootstrap` in its
+   PRODUCTION column and launching it now attaches to the running multi-person sidecar.
+
+### What is NOT verified
+
+**Nothing in F-36 has been on a screen.** Compile is clean, 6/6 new tests pass (187 suite-wide), and
+`evidence/f36/sender_args.txt` shows the exact spawned command getting past argparse and provider
+selection (`DmlExecutionProvider`) and failing only on a deliberately bogus model. Untested: the
+actual Play run, the launcher's new `sidecar:` footer line, the attach-don't-spawn branch, and that
+no orphan `python.exe` survives exiting play mode.
+
+**F-43 is verified unevenly, and the split matters.** The IR projector is confirmed ON THE DEVICE —
+`IR dot projector: on (80%, driver LM3644)` in
+`evidence/oak_v4/f20b/tests/a_normal_start/logs/run_001.txt`, with F-20B 6/6 PASS against the real
+camera — but its BENEFIT is unmeasured; the number to A/B against is the "~63% of keypoints get
+measured depth" in `RETARGET_AUDIT_2026-08-11.md`. The tilt correction is verified only in
+arithmetic: 11 tests pin the geometry and the zero-tilt identity, and nobody has yet pitched the
+camera, set `cameraTiltDegrees` and walked toward it. **That walk is the acceptance test** — the
+ground pool should stay under the feet at both ends of the room, and if the figure sinks MORE as you
+approach, the sign is inverted.
+
+---
+
+## F-35 the scene launcher (2026-09-17)
+
+**Start here: `Scenes/Launcher.unity`. Press Play.** It lists all twenty scenes in three columns and
+ESC brings you back from any of them. Full report: `F35_SCENE_LAUNCHER_2026-09-17.md`.
+Decision: **ADR-073**.
+
+```text
+Runtime/SkeletonShow/SceneLauncher.cs          NEW  the menu
+Runtime/SkeletonShow/LauncherScene.cs          NEW  "back to the menu", shared by both scene bases
+Runtime/Experiences/ExperienceBase.cs          +    ESC -> menu (all 18 experience scenes)
+Runtime/SkeletonShow/SkeletonShowBootstrap.cs  +    the same, for the one scene that is not one
+Tests/EditMode/SceneLauncherF35Tests.cs        NEW  10/10
+Scenes/Launcher.unity                          NEW
+ProjectSettings/EditorBuildSettings.asset      +    20 scenes registered
+```
+
+### The three things to carry forward
+
+1. **ALL 20 SCENES ARE NOW IN BUILD SETTINGS, and they have to be.** `SceneManager.LoadScene` cannot
+   load a scene that is not registered, and its failure is a console error *after* the click — a
+   button that appears to do nothing. Do not "tidy" them out of the list. **Index 0 is still
+   `License-Verifier`**, so a build's startup scene is unchanged; moving `Launcher` there is a
+   product decision nobody has made.
+   **BUT `ProjectSettings/EditorBuildSettings.asset` IS GITIGNORED**, so this does NOT travel with
+   the repo: a fresh clone opens the launcher with every row greyed out. Run
+   **`Virtual Mirror > Register All Scenes in Build Settings`** (`Editor/SceneRegistrar.cs`) once.
+   It only ever APPENDS — never reorders, removes or disables — because index 0 is the startup scene.
+2. **THE GROUPING IS THE FEATURE.** Scenes are split by how many people they need, because ten of
+   them do nothing on your own and somebody standing alone in front of Chain concludes the
+   installation is broken. The launcher also runs the real `TrackedStage` while you choose, so "the
+   sidecar is not running" and "it is the SINGLE-PERSON sender" are visible *before* you pick a
+   scene and blame it.
+3. **THE UDP PORT IS THE COUPLING TO WATCH.** Every scene binds the same fixed port. Both bases now
+   stop tracking *before* `LoadScene` rather than in `OnDestroy`, and set `leaving` to skip the rest
+   of the frame instead of running Update and OnGUI against a disposed provider. If a scene ever
+   fails to receive after a launcher round trip, this is the first place to look.
+
+### Known limits, recorded rather than fixed
+
+* **ESC does not return from `Bootstrap`** — it is the production app, not one of the two bases.
+* **The catalogue titles are COPIED, not read.** SkeletonShow cannot see the Experiences types. A
+  unit test pins column membership and structure; it cannot pin that a blurb still matches a scene's
+  own `Instruction`. **If the two disagree, the scene is right.**
+* **No audio in the launcher** — `ExperienceAudio` is in an assembly SkeletonShow cannot reference.
+
+### What is NOT verified
+
+Same state as F-34: **nothing has been on a screen.** Compile is clean (0 errors), 181 tests pass,
+and `evidence/f35/scene_registry.txt` proves every row resolves to a registered scene. Untested: the
+layout at a real resolution, and the ESC round trip rebinding the UDP port.
+
+---
+
+## F-34 nine crowd experiences (2026-09-17)
+
+**Read this, then the F-33 and F-32 sections below it, in that order.**
+
+F-32 put a crowd on the wire and F-33 filtered it. F-34 spends it: nine new scenes that need more
+than one person, plus the four fixes they needed first.
+Full report: `F34_CROWD_EXPERIENCES_2026-09-17.md`. Decision: **ADR-072**.
+
+```text
+Runtime/Experiences/{CollectiveFluid,StillnessTug,CrowdFootprints,Eclipse,Chord,
+                     Chain,Pass,Podium,MirrorEachOther}Experience.cs   NEW  the nine
+Runtime/Experiences/{CrowdPalette,CrowdRoster,CrowdMath,CrowdVoices,
+                     ExperienceTuning,FluidField,FloorMarks}.cs        NEW  shared
+Runtime/SkeletonShow/SkeletonPose.cs                                   +    ResetHistory + 12 m/s guard
+Runtime/Experiences/ExperienceBase.cs                                  +    ResetsOnNewVisitor + 2 hooks
+Runtime/Experiences/BodyRenderer.cs                                    +    Render(pose, tint)
+Runtime/Experiences/ExperienceAudio.cs                                 +    PentatonicHz(step)
+Runtime/Experiences/{FluidField,Footprints}Experience.cs               ~    MIGRATED - smoke-test these
+Tests/EditMode/CrowdExperiencesF34Tests.cs                             NEW  29/29
+Scenes/*.unity                                                         NEW  nine
+python-sidecar~                                                        unchanged
+```
+
+### The four things to carry forward
+
+1. **AN IDENTITY SWITCH CANNOT BE DETECTED, so it must be designed around.** Measured live: an
+   identity migrating between two humans at **0.015 m per frame** against a **0.35 m** margin — 97
+   datagrams, **zero events logged**. No discontinuity, no guard to write. The only defence is
+   structural: **symmetric in the participants, reads only the current frame.** That single test
+   decided which of the candidate experiences exist. Read ADR-072 before designing another one.
+
+2. **No per-person accumulated score exists anywhere in the nine, on purpose.** Points, streaks and
+   hold timers are exactly the state a silent switch corrupts, in the most visible way possible.
+   Accumulated state is allowed only when it belongs to something that is not a person — a rally, a
+   circuit, a light's drift, a floor. The **three** places identity IS read are named in each class
+   header with what a switch costs; all three are bounded.
+
+3. **The budget is three people at 16 fps.** 20.43 ms per person at p50 (p90 20.89, p99 21.69). The
+   detector sees seven; the GPU affords three. Four costs 12 fps. Every scene's cap of 8 is a
+   *rendering* ceiling and says so.
+
+4. **`SkeletonPose` now has `ResetHistory()` and a 12 m/s mid-hip guard**, and it fixed a live latent
+   bug nobody had named: `TrackedStage` snaps its ground offset on first floor acquisition, which
+   moves the staging origin by up to a metre in one frame — so the next frame differenced two
+   positions measured against different origins and reported a whole-body speed spike above every
+   strike gate at once. It does **not** catch the slow switch in (1); nothing can.
+
+### What is NOT verified — this is the next agent's first job
+
+**Nothing in F-34 has been on a screen.** It compiles (0 errors) and 29/29 new unit tests pass, and
+that is all. In priority order:
+
+1. **Play-mode smoke test `Fluid.unity` and `Footprints.unity`** — the two MIGRATED scenes. They
+   worked before this change; their logic moved into `FluidField` / `FloorMarks` unchanged, but that
+   is an argument, not a test.
+2. Play-mode smoke test the nine new scenes: attract, then one person, then two.
+3. **Listen to `Chord.unity`** — it is mostly the sound and the voice bank has never made a noise.
+4. **`Chain.unity` with two people actually holding hands.** Its risk is not identity, it is the
+   detector merging two boxes when people stand that close, which has never been measured. The HUD
+   flags a suspected merge.
+5. **Re-measure the three movement thresholds at ~16 fps** (`ExperienceTuning` — they were tuned at
+   ~21 and the file says so).
+
+---
+
+## F-33 per-person filters (2026-09-17)
+
+**Read this and the F-32 section below it, in that order.**
+
+F-32 shipped multi-person with the entire signal chain switched off and said so. F-33 turns it on:
+one complete P0 + P1-1 + F-22 chain per tracked person, keyed on their track id.
+Full report: `F33_PER_PERSON_FILTERS_2026-09-17.md`. Decision: **ADR-071**.
+
+```text
+python-sidecar~/person_filters.py                     NEW  PersonFilters + PersonFilterPool
+python-sidecar~/tests/test_person_filters.py          NEW  46/46
+python-sidecar~/tools/diagnostics/f33_filter_bench.py NEW  ground truth, so LAG is measured too
+python-sidecar~/smoothing.py                          +    set_freq(), additive, 0 deleted lines
+python-sidecar~/multiperson_udp_sender.py             +    the pool, and the A/B flags
+python-sidecar~/tools/video/f32_multiperson_video.py  +    --filters, --synth-depth, video clock
+Runtime/**                                            unchanged - the wire shape did not move
+```
+
+### The three things to carry forward
+
+1. **A temporal filter belongs to an IDENTITY, not to a list position.** `PersonTracker` re-sorts
+   most-established-first every frame, so an index-keyed bank hands person A's One-Euro history to
+   person B. Unity's `TrackedStage.UpdateCrowd` had already reached the same conclusion for
+   `SkeletonPose`; F-33 is the sidecar half of it.
+
+2. **`freq` is not cosmetic.** One-Euro derives velocity as `delta * freq`. Told 30 while actually
+   sampled at 16 it over-estimates speed by 1.9x, inflates its adaptive cutoff and OPENS UP when it
+   should damp — so the naive port is worse on BOTH jitter and lag at once. At 10 fps the pinned
+   version is *worse than no filter at all* on the median frame (35.6 mm vs 33.5) while costing
+   400 ms of lag. Each person now measures their own rate.
+
+3. **The feet and the head were in NO filter group** — not trunk, arm, leg or hand (ADR-071). They
+   produced the worst residual artefacts, for OPPOSITE reasons: feet fail with `src=0` and need the
+   bounded HOLD; the head fails with `src=1` and needs the displacement CAP. Adding both took
+   implausible steps (>300 mm in a 33 ms frame) from 630 to 77 while changing the distal, trunk and
+   hip figures by 0.0% and emitting exactly the same 40 200 joints.
+
+### The numbers
+
+```text
+implausible steps  no filters 2158 -> single-person grouping 630 -> +feet +head 77
+                   worst single step 2091 mm -> 960 mm       (2060 person-frames, identical input)
+ground truth 16fps jitter median 32.4 -> 19.3 mm, lag 250 ms     (three people, the real case)
+cost               0.88 ms per person-frame vs 20.7 ms for the pose solve  (~4%)
+joints emitted     60.2% -> 59.1%   the chain refusing what it does not believe, as [0,0,0,0]
+lag at 30 fps      233 ms - NOT new, it is the accepted single-person tuning. Always quote it.
+```
+
+### What is NOT true
+
+* Never run with real people. Video and synthesis only.
+* **The video A/B's stereo depth is SYNTHETIC.** With no depth the smoother has nothing to smooth
+  and P1-1 starves every joint to LOST, so the harness paints each person's box with their
+  apparent-height distance plus a noise model and reads it back through the REAL backproject.
+  `src=1` there means "sampled the synthetic depth frame", never "measured by stereo".
+* A slow confident drift is still followed (847 mm of an injected 850 mm). P1-4 catches it and P1-4
+  is rejected for production. Inherited blind spot, pinned by a test that asserts the LIMITATION.
+* **F-32's "11 ids for 7 people" is superseded.** That harness read the wall clock, so a replay was
+  not reproducible. On the video clock it is 9 ids across two passes.
+
+---
+
+## F-32 multi-person (2026-09-17)
+
+**Read this section first. It also CORRECTS an earlier report.**
+
+### The correction, which matters more than the feature
+
+`456.webm` contains **SEVEN dancers**. F-29 treated it as a single subject at 2.9 m and drew
+range conclusions from it ("hands 59.9% plausible at 2.9 m", "floor 81 mm"). Those figures
+measure IDENTITY CONTAMINATION, not distance: the single-person crop migrates between dancers,
+and the tracked body's shoulder width ranges 0.068-0.455 m. A genuine single subject at 1.96 m
+gives 93.7% plausible hands. **The real single-subject limit beyond ~2 m is untested.**
+Corrected everywhere it was cited. Evidence: `docs/evidence/f32/identity_contamination.txt`.
+
+The deeper lesson: the single-person pipeline does not fail loudly on multi-person input. It
+emits a plausible skeleton belonging to nobody, and those numbers reached a report.
+
+### What was built
+
+Detect N people on the OAK-D VPU -> track them with stable ids on the host -> pose the top N on
+the GPU -> one backward-compatible datagram -> N bodies in Unity -> `Scenes/Bonds.unity`.
+Full report: `F32_MULTIPERSON_2026-09-17.md`. Decision: **ADR-070**.
+
+```text
+python-sidecar~/assignment.py                 NEW  pure-numpy optimal assignment
+python-sidecar~/person_tracker.py             NEW  detections -> persistent ids (19/19 tests)
+python-sidecar~/multiperson_udp_sender.py     NEW  the multi-person sidecar
+python-sidecar~/tools/video/f32_multiperson_video.py  NEW  the testable path
+Runtime/Core/Models/CrowdFrame.cs             NEW  PersonPose + CrowdFrame
+Runtime/SkeletonShow/TrackedBody.cs           NEW  id + pose + state
+Runtime/Tracking/OakD/OakDUdpPoseProvider.cs  +    ParseCrowd, TryGetCrowd
+Runtime/SkeletonShow/TrackedStage.cs          +    Bodies, HasCrowd, per-person placement
+Runtime/Experiences/CrowdBondsExperience.cs   NEW  experience 9
+Scenes/Bonds.unity                            NEW
+```
+
+### The numbers that constrain everything
+
+```text
+RTMW3D          20.7 ms p50, FIXED batch of 1  -> 2 people 24 fps, 3 -> 16, 4 -> 12
+detector        free on the VPU: rgb 29.8->29.7, depth 29.6->29.4, detector 11.4 fps
+detector choice retail-0013 median 7 of 7 people; vendored BlazePose managed 1-5
+tracking        7-dancer clip, NO depth: median 7 tracked, 6 ids alive >50% of the clip
+```
+
+### Three traps worth carrying forward
+
+* **Letterbox, never squash.** Squashing a portrait frame into the detector's landscape input
+  measured 0.95 people on a clip containing seven. Letterboxing took the SAME detector to 7.06.
+* **The NN input must be non-blocking, queue size 1.** A blocking input back-pressures
+  `ColorCamera.preview`, which the production RGB output also consumes, and RGB collapses to
+  12.3 fps.
+* **Landmarks are hip-relative.** Staging every person at the same origin draws the whole crowd
+  on top of itself - measured as a 0.00 m mean pair gap across 850 frames before it was fixed.
+
+### Next recommended task, in order
+
+1. ~~**Per-person P0/P1-1/P1-4/F-22.**~~ **DONE in F-33** — see the section above, and ADR-071.
+2. **Two real people in front of the camera.** Everything so far is recorded video.
+3. **Open the scenes and look at them** - still true for F-30/F-31/F-32, nothing rendered yet.
+4. **One clean clip of one person at 3 m**, to finally answer the range question F-29 got wrong.
+5. **Per-person `st` in Unity.** The wire now carries real per-joint tracking states PER PERSON
+   (all `-1` before F-33). The root person's already reach the existing Trust HUD unchanged; a
+   crowd HUD would need `PersonPose` to carry them.
+6. Refactor `SkeletonShowBootstrap` onto `TrackedStage` (outstanding since F-30).
+
+---
+
+## F-29 trust channel + F-30 experiences + F-31 time echo & sound (2026-09-16)
+
+**This section is the live handoff. Read it before anything below.**
+
+### What changed, in one paragraph
+
+The sidecar now publishes what it *believes* about each pose (`st` / `own` / `lat`), Unity draws it
+(trust HUD), hands and feet are rendered for the first time, an attract loop means an empty room is
+not a black screen, and seven interactive experience scenes were built on a shared tracking core
+extracted for the purpose. Reports: `F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md`,
+`F30_EXPERIENCES_2026-09-16.md`. Decisions: **ADR-066**, **ADR-067**.
+
+### F-31, added after the above
+
+**Time Echo** (`Scenes/TimeEcho.unity`) records the pose into a fixed ring and draws four delayed
+copies. It exists because the single-person limit is the project's hardest constraint and this turns
+it into the subject rather than working around it — see **ADR-069**. `EchoBuffer` is a top-level
+clock-injected class with 8 tests, deliberately not a private detail: a mis-indexed ring shows a
+plausible body at slightly the wrong time and no viewer can tell.
+
+**Sound** is a layer on `ExperienceBase`, not a scene, so all nine scenes gained audio without being
+edited — **ADR-068**. Synthesised at runtime (no assets), and every pitch comes from a pentatonic
+scale so a random human trigger source cannot produce a wrong note. `Play` takes a scale degree
+rather than a frequency to make that structural. **Nobody has heard it**: `AudioClip.Create` is a
+native call, so none of the synthesis runs headlessly.
+
+### The finding that mattered most
+
+**Two of the four F-29 items needed no new sensing at all.** Feet were already on the wire —
+`build_body_landmarks` has always emitted `FOOT_TO_JOINTID` (heels → JointId 29/30, toes → 31/32),
+measured present on 431/431 and 330/330 frames. Hands were already parsed — `ReadHand` read all 21
+landmarks, derived five curls for the avatar's fingers, and discarded the positions. The gap was
+presentation, not capability. Check what is already on the wire before adding to it.
+
+### Modified files
+
+```text
+python-sidecar~/
+  wholebody_udp_sender.py            + build_joint_states(), + st/own/lat, wire-contract docstring
+  tools/video/f23_video_to_unity.py  + real SkeletonTracker + TargetOwnership (states only)
+  README.md, CHANGELOG.md            wire contract + trust-channel semantics
+
+Runtime/Core/Models/
+  TrackingTelemetry.cs      NEW   trust channel, consumer side. Note the two-clock hazard on it.
+  RawHandFrame.cs           NEW   21 landmarks per hand, as positions
+
+Runtime/Tracking/OakD/
+  OakDUdpPoseProvider.cs    + ParseTelemetry, PublishRawHands, TryGetTelemetry, TryGetRawHands
+
+Runtime/SkeletonShow/
+  TrustHudMode.cs           NEW   mode 4
+  HandsMode.cs              NEW   mode 5
+  HandPose.cs               NEW   scale-invariant gesture layer
+  AttractState.cs           NEW   AttractSkeleton + PresenceGate
+  TrackedStage.cs           NEW   socket -> usable body, owned once (F-30)
+  ShowStage.cs              NEW   camera, bloom, floor grid, primitives (F-30)
+  SkeletonPose.cs           + foot bones, floor estimator, camera depth, telemetry, Velocity
+  SkeletonShowBootstrap.cs  + modes 4/5, attract, grounding, panels, keys
+
+Runtime/Experiences/        NEW assembly VirtualMirror.Experiences
+  ExperienceBase.cs, BodyRenderer.cs, AirGraffitiExperience.cs, BubblePopExperience.cs,
+  PoseMatchExperience.cs, DepthReachExperience.cs, FootprintsExperience.cs,
+  FluidFieldExperience.cs, ObjectPlayExperience.cs
+
+Runtime/Experiences/        F-31: ExperienceAudio.cs (shared sound), TimeEchoExperience.cs,
+                            EchoBuffer.cs; ExperienceBase + BodyRenderer extended
+Scenes/                     NEW   AirGraffiti, BubblePop, PoseMatch, DepthReach, Footprints,
+                                  Fluid, ObjectPlay, TimeEcho
+Tests/EditMode/             NEW   SkeletonShowF29Tests.cs (23 tests); asmdef + SkeletonShow ref
+docs/                       F29 + F30 reports, evidence/f29/, evidence/f30/
+```
+
+### Verified
+
+```text
+6/6 assemblies compile (Core, Tracking, SkeletonShow, Experiences, App, Tests)
+23/23 F-29 EditMode tests + 8/8 EchoBuffer tests (run outside the Editor - caveat below)
+29/29 F-29 acceptance checks   real provider, real socket, recorded production packets
+ 7/7 F-30 acceptance checks    TrackedStage over the same path
+ 3/3 velocity checks           against known straight-line motion
+173/173 sidecar unit tests still pass
+measured: 53.4 ms end-to-end latency on fresh frames
+```
+
+### ⚠ What is NOT verified — read before demoing
+
+1. **Nothing has been rendered on a screen this session.** Three Unity Editors held the project lock
+   throughout, so verification is compile + headless logic + real-wire parsing. Every geometric and
+   numeric claim is tested; **no visual claim is.**
+2. **No live OAK-D, ever.** All of it is recorded video through the production wire. The trust HUD's
+   depth row has only ever shown `0/33 MEASURED`.
+3. **The F-30 scene files were generated**, not authored in the Editor. Script GUIDs are md5 of the
+   asset path. A missing component means the `.meta` guid and the scene `m_Script` guid diverged.
+4. **Single person only, unchanged.** RTMW3D-x is single-person top-down; F-21's live two-person
+   acceptance failed on 2026-09-16. Nothing here changes that.
+
+### Two traps worth carrying forward
+
+* **Two clocks.** `TrackingTelemetry.SendEpochSeconds` (epoch) and `ArrivalSeconds` (a Stopwatch
+  since provider start) are separate fields on purpose. Subtracting one from the other yields the
+  epoch — 1.79 × 10¹² ms — which is exactly the bug that shipped in the first draft.
+* **`|Velocity|` is not `Speed`.** Equal for straight-line motion, but the smoothed vector partly
+  cancels on reversing motion (mean ratio 0.678 on a dancer). **Direction from `Velocity`, magnitude
+  from `Speed`.**
+
+### Next recommended task, in order
+
+0. **Listen to it.** F-31's audio has never been heard by anyone; the synthesis cannot run
+   outside a player. Do this at the same time as looking at the scenes.
+1. **Open the nine scenes and look at them.** This is the single highest-value next action and
+   nothing else should jump it. Expect to tune named constants; that is what they are for.
+2. **Refactor `SkeletonShowBootstrap` onto `TrackedStage`.** It still carries its own copy of the
+   chain. Deliberately deferred — it is the scene carrying verified evidence and the refactor could
+   not be visually checked — but two copies of that chain *will* drift. Do this once the Editor is
+   free and F-28/F-29's modes can be eyeballed after the change.
+3. **Run one live OAK-D session.** It is the only way to see the trust HUD's MEASURED depth path,
+   and the only way to know whether the floor and hand limits measured on video hold on stereo.
+4. **Calibrate the hand gesture thresholds** against a subject performing pinch/open on cue, rather
+   than against the pose distribution of two dance clips.
+
+### How to verify without the Editor
+
+The Editor lock is the normal state here, so the loop used all session is written up in
+`docs/evidence/f29/` and `docs/evidence/f30/`: `dotnet build` the generated `.csproj` (they are
+gitignored and carry an EXPLICIT file list — a new `.cs` must be added by hand or it is silently not
+compiled), then drive the real classes from a console harness referencing the built DLLs plus
+`UnityEngine.CoreModule.dll`. **The trap:** some `UnityEngine` maths is a native ECall and throws
+outside a player — `Quaternion.Slerp/Angle/LookRotation`, `Vector3.Slerp`, `Time.realtimeSinceStartup*`.
+`Vector3` arithmetic, `.normalized` and `Mathf.*` are fine. New code should avoid those calls where
+it cheaply can (this is why `HandPose.PalmRotation` is a computed property rather than a field);
+pre-existing ones — the provider's hand path, `HumanizedSkeleton` — must be routed around instead.
+
+---
+
+## v1 packaging and sidecar auto-launch (2026-09-16) — superseded as the live handoff by F-29/F-30 above
 
 ### What changed
 
@@ -181,7 +949,8 @@ OAK-D RGB+depth+intrinsics operating @30 fps; **packet loss 0.00 %** (0/1046 and
 correct label is LIMB ROTATION INSTABILITY.*
 
 **P0-1 UNITY GATE IS NOW PROVEN (2026-09-08).** Scripted occlusion injection
-([`inject_occlusion.py`](../python-sidecar~/inject_occlusion.py) → [`verify_gate.py`](../python-sidecar~/verify_gate.py))
+(`inject_occlusion.py` → `verify_gate.py` — **both absent from the tree and from git history;**
+these links were dead. The result below stands as a record; the harness would need rewriting to repeat it)
 streams the real UDP contract with occluded joints emitted as `[0,0,0,0]` — **with the sidecar not running
 at all**, so nothing is inferred from a Python-side hold. Result over 3/5/8/12/20-frame occlusions × 4 limbs:
 **20/20 PASS**, gate held for the full duration, **0 zero-rotations across 2765 held frames (no origin
@@ -191,7 +960,8 @@ collapse)**, 0 spurious holds on non-occluded limbs, re-acquired every time, bon
 (presence probe 2026-09-08: **0/359 frames, max 0/33 joints**) — no human has ever been in frame. Real
 confidence-*decay* profiles, spike magnitudes under fast motion, the 0.35 m cap's responsiveness, palm
 behaviour, trunk/root post-P0 comparison and avatar visual behaviour all need a person.
-→ Run [`python-sidecar~/guided_capture.py`](../python-sidecar~/guided_capture.py) — prompts through blocks
+→ `python-sidecar~/guided_capture.py` — **absent from the tree and from git history**; this link was
+dead. It prompted through blocks
 A–J on a countdown and reports every metric **per block**.
 
 **Gotchas found:**
