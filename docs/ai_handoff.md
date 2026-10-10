@@ -5,6 +5,31 @@ Purpose: next agent can continue without re-deriving context.
 
 ---
 
+## 🔷 F-52 follow-up — first real 2-person clip (`147.webm`, 4K) live in Unity; three fixes (2026-10-10)
+
+Full record: [`tasks.md`](tasks.md) "F-52 FOLLOW-UP". Offline: both people posed on 1931/1934 frames with exactly 2 ids and no id change. Live: (1) the first sidecar launch
+was killed by the supervisor's 10 s silence limit while the FP32 model loaded (13.8 s) -> `LoadTicker` keeps the heartbeat going; (2) **Unity was passing the FP32
+model** even though ADR-082 made FP16 the default -> `SidecarPaths.PreferFp16` / `SidecarLocator` now use `rtmw3d-x-fp16.onnx` when present; (3) a 4K file decoded serially
+with inference (13.4 fps) -> `PrefetchCapture` (21.8 fps; 4K decode caps at ~24 fps, so use a 1080p copy for real-time). **Do not** downscale a 4K source "for speed": measured no gain
+and no loss. Tests: `test_video_source.py` 129/129, `SidecarModelPreferenceTests` 6/6. What the scene shows was watched by the user.
+
+**Follow-up 2 (the skeleton lagged the video):** correct — a file was processed frame by frame, so the 4K clip ran at 0.62x. A file is now held to its own clock by dropping late frames (`--drop-late`, heartbeat `speed=`/`late=`), but ONLY when the
+next frame is already decoded (dropping never saves decode time; the first version posed 13 of 1,934 on the 4K file). A decode-bound file plays at the decoder's speed and the sender says so. **Use `Assets/Games/video/147_1080p.mp4`** (speed 0.99 live in Unity).
+
+---
+
+## 🔷 F-53 — the AppBootstrap Inspector is nine collapsible sections, and its settings live in named files (2026-10-10)
+
+Full record: [`tasks.md`](tasks.md) F-53, [`decisions.md`](decisions.md) **ADR-089**. **Nothing is serialized differently** - every saved scene value is intact.
+
+Settings now live in `Runtime/Bootstrap/AppBootstrap.<Section>.cs` (a `partial class`): TrackingSource, VideoSource, KalidokitBody, HumanizedSkeleton, OperatingVolume,
+PoseMapping, Features, Debug; `AppBootstrap.cs` keeps the plumbing and behaviour. The Inspector draws them as foldouts via `[InspectorGroup]` +
+`Editor/GroupedInspectorEditor.cs`. **To add a setting, put it in the file for its section.** **Do not** move fields into nested serializable classes (it renames the
+serialized paths and resets the scene) and **do not** make the attribute a `PropertyAttribute`. Tested: `InspectorGroupingTests` 9/9, 8 mutations caught, and a
+real `SerializedObject` showed 75 visible = 75 grouped. **Never seen drawn.** The new files need their `.meta` files committed.
+
+---
+
 ## 🔷 F-52 — several people from a phone / webcam / video: a host-side detector in front of the F-32 tracker (2026-10-10) — START HERE
 
 Full record: [`tasks.md`](tasks.md) F-52, [`decisions.md`](decisions.md) **ADR-088**.

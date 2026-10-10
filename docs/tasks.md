@@ -2485,3 +2485,86 @@ people" did not happen here; it follows whoever the crop starts on, and the pick
 - [ ] **Identity is only counted, not labelled.** 12 ids for 8 dancers at cap 8 is fragmentation, but real swaps vs new births were not separated.
 - [ ] `--det-conf 0.45` is the OAK path's value, not tuned for YOLOX-s. Re-measure phantom people before changing it.
 - [ ] The crowd scenes (F-34) fed by this have never been seen on a screen.
+
+
+---
+
+## F-53 — THE APPBOOTSTRAP INSPECTOR AS COLLAPSIBLE SECTIONS, AND ITS SETTINGS IN NAMED FILES (2026-10-10)
+
+Decision: **ADR-089**. Status: **DONE; compiles in the Editor with no errors or warnings; the drawing itself has not been looked at on screen.**
+
+Asked because the `AppBootstrap` Inspector had become one flat list of 75 visible fields (105 serialized in all, 1,966 lines of script).
+
+- [x] **`[InspectorGroup(title, Order, ExpandedByDefault)]`** (`Runtime/Core/InspectorGroupAttribute.cs`) and the pure `InspectorGrouping.Build(Type)`
+      (`Runtime/Core/InspectorGrouping.cs`): which visible field belongs to which section. A plain `Attribute`, NOT a `PropertyAttribute`, so it cannot
+      clash with `[Range]`, `[Tooltip]` or `[MaskedString]` on the same field.
+- [x] **`GroupedInspectorEditor`** + **`AppBootstrapEditor`** (`Editor/`): collapsible sections, "Expand all / Collapse all", each section's open state remembered
+      for the editor session, field count in the title, and any visible field no section claims is drawn under "Other" rather than dropped. Fields are still
+      drawn with `PropertyField`, so tooltips, ranges and the masked PIN behave as before. `VirtualMirror.Editor.asmdef` now references `VirtualMirror.App`.
+- [x] **`AppBootstrap` is a `partial class`**, its serialized declarations moved verbatim into one file per section: `AppBootstrap.TrackingSource.cs`,
+      `.VideoSource.cs` (with the video runtime state), `.KalidokitBody.cs`, `.HumanizedSkeleton.cs`, `.OperatingVolume.cs`, `.PoseMapping.cs`, `.Features.cs`,
+      `.Debug.cs`. `AppBootstrap.cs` keeps the plumbing and the behaviour (1,966 -> 1,689 lines). Nine sections: General, Tracking Source, Video Test Source,
+      Kalidokit Body, Humanized Skeleton, Operating Volume, Pose Mapping, Features, Debug; General, Tracking Source and Video Test Source start open.
+- [x] **No serialization change.** Field names, types and defaults are untouched, so `Bootstrap.unity` keeps every saved value. Proven two ways: the script that
+      moved the text asserted the multiset of the 105 `[SerializeField]` declaration lines is identical before and after, and in the Editor a temporary
+      component's `SerializedObject` showed 75 visible properties, all 75 in a section, none missing, none unclaimed.
+- [x] Tests: `InspectorGroupingTests` **9/9** (the rules on stand-in types, and the real `AppBootstrap`: nine sections in order, every visible field in exactly one,
+      key settings in the section a user would look in); 8 mutations all caught. `VideoSourceF49Tests` 35/35 and `SidecarStatusModelF51Tests` 23/23 unchanged.
+
+**Found along the way:** the first version counted `HumanizeTap` (a public delegate) as visible; Unity never serializes a delegate, and the real-`SerializedObject`
+check caught it. Now excluded, with a test.
+
+**NOT DONE:** never seen drawn (layout of the section boxes, the buttons). A search box over 75 fields was not built. Only `AppBootstrap` uses the editor; any other
+long component opts in by adding `[InspectorGroup]` to its fields and a one-line `CustomEditor` subclass. The new files' `.meta` files exist and must be committed.
+
+
+---
+
+## F-52 FOLLOW-UP — THE FIRST REAL TWO-PERSON CLIP (`147.webm`), LIVE IN UNITY (2026-10-10)
+
+Status: **offline result good; the live run exposed three problems, all fixed; what the SCENE shows was watched by the user, not by me.**
+
+The clip: `Assets/Games/video/147.webm`, two dancers, full body, landscape **3840x2160**, 1,935 frames at 29.97 fps. `AppBootstrap` was already set to it with `Video Max People` = 2.
+
+### Offline (the multi-person path, 2 people)
+
+| check | result |
+|---|---|
+| frames with both people posed | **1931 of 1934**; exactly **2 ids**; **0 id changes**; the left/right order of the two ids never flipped; one one-frame dropout (frame 1621) |
+| native 4K vs max side 1920 vs 1280 (110 frames) | processing 29.6 / 29.2 / 29.4 ms; joints 21.0 / 21.0 / 21.0; jitter 8.5 / 8.4 / 8.5 mm — **downscaling a 4K source buys nothing and loses nothing** |
+| decoding the 4K file | median 33 ms, mean 41 ms, p95 ~140 ms: **decode alone tops out at ~24 fps**; FFmpeg thread options changed nothing |
+
+### Found live, fixed
+
+- [x] **The first launch was killed by the watchdog.** `HeartbeatTimeout` 11.2 s in: the supervisor kills a child silent for 10 s, the blocking model load printed nothing, and ADR-082 had measured the FP32 model at 13.8 s to ready. The second launch worked only because the files were then in the OS cache.
+      Fix: `LoadTicker` in `video_udp_sender.py` repeats the `frames=0 sent=0 loading ...` line every 2 s under both blocking loads (pose model, person detector). Tests: 6 mutations caught.
+- [x] **Unity was running the slow FP32 model.** ADR-082 made FP16 the default (2.97x faster on the GPU stage, 6.8 s vs 13.8 s to ready) and the sidecar's own default prefers it, but Unity passes an explicit `--model`, which bypasses that. `SidecarPaths.PreferFp16` + `SidecarLocator` now pick `rtmw3d-x-fp16.onnx` when it sits beside the FP32 file (an Inspector override is used exactly as typed; a machine without the FP16 file is unchanged).
+      Measured live: per-person pose 25 ms -> 14.7-16 ms with Unity rendering (9 ms standalone). `SidecarModelPreferenceTests` 6/6, 5 mutations caught.
+- [x] **A 4K FILE ran at under half speed** because decode and inference added (13.4 fps through the sender). `PrefetchCapture` decodes ahead on its own thread (automatic above 2.5 MP, `--prefetch / --no-prefetch`): **13.4 -> 21.8 fps**, wall time 148 s -> 92 s, identical output (1,932 datagrams). It cannot make a 4K file real-time (decode caps at ~24 fps); a 1080p copy would be.
+      Tests: 9 mutations, 8 caught, the 9th (end-of-clip sticky flag) equivalent. `test_video_source.py` **129/129**.
+- **Live in Unity after the fixes:** `RestartCount` 0, ~19 fps, 2 people on every sampled frame. The clip plays at roughly 0.65x because it is 4K.
+
+### NOT DONE
+
+- [ ] What the scene draws (and whether the single-person scene shows only the first person) was not inspected by me.
+- [ ] A 1080p copy of the clip would show real-time behaviour; the Inspector's source was left as the user set it.
+- [ ] GPU contention with Unity's own rendering is real (9 ms -> ~15 ms per person); not tuned.
+
+
+### F-52 FOLLOW-UP 2 — "THE SKELETON IS SLOW AGAINST THE VIDEO" (2026-10-10)
+
+Reported while watching `147.webm` in Unity: the skeleton lagged the video it was meant to mirror. **It was right**: the sidecar steps through a file frame by frame however long that takes, and the 4K clip
+needed ~54 ms a frame against a 33 ms period, so it advanced at **0.62x** (18.6 fps against 29.97 in the sender's own log). After 10 s of real time the skeleton was ~4 s behind a video playing at 1x.
+
+- [x] **File playback is held to the clip's own clock.** `pace_decision` + `--drop-late` (default on): a frame more than 1.5 frame periods behind is dropped, so the skeleton stays in step with the picture at a lower frame rate. The clock is re-anchored after
+      the first frame (the one-off GPU warm-up is not lag). The heartbeat reports `speed=` (1.00 is real time) and `late=` (frames dropped); the supervisor strips both from the note.
+- [x] **A first version posed 13 frames out of 1,934 on the 4K file.** Dropping saves the time spent POSING a frame, never the time spent DECODING it, so when decoding is the bottleneck every frame arrives late and a late-drops-all rule drops everything. Found by running it,
+      not by the tests. Now `can_catch_up_by_dropping`: drop only when the next frame is already decoded (prefetching reader: `pending() > 0`) or decoding is clearly cheaper than a frame period (plain reader). When it cannot help, nothing is dropped and the sender prints one
+      `WARNING the clip is advancing at 0.69x real time ... use a lower-resolution copy (e.g. 1080p)`.
+- [x] **Measured through the real sender (standalone):** 1080p copy **speed 1.00**, 29.2-29.8 fps, 7-46 late drops, 67.8 s wall for a 64.5 s clip; original 4K **0.77** (decode-bound; 1,557 poses; the warning fires).
+- [x] **Measured live in Unity** (real GPU load, same clip): 4K original `speed=0.68-0.69` with the warning; after a live switch of `Video Source` to the 1080p copy `speed=0.99`, ~25 fps with 2 people, no restarts.
+- [x] `Assets/Games/video/147_1080p.mp4` (32.9 MB; 1080p H.264, decodes in 3.3 ms against 33 ms for the 4K VP9 original). `Assets/Games/*` is git-ignored, so it is not committed. **Point `Video Source` at it to see the skeleton in step.**
+- [x] Tests: `test_video_source.py` **150/150** (the pacing rules, a simulation of the decode-bound and the pose-bound cases, `PrefetchCapture.pending`); 11 mutations all caught, including the 13-of-1,934 rule.
+
+**Why 4K cannot be real time here:** decoding alone tops out at ~24 fps on this machine (more FFmpeg threads changed nothing). A 4K phone or USB camera stream would hit the same wall; a lower capture resolution is the fix, and the pose stage loses nothing (a ~800 px dancer is cut to a 384 px crop).
+**NOT DONE:** hardware (GPU) decoding; an automatic lower-resolution proxy; the runtime edit of `Video Source` used for the live check is not saved, so the scene still points at the 4K file until you change it.

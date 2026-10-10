@@ -4480,3 +4480,36 @@ caught, the LAN chain test (103/103) unchanged. Full table: `tasks.md` F-52.
 * **Not decided here:** which crowd scenes should consume host-detected people.
 
 ---
+
+
+## ADR-089 — Long Inspectors are grouped by an attribute and split into partial files; never by moving fields into nested classes
+
+**Status:** Accepted (2026-10-10). **Context:** `AppBootstrap` had 105 serialized fields (75 visible) in one list, in a 1,966-line file.
+
+### Decision
+
+1. `[InspectorGroup]` on the first field of each section, a pure reflection rule (`InspectorGrouping`) to assign the rest, and a generic `GroupedInspectorEditor`
+   that draws the sections as foldouts.
+2. Declare each section's fields in its own `partial class` file named for the section.
+3. The section order comes from `Order`, never from file or declaration order.
+
+### Why not the obvious alternative
+
+Moving the fields into `[Serializable]` settings classes (`video.videoSource`, `kalidokit.lerp`) would shorten the script just as well, but it renames every
+serialized property path, so `Bootstrap.unity` would silently reset to defaults - including the user's `videoSource`, PIN and tuning values - unless the scene YAML
+were migrated by hand. A partial class and an editor-side grouping change nothing that is serialized.
+
+### Consequences
+
+* Nothing in a scene or prefab changes. The Inspector is nine collapsible sections, three of them open by default.
+* A setting is found by file name (`AppBootstrap.VideoSource.cs`).
+* `Order` is load-bearing: the order partial files are compiled in is not specified, so `InspectorGroupingTests` pins the nine titles in order.
+
+### DO NOT REVERT / how to extend
+
+* **Do not turn `InspectorGroupAttribute` into a `PropertyAttribute`**: Unity applies one property drawer per field, so it would fight `[Range]` and `[MaskedString]`.
+* **Do not rename or retype a field when moving it between files.** The move script asserted the declarations were byte-identical for a reason.
+* **To add a setting:** put it in the partial file for its section (or a new file with a new `[InspectorGroup]` and an unused `Order`).
+* **To group another component:** add `[InspectorGroup]` to its fields and `[CustomEditor(typeof(X))] sealed class XEditor : GroupedInspectorEditor { }`.
+
+---

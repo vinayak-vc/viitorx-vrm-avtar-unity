@@ -29,7 +29,9 @@ namespace VirtualMirror.Tracking.OakD {
                 // reason to keep a second copy under the sidecar folder.
                 string editorModel = Path.Combine(Application.dataPath, SidecarPaths.EditorModelRelativeToAssets);
                 if (File.Exists(editorModel)) {
-                    model = editorModel.Replace('\\', '/');
+                    // ADR-082: the FP16 build when it sits beside it. Only this DEFAULT is upgraded; a model
+                    // path the user typed into the Inspector (modelPathOverride) is used exactly as given.
+                    model = SidecarPaths.PreferFp16(editorModel, File.Exists).Replace('\\', '/');
                 }
             }
             return SidecarPaths.Resolve(root, model);

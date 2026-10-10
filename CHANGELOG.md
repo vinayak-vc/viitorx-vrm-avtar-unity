@@ -12,6 +12,20 @@ While the version is `0.x`, the public API may change in a minor release. See
 
 ### Added
 
+- **A video file now plays at its own speed instead of slow motion.** When the sidecar cannot pose every frame in time it drops late frames to hold the clip's clock, so the skeleton stays in step with the picture (at a lower frame rate). The
+  heartbeat reports `speed=` (1.00 = real time). If decoding itself is too slow (a 4K file) dropping cannot help, so nothing is dropped and the sidecar prints one warning telling you to use a 1080p copy. Measured live in Unity on a 4K two-person clip:
+  0.68x with the original, 0.99x with a 1080p copy.
+
+- **Unity now launches the sidecar with the FP16 pose model when it is present (F-52 follow-up).** ADR-082 made FP16 the default (about 3x faster, loads in about half the
+  time), but Unity's explicit model path bypassed it. A machine without `rtmw3d-x-fp16.onnx` is unchanged; a path typed into the Inspector is used as given.
+- **The sidecar no longer gets killed for a slow model load.** While the pose model or the person detector loads, the sender repeats its heartbeat line every 2 s, so the
+  supervisor's 10 s silence limit cannot fire during a cold start. Big (over 2.5 MP, e.g. 4K) video files are decoded on a separate thread (`--prefetch`), 13.4 -> 21.8 fps on
+  a 4K two-person clip.
+
+- **The AppBootstrap Inspector is nine collapsible sections (F-53 / ADR-089).** General, Tracking Source and Video Test Source start open; "Expand all / Collapse all"
+  and each section's state is remembered for the session. Its settings moved into `AppBootstrap.<Section>.cs` partial files; no field was renamed or retyped, so saved
+  scene values are untouched. **Not yet looked at on screen.**
+
 - **Several people from a phone, webcam or video (F-52 / ADR-088).** New field `AppBootstrap > Video Max People` (1-8, default 1). Above 1 the sidecar
   runs a host-side YOLOX-s person detector and the F-32 tracker in front of the pose model and sends the F-32 `persons[]` datagram, so a source with no
   OAK-D can drive several skeletons. Needs the detector weights once (`tools/model/fetch_yolox_s.py`, 35.9 MB); without them Unity says so and does not start
