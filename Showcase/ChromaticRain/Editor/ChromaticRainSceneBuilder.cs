@@ -221,98 +221,33 @@ namespace ChromaticRain.EditorTools {
         }
 
         private static FluxyTarget CreateTarget(Transform parent, string name) {
-            GameObject go = new GameObject(name);
-            go.transform.SetParent(parent, false);
-            FluxyTarget target = go.AddComponent<FluxyTarget>();
-            target.enabled = false;
-            return target;
+            return ShowcaseBuilderUtil.CreateTarget(parent, name);
         }
 
         private static void SetRef(Object target, string field, Object value) {
-            SerializedObject so = new SerializedObject(target);
-            SerializedProperty p = so.FindProperty(field);
-            if (p == null) {
-                Debug.LogError("[ChromaticRain] Builder: " + target.GetType().Name + " has no field '" + field + "'.");
-                return;
-            }
-            p.objectReferenceValue = value;
-            so.ApplyModifiedPropertiesWithoutUndo();
+            ShowcaseBuilderUtil.SetRef(target, field, value);
         }
 
         private static void EnsureFolders() {
-            string[] folders = { "Scripts", "Shaders", "Materials", "Scenes", "Settings", "Editor", "Tests" };
-            for (int i = 0; i < folders.Length; i++) {
-                string full = Root + "/" + folders[i];
-                if (!AssetDatabase.IsValidFolder(full)) {
-                    AssetDatabase.CreateFolder(Root, folders[i]);
-                }
-            }
+            ShowcaseBuilderUtil.EnsureFolders(Root, new string[] { "Scripts", "Shaders", "Materials", "Scenes", "Settings", "Editor", "Tests" });
         }
 
         private static T LoadOrCreate<T>(string path) where T : ScriptableObject {
-            T asset = AssetDatabase.LoadAssetAtPath<T>(path);
-            if (asset == null) {
-                asset = ScriptableObject.CreateInstance<T>();
-                AssetDatabase.CreateAsset(asset, path);
-            }
-            return asset;
+            return ShowcaseBuilderUtil.LoadOrCreate<T>(path);
         }
 
         private static Material LoadOrCreateMaterial(string name, string shaderName) {
-            string path = Root + "/Materials/" + name + ".mat";
-            Material material = AssetDatabase.LoadAssetAtPath<Material>(path);
-            Shader shader = Shader.Find(shaderName);
-            if (shader == null) {
-                Debug.LogError("[ChromaticRain] Shader '" + shaderName + "' was not found; is it imported?");
-            }
-            if (material == null) {
-                material = new Material(shader);
-                AssetDatabase.CreateAsset(material, path);
-            } else if (shader != null && material.shader != shader) {
-                material.shader = shader;
-            }
-            return material;
+            return ShowcaseBuilderUtil.LoadOrCreateMaterial(Root, name, shaderName);
         }
 
         /// <summary>A private copy of a FluXY material, so runtime state never dirties FluXY's own.</summary>
         private static Material CopyMaterial(string sourcePath, string name) {
-            string path = Root + "/Materials/" + name + ".mat";
-            Material existing = AssetDatabase.LoadAssetAtPath<Material>(path);
-            if (existing != null) {
-                return existing;
-            }
-            Material source = AssetDatabase.LoadAssetAtPath<Material>(sourcePath);
-            if (source == null) {
-                Debug.LogError("[ChromaticRain] FluXY material not found at " + sourcePath);
-                return null;
-            }
-            Material copy = new Material(source);
-            AssetDatabase.CreateAsset(copy, path);
-            return copy;
+            return ShowcaseBuilderUtil.CopyMaterial(Root, sourcePath, name);
         }
 
         private static VolumeProfile LoadOrCreateVolumeProfile() {
-            VolumeProfile profile = AssetDatabase.LoadAssetAtPath<VolumeProfile>(VolumePath);
-            if (profile == null) {
-                profile = ScriptableObject.CreateInstance<VolumeProfile>();
-                AssetDatabase.CreateAsset(profile, VolumePath);
-            }
-            Bloom bloom;
-            if (!profile.TryGet(out bloom)) {
-                bloom = profile.Add<Bloom>(true);
-                AssetDatabase.AddObjectToAsset(bloom, profile);
-            }
             // Restrained: only the brightest streak cores and the rim glow, no haze.
-            bloom.active = true;
-            bloom.threshold.overrideState = true;
-            bloom.threshold.value = 0.85f;
-            bloom.intensity.overrideState = true;
-            bloom.intensity.value = 0.35f;
-            bloom.scatter.overrideState = true;
-            bloom.scatter.value = 0.55f;
-            EditorUtility.SetDirty(bloom);
-            EditorUtility.SetDirty(profile);
-            return profile;
+            return ShowcaseBuilderUtil.LoadOrCreateBloomProfile(VolumePath, 0.85f, 0.35f, 0.55f);
         }
     }
 }

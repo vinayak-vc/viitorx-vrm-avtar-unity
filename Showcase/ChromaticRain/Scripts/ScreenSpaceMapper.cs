@@ -23,10 +23,10 @@ namespace ChromaticRain {
             }
         }
 
-        public void Configure(ChromaticRainSettings settings, float aspect) {
-            ViewHeight = Mathf.Max(0.5f, settings.viewHeightMetres);
-            ViewCentreY = settings.viewCentreY;
-            LateralGain = settings.lateralGain;
+        public void Configure(ITrackingTuning settings, float aspect) {
+            ViewHeight = Mathf.Max(0.5f, settings.ViewHeightMetres);
+            ViewCentreY = settings.ViewCentreY;
+            LateralGain = settings.LateralGain;
             Aspect = Mathf.Max(0.2f, aspect);
         }
 

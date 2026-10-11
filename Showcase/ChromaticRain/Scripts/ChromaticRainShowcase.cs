@@ -57,37 +57,12 @@ namespace ChromaticRain {
         private readonly ScreenSpaceMapper mapper = new ScreenSpaceMapper();
         private readonly ShowcaseStateMachine machine = new ShowcaseStateMachine();
         private readonly SilhouetteBuilder builder = new SilhouetteBuilder();
-        private readonly SkeletonPose simPose = new SkeletonPose();
-        private readonly HandPose simLeft = new HandPose();
-        private readonly HandPose simRight = new HandPose();
-
-        private TrackedStage stage;
-        private ILogService log;
+        private ShowcaseTrackingSource tracking;
         private bool ready;
-        private bool simulationActive;
-        private float noLiveFor;
         private float lastAspect;
         private bool lastFluidOn;
-        private bool streamFresh;
-        private double sinceAccepted = -1.0;
-        private TrackingState trackingState = TrackingState.NoStream;
         private float smoothedFrameMs = 16.7f;
-        private ShowcaseSource lastSource;
         private bool leaving;
-        private float labelTimer;
-        private string sourceLabel = string.Empty;
-
-        // Provider health, read in one call. Kept as fields so the call allocates nothing.
-        private string healthSession;
-        private long healthAccepted;
-        private long healthReceived;
-        private long healthTransitions;
-        private long healthNewSession;
-        private long healthRejectedOld;
-        private long healthOutOfOrder;
-        private long healthDuplicate;
-        private int healthBuffer;
-        private long healthReconnects;
 
         public ChromaticRainSettings Settings {
             get {
@@ -175,31 +150,31 @@ namespace ChromaticRain {
 
         public bool SimulationActive {
             get {
-                return simulationActive;
+                return tracking != null && tracking.SimulationActive;
             }
         }
 
         public bool StreamFresh {
             get {
-                return streamFresh;
+                return tracking != null && tracking.StreamFresh;
             }
         }
 
         public TrackingState ProviderState {
             get {
-                return trackingState;
+                return tracking != null ? tracking.ProviderState : TrackingState.NoStream;
             }
         }
 
         public double SecondsSinceAccepted {
             get {
-                return sinceAccepted;
+                return tracking != null ? tracking.SecondsSinceAccepted : -1.0;
             }
         }
 
         public long PacketsReceived {
             get {
-                return stage != null && stage.Provider != null ? stage.Provider.ReceivedCount : 0L;
+                return tracking != null ? tracking.PacketsReceived : 0L;
             }
         }
 
@@ -220,35 +195,26 @@ namespace ChromaticRain {
         /// "LIVE camera:0"; empty for the OAK-D or when no bootstrap has said anything.</summary>
         public string LiveSourceLabel {
             get {
-                return sourceLabel;
+                return tracking != null ? tracking.LiveSourceLabel : string.Empty;
             }
         }
 
         public bool PortInUse {
             get {
-                return stage != null && stage.Provider != null && !stage.Provider.IsRunning;
+                return tracking != null && tracking.PortInUse;
             }
         }
 
         public string OwnershipState {
             get {
-                if (stage == null || stage.Telemetry == null) {
-                    return "-";
-                }
-                return string.IsNullOrEmpty(stage.Telemetry.OwnershipState) ? "-" : stage.Telemetry.OwnershipState;
+                return tracking != null ? tracking.OwnershipState : "-";
             }
         }
 
         /// <summary>What the status chip may truthfully say.</summary>
         public SignalStatus Signal {
             get {
-                if (simulationActive) {
-                    return source == ShowcaseSource.Simulated ? SignalStatus.Simulated : SignalStatus.SimulatedFallback;
-                }
-                if (PortInUse) {
-                    return SignalStatus.PortInUse;
-                }
-                return streamFresh ? SignalStatus.Live : SignalStatus.NoSignal;
+                return tracking != null ? tracking.Signal : SignalStatus.NoSignal;
             }
         }
 
@@ -269,8 +235,9 @@ namespace ChromaticRain {
                 return;
             }
 
-            log = new ShowcaseLog();
-            lastSource = source;
+            tracking = new ShowcaseTrackingSource("ChromaticRain", udpPort, poseInterpolationDelayMs,
+                                                  useHumanizedSkeleton, mirrorX, simulated);
+            tracking.Mode = source;
             lastAspect = showcaseCamera.aspect;
             mapper.Configure(settings, lastAspect);
             ConfigureCamera();
@@ -305,7 +272,9 @@ namespace ChromaticRain {
         }
 
         private void OnDestroy() {
-            StopStage();
+            if (tracking != null) {
+                tracking.Stop();
+            }
         }
 
         private void Update() {
@@ -318,7 +287,7 @@ namespace ChromaticRain {
                 return;
             }
             if (LauncherScene.ReturnRequested() && LauncherScene.IsAvailable) {
-                StopStage();
+                tracking.Stop();
                 leaving = LauncherScene.Load();
                 if (leaving) {
                     return;
@@ -328,8 +297,8 @@ namespace ChromaticRain {
             smoothedFrameMs = Mathf.Lerp(smoothedFrameMs, Time.unscaledDeltaTime * 1000f,
                                          1f - Mathf.Exp(-dt / 0.5f));
 
-            RefreshSourceLabel(dt);
             ReadKeys();
+            tracking.Mode = source;
             HandleAspect();
             SyncFluidLayer();
 
@@ -338,7 +307,10 @@ namespace ChromaticRain {
             HandPose left;
             HandPose right;
             TrackingTelemetry telemetry;
-            bool sourceFresh = TickSource(dt, out pose, out left, out right, out telemetry);
+            bool sourceFresh = tracking.Tick(dt, settings, out pose, out left, out right, out telemetry);
+            if (tracking.ConsumeResetRequest()) {
+                ResetPipeline();
+            }
 
             // 2. Adapter -> view-space body.
             adapter.Update(body, pose, left, right, telemetry, sourceFresh, dt, settings, mapper);
@@ -365,147 +337,12 @@ namespace ChromaticRain {
             }
         }
 
-        private bool TickSource(float dt, out SkeletonPose pose, out HandPose left, out HandPose right,
-                                out TrackingTelemetry telemetry) {
-            bool wantLive = source != ShowcaseSource.Simulated;
-            if (wantLive && stage == null) {
-                StartStage();
-            } else if (!wantLive && stage != null) {
-                StopStage();
-            }
-
-            bool liveFresh = false;
-            streamFresh = false;
-            if (stage != null && stage.Provider != null && stage.Provider.IsRunning) {
-                stage.Tick(dt);
-                double since;
-                stage.Provider.GetStreamHealth(out trackingState, out healthSession, out healthAccepted,
-                                               out healthReceived, out since, out healthTransitions,
-                                               out healthNewSession, out healthRejectedOld,
-                                               out healthOutOfOrder, out healthDuplicate,
-                                               out healthBuffer, out healthReconnects);
-                sinceAccepted = since;
-                streamFresh = trackingState == TrackingState.Live && since <= settings.maxPoseAgeSeconds;
-                // A person, not merely a stream: the stage must call the pose live and not synthetic.
-                liveFresh = streamFresh && stage.IsLive && !stage.IsAttract && stage.Pose.Valid;
-            } else {
-                sinceAccepted = -1.0;
-                trackingState = stage != null && stage.Provider != null ? stage.Provider.State : TrackingState.NoStream;
-            }
-
-            bool useSimulation;
-            switch (source) {
-                case ShowcaseSource.Simulated:
-                    useSimulation = true;
-                    break;
-                case ShowcaseSource.Live:
-                    useSimulation = false;
-                    break;
-                default:
-                    // Judged on the STREAM, not on whether somebody stands in front of the camera:
-                    // a live sidecar with an empty room is "LIVE, no person" and shows plain rain.
-                    // Fall back only after a sustained absence of data, and hand control straight
-                    // back as soon as live data returns.
-                    if (streamFresh) {
-                        noLiveFor = 0f;
-                    } else {
-                        noLiveFor += dt;
-                    }
-                    useSimulation = simulationActive
-                        ? !streamFresh
-                        : noLiveFor >= settings.autoFallbackSeconds;
-                    break;
-            }
-
-            if (useSimulation != simulationActive || source != lastSource) {
-                simulationActive = useSimulation;
-                lastSource = source;
-                ResetPipeline();
-            }
-
-            if (simulationActive) {
-                if (simulated.StreamActive) {
-                    simulated.mirrorX = mirrorX;
-                    simulated.Tick(dt);
-                    Vector3 origin = new Vector3(simulated.OffsetX, SimulatedPoseSource.HipHeight, 0f);
-                    simPose.Fill(simulated.Frame, origin, 1f, dt);
-                    simLeft.Fill(simulated.Hands, true, origin, 1f);
-                    simRight.Fill(simulated.Hands, false, origin, 1f);
-                }
-                pose = simPose;
-                left = simLeft;
-                right = simRight;
-                telemetry = null;
-                return simulated.StreamActive;
-            }
-
-            if (stage != null) {
-                pose = stage.Pose;
-                left = stage.Left;
-                right = stage.Right;
-                telemetry = stage.Telemetry;
-            } else {
-                pose = null;
-                left = null;
-                right = null;
-                telemetry = null;
-            }
-            return liveFresh;
-        }
-
-        // The bootstrap that owns the sidecar publishes one status line (video / webcam / phone, then
-        // the sidecar's own state). Only its first part says WHAT is being tracked, and it is rebuilt
-        // on every call, so it is read once a second rather than every frame.
-        private void RefreshSourceLabel(float dt) {
-            labelTimer -= dt;
-            if (labelTimer > 0f) {
-                return;
-            }
-            labelTimer = 1f;
-            string status = SidecarBootstrap.Status;
-            string label = string.Empty;
-            if (!string.IsNullOrEmpty(status)) {
-                int bar = status.IndexOf("  |  ", StringComparison.Ordinal);
-                string head = bar >= 0 ? status.Substring(0, bar) : status;
-                if (head.StartsWith("VIDEO", StringComparison.Ordinal) || head.StartsWith("LIVE", StringComparison.Ordinal)) {
-                    label = head;
-                }
-            }
-            sourceLabel = label;
-        }
-
         private void ResetPipeline() {
             adapter.Reset(body);
             machine.Reset();
             builder.Reset();
-            simPose.Fill(null, Vector3.zero, 1f, 0.016f);
             if (fluid != null) {
                 fluid.Clear();
-            }
-        }
-
-        private void StartStage() {
-            stage = new TrackedStage(log, udpPort, poseInterpolationDelayMs);
-            stage.BodyOrigin = new Vector3(0f, SimulatedPoseSource.HipHeight, 0f);
-            stage.BodyScale = 1f;
-            stage.UseHumanized = useHumanizedSkeleton;
-            // A synthetic attract figure is NOT a person and must never reach the silhouette.
-            stage.AttractEnabled = false;
-            stage.GroundToFloor = true;
-            stage.FollowPosition = true;
-            stage.FollowScale = 1f;
-            stage.Start(mirrorX, true, false);
-            if (stage.Provider == null || !stage.Provider.IsRunning) {
-                Debug.LogWarning("[ChromaticRain] The tracking socket on UDP " + udpPort + " could not be "
-                                 + "opened (is the mirror app or another scene already running?). Live "
-                                 + "tracking is unavailable; choose Simulated, or free the port.", this);
-            }
-        }
-
-        private void StopStage() {
-            if (stage != null) {
-                stage.Stop();
-                stage = null;
             }
         }
 
@@ -650,21 +487,12 @@ namespace ChromaticRain {
                 return;
             }
             mirrorX = mirror;
-            if (stage != null) {
-                StopStage();
-                StartStage();
-            }
-            ResetPipeline();
+            tracking.SetMirror(mirror);
         }
 
         /// <summary>Forget where everyone stood and restart from nobody.</summary>
         public void Recenter() {
-            simulated.Restart();
-            if (stage != null) {
-                stage.ResetFollow();
-                stage.ResetGrounding();
-            }
-            ResetPipeline();
+            tracking.Recenter();
         }
 
         private void OnValidate() {
@@ -676,25 +504,6 @@ namespace ChromaticRain {
         private void Start() {
             if (debugOverlay != null) {
                 debugOverlay.enabled = debugVisible;
-            }
-        }
-
-        private sealed class ShowcaseLog : ILogService {
-            public void Log(LogLevel level, string message) {
-                if (level == LogLevel.Error) {
-                    Debug.LogError("[ChromaticRain] " + message);
-                } else if (level == LogLevel.Warning) {
-                    Debug.LogWarning("[ChromaticRain] " + message);
-                } else {
-                    Debug.Log("[ChromaticRain] " + message);
-                }
-            }
-
-            public void LogException(Exception exception, string context) {
-                Debug.LogError("[ChromaticRain] " + context + ": " + (exception != null ? exception.Message : "null"));
-            }
-
-            public void Flush() {
             }
         }
     }

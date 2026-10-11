@@ -4526,3 +4526,27 @@ were migrated by hand. A partial class and an editor-side grouping change nothin
 **Do not.** Add a second UDP listener or a source selector to the scene; start the sidecar from the scene; make the scene's `AppBootstrap` navigate away (`mirrorSceneName` = the scene's own name, `loadMirrorSceneOnStart` off); use the sim's `O` key (the bootstrap owns it). **Tune** through `ChromaticRainSettings` (live) and `AppBootstrap > Video Test Source`.
 
 **Known:** `Auto` falls back to the simulation only after 3 s of no pose, and the sender emits nothing for an empty room, so use `Live` for an unattended install. The rain phase wraps at exactly 1 (whole-number cycles per column) so it never loses precision or visibly resets; keep `REF_FALL` / `WRAP_SECONDS` in the rain shader and `RainRenderer` in step.
+
+
+---
+
+## ADR-091 - Fluid Disruption: the calm baseline is a field the dye is pulled toward, not blobs that are injected; shared showcase source
+
+**Decision.** (1) The baseline is a procedural band pattern used twice: as the container's `clearTexture` and as the density texture of one full-area `FluxyTarget` that splats it a few times a second with a small weight, so every pass relaxes the dye toward the pattern. Flow targets only push (no dye). (2) The three interaction targets splat by distance travelled and every weight (dye, velocity, scale, turbulence) is multiplied by the filtered movement strength. (3) A point with no measured landmark has its target disabled in place; a re-enabled target re-seeds FluXY's old position. (4) The showcase uses the same shared source / adapter / status classes as Chromatic Rain; both reach tracking only through the scene's `AppBootstrap`.
+
+**Why.** Injected dye blobs with a subtractive dissipation became flat, over-saturated lumps with torn edges within 30 s, and nothing brought the surface back to a recognisable look after a disturbance. Relaxation toward a fixed pattern keeps the first-frame look forever, settles disturbances without ever clearing the solver, and costs one extra splat pass. Gating by distance and multiplying by strength means a still or jittering hand injects nothing and cannot act as an eraser (a zero-weight splat still blends velocity toward zero). Disabling instead of moving avoids any jump to the origin. Extracting the source selection removes a second copy of the part of the project most likely to drift.
+
+**Do not.** Clear the solver when a person enters or leaves (the gate is the only thing that changes); scale a stationary target's size instead of its weights; read thickness from the dye buffer's alpha (it accumulates as alpha squared); raise dye dissipation to "settle faster" (it tears edges: raise `fieldWeight` / `fieldRate` instead); give `FluidDisruptionSettings` runtime toggles (quality, enhancements, FluXY on/off) - a ScriptableObject edited in Play mode persists in the Editor; trust the scene's `MeshFilter` mesh for a FluXY container.
+
+**Known:** the per-pass relaxation also fades a person's bright dye (about 5 s); that is the intended "settle". A FluXY container needs its own procedural mesh on the `MeshFilter`; an Editor-saved scene can carry a stale one.
+
+
+---
+
+## ADR-092 - FluXY is patched in place; the patch is kept in docs/
+
+**Decision.** Four defects in FluXY 1.4.1 are fixed directly in `Assets/FluXY/Scripts` (FluxySolver, FluxyContainer, FluxyStorage). The diff is kept as `docs/fluxy-1.4.1-local-fixes.patch`. The asmdef version define and the third-party code style are NOT touched.
+
+**Why.** The defects (an unreleased render texture per dispose, two new textures plus two huge arrays per `OnValidate`, a null dereference without `Camera.main`, global shader values shared between solvers) cannot be worked around from outside: they live in private methods that run on enable, on validate and every frame. `Assets/FluXY` is untracked in the outer repo, so without the patch file the change would be invisible and silently lost on an update.
+
+**Do not.** Rewrite the `fluxy.asmdef` version define as an interval (it stops defining `FLUXY_URP`); reformat the plugin; set `_TileData` / `_TileID` only when something changed (they are globals shared by every solver); create readback textures when `readable` is `None`.

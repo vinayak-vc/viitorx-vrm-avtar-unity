@@ -6,7 +6,7 @@ namespace ChromaticRain {
     /// across scripts. Distances are in metres of body space unless a tooltip says "screen heights".
     /// </summary>
     [CreateAssetMenu(fileName = "ChromaticRainSettings", menuName = "Showcase/Chromatic Rain Settings")]
-    public sealed class ChromaticRainSettings : ScriptableObject {
+    public sealed class ChromaticRainSettings : ScriptableObject, ITrackingTuning {
         [Header("Rain")]
         [Tooltip("Fraction of rain columns that carry streaks.")]
         [Range(0f, 1f)] public float rainDensity = 0.7f;
@@ -159,6 +159,72 @@ namespace ChromaticRain {
         public float fluidDrift = 0.04f;
         [Tooltip("Brightness of the velocity-direction tint inside moving fluid.")]
         [Range(0f, 2f)] public float flowTint = 0.5f;
+
+        float ITrackingTuning.MinJointConfidence {
+            get {
+                return minJointConfidence;
+            }
+        }
+
+        float ITrackingTuning.JointGraceSeconds {
+            get {
+                return jointGraceSeconds;
+            }
+        }
+
+        float ITrackingTuning.JointFadeSeconds {
+            get {
+                return jointFadeSeconds;
+            }
+        }
+
+        float ITrackingTuning.SmoothingSlowTau {
+            get {
+                return smoothingSlowTau;
+            }
+        }
+
+        float ITrackingTuning.SmoothingFastTau {
+            get {
+                return smoothingFastTau;
+            }
+        }
+
+        float ITrackingTuning.SmoothingFastSpeed {
+            get {
+                return smoothingFastSpeed;
+            }
+        }
+
+        float ITrackingTuning.MaxPoseAgeSeconds {
+            get {
+                return maxPoseAgeSeconds;
+            }
+        }
+
+        float ITrackingTuning.AutoFallbackSeconds {
+            get {
+                return autoFallbackSeconds;
+            }
+        }
+
+        float ITrackingTuning.ViewHeightMetres {
+            get {
+                return viewHeightMetres;
+            }
+        }
+
+        float ITrackingTuning.ViewCentreY {
+            get {
+                return viewCentreY;
+            }
+        }
+
+        float ITrackingTuning.LateralGain {
+            get {
+                return lateralGain;
+            }
+        }
 
         /// <summary>Palette entry, wrapping, safe against a short array.</summary>
         public Color PaletteColor(int index) {

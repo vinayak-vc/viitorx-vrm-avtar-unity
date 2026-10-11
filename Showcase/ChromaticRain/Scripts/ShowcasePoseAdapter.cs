@@ -59,7 +59,7 @@ namespace ChromaticRain {
 
         public void Update(ShowcaseBody body, SkeletonPose pose, HandPose left, HandPose right,
                            TrackingTelemetry telemetry, bool sourceFresh, float dt,
-                           ChromaticRainSettings s, ScreenSpaceMapper mapper) {
+                           ITrackingTuning s, ScreenSpaceMapper mapper) {
             if (dt <= 0f) {
                 return;
             }
@@ -86,7 +86,7 @@ namespace ChromaticRain {
                     if (!pose.Present[j] || !IsFinite(world)) {
                         continue;
                     }
-                    float conf = Mathf.InverseLerp(s.minJointConfidence, s.minJointConfidence + 0.2f,
+                    float conf = Mathf.InverseLerp(s.MinJointConfidence, s.MinJointConfidence + 0.2f,
                                                    pose.Confidence[j]);
                     rawWeight[j] = conf * TrustFactor(telemetry, j);
                     rawTarget[j] = mapper.Map(world, centre);
@@ -96,7 +96,7 @@ namespace ChromaticRain {
             }
 
             bool snapping = snapPending && canMap;
-            float jointFade = Mathf.Max(0.05f, s.jointFadeSeconds);
+            float jointFade = Mathf.Max(0.05f, s.JointFadeSeconds);
 
             // Is the torso still being measured? If it is, a joint that drops out is a SINGLE-JOINT
             // loss: held for the grace period, then its segment shrinks away. If it is not, the whole
@@ -118,8 +118,8 @@ namespace ChromaticRain {
                     } else {
                         Vector2 delta = target - body.Position[j];
                         float speed = delta.magnitude / dt;
-                        float fast = Mathf.Clamp01(speed / Mathf.Max(0.1f, s.smoothingFastSpeed));
-                        float tau = Mathf.Lerp(s.smoothingSlowTau, s.smoothingFastTau, fast);
+                        float fast = Mathf.Clamp01(speed / Mathf.Max(0.1f, s.SmoothingFastSpeed));
+                        float tau = Mathf.Lerp(s.SmoothingSlowTau, s.SmoothingFastTau, fast);
                         float a = 1f - Mathf.Exp(-dt / Mathf.Max(0.001f, tau));
                         Vector2 next = body.Position[j] + delta * a;
                         Vector2 velocity = (next - body.Position[j]) / dt;
@@ -140,7 +140,7 @@ namespace ChromaticRain {
                 } else {
                     lostFor[j] += dt;
                     body.Velocity[j] = body.Velocity[j] * Mathf.Exp(-dt / 0.1f);
-                    if (coreNow && lostFor[j] > s.jointGraceSeconds) {
+                    if (coreNow && lostFor[j] > s.JointGraceSeconds) {
                         body.Weight[j] = Mathf.Max(0f, body.Weight[j] - dt / jointFade);
                     }
                 }

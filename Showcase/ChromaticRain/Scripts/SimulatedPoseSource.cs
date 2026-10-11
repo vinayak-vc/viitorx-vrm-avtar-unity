@@ -45,6 +45,18 @@ namespace ChromaticRain {
         /// True = like a mirror: the figure's left side is on the screen's left.</summary>
         [NonSerialized] public bool mirrorX = true;
 
+        /// <summary>A choreographer (for example the Fluid Disruption demo programme) drives the figure
+        /// instead of the built-in travel and arm patterns. The output still goes through the same
+        /// landmark format and code path.</summary>
+        [NonSerialized] public bool externalControl;
+
+        /// <summary>World X of the hip while <see cref="externalControl"/> is on, metres.</summary>
+        [NonSerialized] public float externalOffsetX;
+
+        /// <summary>Arm raise 0 (hanging) .. 1 (overhead) per side while <see cref="externalControl"/> is on.</summary>
+        [NonSerialized] public float externalLeftLift;
+        [NonSerialized] public float externalRightLift;
+
         /// <summary>Joints that report zero confidence, bit n = landmark n.</summary>
         [NonSerialized] public long lostJointMask;
 
@@ -94,12 +106,21 @@ namespace ChromaticRain {
 
         public void Tick(float dt) {
             clock += dt;
-            OffsetX = stationary ? 0f : travelAmplitude * Mathf.Sin(clock * 2f * Mathf.PI / Mathf.Max(1f, travelPeriod));
+            if (externalControl) {
+                OffsetX = externalOffsetX;
+            } else {
+                OffsetX = stationary ? 0f : travelAmplitude * Mathf.Sin(clock * 2f * Mathf.PI / Mathf.Max(1f, travelPeriod));
+            }
 
             float t = clock;
             float leftLift;
             float rightLift;
-            ArmLifts(t, out leftLift, out rightLift);
+            if (externalControl) {
+                leftLift = externalLeftLift;
+                rightLift = externalRightLift;
+            } else {
+                ArmLifts(t, out leftLift, out rightLift);
+            }
 
             float sway = Mathf.Sin(t * 0.9f);
             float drift = Mathf.Sin(t * 0.37f);

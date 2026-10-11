@@ -4,6 +4,29 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## F-56 - FluXY 1.4.1 local fixes (2026-10-11)
+
+- [x] `DisposeFramebuffer` releases `tileID`; readback textures only on demand, reused, destroyed; `GetCurrentLOD` null-camera crash; per-solver `_TileData` / `_TileID` binding and per-container property block. Patch: `docs/fluxy-1.4.1-local-fixes.patch`.
+- [x] Each defect reproduced on the original code and gone on the fixed code (leak counts, NRE, two-solver tile corruption).
+- [ ] Re-apply the patch if FluXY is updated or re-imported; consider reporting the defects upstream.
+
+---
+
+## F-55 - Fluid Disruption showcase (2026-10-11)
+
+```text
+VERDICT: BUILT, COMPILING, TESTED IN THE EDITOR. NOT RUN ON A PHYSICAL CAMERA.
+```
+
+- [x] Scene, FluXY baseline (seeded field + relaxation + flow sources), interaction targets, state machine A-F, movement estimator, demo programme, UI, debug view, shader, scene builder, 31 EditMode tests (`Showcase/FluidDisruption`).
+- [x] Tracking handled by the scene's `AppBootstrap`; shared source / status / adapter code extracted from Chromatic Rain instead of copied (`ShowcaseTrackingSource`, `ITrackingTuning`, `ShowcaseBuilderUtil`); the 28 Chromatic Rain tests still pass.
+- [ ] DECISION: a Launcher row (and Build Settings registration). The one-person column is full (10-row cap pinned by `SceneLauncherF35Tests.EveryColumnFitsTheNumberKeyShortcut`); not done on purpose.
+- [x] Verified in Play mode (see `ai_handoff.md` F-55): calm baseline from frame 1, hand independence, torso travel, stillness settles, hand-landmark loss and restore without a jump, stream cut and restore, person leaves and returns, quality levels, shader extras off, FluXY off, and the live path through the real sidecar on a recorded video.
+- [ ] Run on the physical OAK-D / camera. Tune the visuals on the venue screen.
+- [ ] Measure a player build (the numbers are the Editor).
+
+---
+
 ## F-54 - Chromatic Rain showcase (2026-10-11)
 
 ```text

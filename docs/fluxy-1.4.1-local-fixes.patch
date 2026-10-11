@@ -1,0 +1,341 @@
+diff --git a/a/Scripts/FluxyContainer.cs b/b/Scripts/FluxyContainer.cs
+index b19d67f..939e269 100644
+--- a/a/Scripts/FluxyContainer.cs
++++ b/b/Scripts/FluxyContainer.cs
+@@ -247,6 +247,8 @@ namespace Fluxy
+         private Renderer m_Renderer;
+         private MeshFilter m_Filter;
+         private MaterialPropertyBlock propertyBlock;
++        private Vector4[] tileData;
++        private Texture tileIDTexture;
+ 
+         private Vector3 m_Velocity;
+         private Vector3 m_AngularVelocity;
+@@ -588,6 +590,14 @@ namespace Fluxy
+             Shader.SetGlobalVector("_ContainerSize", size);
+         }
+ 
++        // The solver hands over its tile layout and tile map every frame. They go into this container's own
++        // property block, so rendering does not depend on the global values another solver may have set.
++        internal void SetTileResources(Vector4[] data, Texture tileID)
++        {
++            tileData = data;
++            tileIDTexture = tileID;
++        }
++
+         public virtual void UpdateMaterial(int tile, FluxyStorage.Framebuffer fb)
+         {
+             if (m_Renderer == null || m_Renderer.sharedMaterial == null || fb == null)
+@@ -596,6 +606,11 @@ namespace Fluxy
+             containerRenderer.GetPropertyBlock(propertyBlock);
+ 
+             propertyBlock.SetInt("_TileIndex", tile);
++            if (tileData != null)
++                propertyBlock.SetVectorArray("_TileData", tileData);
++            if (tileIDTexture != null)
++                propertyBlock.SetTexture("_TileID", tileIDTexture);
++            propertyBlock.SetVector("_ContainerSize", size);
+             propertyBlock.SetTexture("_MainTex", fb.stateA);
+             propertyBlock.SetTexture("_Velocity", fb.velocityA);
+ 
+@@ -717,7 +732,7 @@ namespace Fluxy
+             if (solver != null && (solver.readable & FluxySolver.ReadbackMode.Velocity) != 0)
+             {
+                 var fb = solver.framebuffer;
+-                if (fb != null)
++                if (fb != null && solver.velocityReadbackTexture != null)
+                 {
+                     var rect = solver.GetContainerUVRect(this);
+                     var uv = TransformWorldPointToUVSpace(worldPosition, rect);
+@@ -735,7 +750,7 @@ namespace Fluxy
+             if (solver != null && (solver.readable & FluxySolver.ReadbackMode.Density) != 0)
+             {
+                 var fb = solver.framebuffer;
+-                if (fb != null)
++                if (fb != null && solver.densityReadbackTexture != null)
+                 {
+                     var rect = solver.GetContainerUVRect(this);
+                     var uv = TransformWorldPointToUVSpace(worldPosition, rect);
+diff --git a/a/Scripts/FluxySolver.cs b/b/Scripts/FluxySolver.cs
+index f738108..538e395 100644
+--- a/a/Scripts/FluxySolver.cs
++++ b/b/Scripts/FluxySolver.cs
+@@ -120,6 +120,7 @@ namespace Fluxy
+ 
+ 
+         private LODGroup lodGroup;
++        private LOD[] lods;
+         private int visibleLOD;
+         private bool visible = true;
+ 
+@@ -155,6 +156,7 @@ namespace Fluxy
+         private void OnEnable()
+         {
+             lodGroup = GetComponent<LODGroup>();
++            lods = lodGroup != null ? lodGroup.GetLODs() : null;
+             visibleLOD = GetCurrentLOD(Camera.main);
+             UpdateFramebuffer();
+         }
+@@ -166,9 +168,26 @@ namespace Fluxy
+ 
+         private void OnValidate()
+         {
++            // A disabled solver owns no buffers (OnDisable disposed of them, and OnEnable has not run yet),
++            // so there is nothing to update; creating them here would leak them.
++            if (!isActiveAndEnabled)
++                return;
++
++            lods = lodGroup != null ? lodGroup.GetLODs() : null;
+             UpdateFramebuffer();
+         }
+ 
++        // Textures created at runtime must go through Destroy, in the Editor outside play mode through DestroyImmediate.
++        private static void DestroyTexture(Texture2D texture)
++        {
++            if (texture == null)
++                return;
++            if (Application.isPlaying)
++                Destroy(texture);
++            else
++                DestroyImmediate(texture);
++        }
++
+         public bool IsFull()
+         {
+             return containers.Count >= MAX_TILES - 1;
+@@ -238,24 +257,45 @@ namespace Fluxy
+                 }
+             }
+ 
++            UpdateReadbackTextures();
++        }
++
++        // The CPU copies of the buffers exist only while readback is requested. They are reused while the
++        // buffer size is unchanged, and the old one is destroyed whenever it is replaced.
++        private void UpdateReadbackTextures()
++        {
+             var b = framebuffer;
+-            if (b != null)
++            bool haveBuffers = b != null && b.velocityA != null && b.stateA != null;
++
++            velocityReadbackTexture = EnsureReadbackTexture(velocityReadbackTexture,
++                haveBuffers && (readable & ReadbackMode.Velocity) != 0,
++                haveBuffers ? b.velocityA.width : 0, haveBuffers ? b.velocityA.height : 0);
++            densityReadbackTexture = EnsureReadbackTexture(densityReadbackTexture,
++                haveBuffers && (readable & ReadbackMode.Density) != 0,
++                haveBuffers ? b.stateA.width : 0, haveBuffers ? b.stateA.height : 0);
++        }
++
++        private static Texture2D EnsureReadbackTexture(Texture2D current, bool wanted, int width, int height)
++        {
++            if (!wanted)
+             {
+-                velocityReadbackTexture = new Texture2D(b.velocityA.width, b.velocityA.height, TextureFormat.RGBAHalf, false);
+-                densityReadbackTexture = new Texture2D(b.stateA.width, b.stateA.height, TextureFormat.RGBAHalf, false);
+-
+-                Color[] resetColorArray = velocityReadbackTexture.GetPixels();
+-                for (int i = 0; i < resetColorArray.Length; i++)
+-                    resetColorArray[i] = new Color(0,0,0,0);
+-                velocityReadbackTexture.SetPixels(resetColorArray);
+-                velocityReadbackTexture.Apply();
+-
+-                resetColorArray = densityReadbackTexture.GetPixels();
+-                for (int i = 0; i < resetColorArray.Length; i++)
+-                    resetColorArray[i] = new Color(0, 0, 0, 0);
+-                densityReadbackTexture.SetPixels(resetColorArray);
+-                densityReadbackTexture.Apply();
++                DestroyTexture(current);
++                return null;
+             }
++
++            if (current != null && current.width == width && current.height == height)
++                return current;
++
++            DestroyTexture(current);
++
++            var texture = new Texture2D(width, height, TextureFormat.RGBAHalf, false);
++
++            // start from zero, without allocating a Color array.
++            var data = texture.GetRawTextureData<byte>();
++            for (int i = 0; i < data.Length; i++)
++                data[i] = 0;
++            texture.Apply();
++            return texture;
+         }
+ 
+         private void DisposeOfFramebuffer()
+@@ -266,8 +306,10 @@ namespace Fluxy
+                 framebufferID = -1;
+             }
+ 
+-            Destroy(velocityReadbackTexture);
+-            Destroy(densityReadbackTexture);
++            DestroyTexture(velocityReadbackTexture);
++            DestroyTexture(densityReadbackTexture);
++            velocityReadbackTexture = null;
++            densityReadbackTexture = null;
+         }
+ 
+         private int GetCurrentLOD(Camera cam = null)
+@@ -277,11 +319,18 @@ namespace Fluxy
+             if (lodGroup == null)
+                 return 0;
+ 
++            // Without a camera (none tagged MainCamera, or not yet created) there is nothing to measure
++            // against: keep the current level instead of dereferencing null.
++            if (cam == null)
++                return Mathf.Clamp(visibleLOD, 0, Mathf.Max(0, lodGroup.lodCount - 1));
++
++            if (lods == null)
++                lods = lodGroup.GetLODs();
++
+             var distance = (transform.position - cam.transform.position).magnitude;
+             float size = 1;
+-            var relativeHeight = FluxyUtils.RelativeScreenHeight(cam, distance / QualitySettings.lodBias, size);
++            var relativeHeight = FluxyUtils.RelativeScreenHeight(cam, distance / Mathf.Max(QualitySettings.lodBias, 0.0001f), size);
+ 
+-            var lods = lodGroup.GetLODs();
+             for (var i = 0; i < lods.Length; i++)
+             {
+                 if (relativeHeight >= lods[i].screenRelativeTransitionHeight)
+@@ -294,6 +343,10 @@ namespace Fluxy
+ 
+         private void UpdateLOD()
+         {
++            // No LODGroup: always visible at full detail. Skip the camera lookup every frame.
++            if (lodGroup == null)
++                return;
++
+             int newLOD = GetCurrentLOD(Camera.main);
+ 
+             if (visibleLOD != newLOD)
+@@ -412,6 +465,7 @@ namespace Fluxy
+             if (fb != null && simulationMaterial != null && id >= 0 && id < indices.Length)
+             {
+                 UpdateTileData();
++                BindTileGlobals(fb);
+ 
+                 int tile = id + 1;
+                 int c = indices[tile];
+@@ -450,11 +504,21 @@ namespace Fluxy
+                     rects[i + 1].w = Mathf.FloorToInt(rects[i + 1].w * res) / res;
+                 }
+ 
+-                Shader.SetGlobalVectorArray("_TileData", rects);
+                 tilesDirty = false;
+             }
+         }
+ 
++        // _TileData and _TileID are global shader values, so with several solvers in a scene each one must
++        // bind its own right before it draws with them (splats, simulation, clears); setting them only when
++        // the tiles change, or only once, would leave them describing whichever solver touched them last.
++        // Containers get their own copies through their property blocks (see FluxyContainer.UpdateMaterial).
++        private void BindTileGlobals(FluxyStorage.Framebuffer fb)
++        {
++            Shader.SetGlobalVectorArray("_TileData", rects);
++            if (fb != null)
++                Shader.SetGlobalTexture("_TileID", fb.tileID);
++        }
++
+         private void UpdateContainerTransforms(FluxyStorage.Framebuffer fb)
+         {
+             for (int i = 0; i < containers.Count; ++i)
+@@ -463,6 +527,7 @@ namespace Fluxy
+                 int c = indices[tile];
+ 
+                 containers[c].UpdateTransform();
++                containers[c].SetTileResources(rects, fb != null ? fb.tileID : null);
+                 containers[c].UpdateMaterial(tile, fb);
+             }
+         }
+@@ -513,8 +578,6 @@ namespace Fluxy
+             if (fb == null || simulationMaterial == null)
+                 return;
+ 
+-            Shader.SetGlobalTexture("_TileID", fb.tileID);
+-
+             for (int i = 0; i < containers.Count; ++i)
+             {
+                 int tile = i + 1;
+@@ -539,30 +602,36 @@ namespace Fluxy
+ 
+         private void VelocityReadback(FluxyStorage.Framebuffer fb)
+         {
+-            if (velocityReadbackTexture != null)
++            var target = velocityReadbackTexture;
++            if (target != null)
+                 AsyncGPUReadback.Request(fb.velocityA, 0, TextureFormat.RGBAHalf, (AsyncGPUReadbackRequest request) =>
+                 {
+                     if (request.hasError)
+                         Debug.LogError("GPU readback error.");
+-                    else if (velocityReadbackTexture != null)
++                    // the texture may have been replaced or destroyed while the request was in flight.
++                    else if (target != null && target == velocityReadbackTexture
++                             && request.width == target.width && request.height == target.height)
+                     {
+-                        velocityReadbackTexture.LoadRawTextureData(request.GetData<float>());
+-                        velocityReadbackTexture.Apply();
++                        target.LoadRawTextureData(request.GetData<float>());
++                        target.Apply();
+                     }
+                 });
+         }
+ 
+         private void DensityReadback(FluxyStorage.Framebuffer fb)
+         {
+-            if (densityReadbackTexture != null)
++            var target = densityReadbackTexture;
++            if (target != null)
+                 AsyncGPUReadback.Request(fb.stateA, 0, TextureFormat.RGBAHalf, (AsyncGPUReadbackRequest request) =>
+                 {
+                     if (request.hasError)
+                         Debug.LogError("GPU readback error.");
+-                    else if (densityReadbackTexture != null)
++                    // the texture may have been replaced or destroyed while the request was in flight.
++                    else if (target != null && target == densityReadbackTexture
++                             && request.width == target.width && request.height == target.height)
+                     {
+-                        densityReadbackTexture.LoadRawTextureData(request.GetData<float>());
+-                        densityReadbackTexture.Apply();
++                        target.LoadRawTextureData(request.GetData<float>());
++                        target.Apply();
+                     }
+                 });
+         }
+@@ -577,6 +646,7 @@ namespace Fluxy
+ 
+                 var fb = framebuffer;
+ 
++                BindTileGlobals(fb);
+                 UpdateContainerTransforms(fb);
+ 
+                 if (visible && simulationMaterial != null) 
+@@ -596,6 +666,11 @@ namespace Fluxy
+                         SimulationStep(fb, timestep);
+                     }
+ 
++                    // `readable` may be changed from code at any time: follow it.
++                    if (((readable & ReadbackMode.Velocity) != 0) != (velocityReadbackTexture != null)
++                        || ((readable & ReadbackMode.Density) != 0) != (densityReadbackTexture != null))
++                        UpdateReadbackTextures();
++
+                     if ((readable & ReadbackMode.Density) != 0)
+                         DensityReadback(fb);
+                     if ((readable & ReadbackMode.Velocity) != 0)
+diff --git a/a/Scripts/FluxyStorage.cs b/b/Scripts/FluxyStorage.cs
+index e9aee10..cccf417 100644
+--- a/a/Scripts/FluxyStorage.cs
++++ b/b/Scripts/FluxyStorage.cs
+@@ -99,6 +99,12 @@ namespace Fluxy
+                     RenderTexture.ReleaseTemporary(fb.velocityB);
+                     RenderTexture.ReleaseTemporary(fb.stateA);
+                     RenderTexture.ReleaseTemporary(fb.stateB);
++                    RenderTexture.ReleaseTemporary(fb.tileID);
++                    fb.velocityA = null;
++                    fb.velocityB = null;
++                    fb.stateA = null;
++                    fb.stateB = null;
++                    fb.tileID = null;
+                     framebuffers[framebufferID] = null;
+ 
+                     if (expand)
