@@ -24,7 +24,47 @@ The scene is registered in Build Settings by `Virtual Mirror > Register All Scen
 If another scene or the mirror app already holds UDP 8899, the chip reads `TRACKING PORT IN USE`.
 Use **Live** for an unattended installation: the sidecar sends nothing for an empty room, so Auto would fall back to the simulation.
 
-Keys (Game view focused): `S` source · `N` Dark Silhouette / Negative Space · `F` fluid layer · `M`
+**Several people.** Set `Tracking (AppBootstrap)` > **Video Test Source** > `Video Max People` to 2 or more (or use the OAK-D
+multi-person sender) and the scene draws **one silhouette and one set of fluid targets per tracked person**, up to
+`ChromaticRainSettings.maxPeople` (default 4, read when the scene starts). Each person is keyed on the sidecar's track id, so
+they keep their own slot, fade in and out on their own and nobody swaps. Each stands where the camera sees them (sideways
+position from the sidecar's per-person root), so nobody jumps when the first person leaves. Hands exist for the first person only
+(the sidecar sends hands at the root), so the others are drawn and stir the fluid from their body. With one person, or a
+single-person sender, nothing changes. The status chip then reads `N people tracked`.
+
+## The silhouette
+
+The tracked person is a filled, rain-free human shape built from the landmarks: broad shoulders sloping into the neck, a chest that
+narrows to the waist and widens to the pelvis, arms and legs that taper (a calf bulge, round elbows and knees), hands and feet. The
+outline is a separate, optional thin edge along the outside of the filled mask. Every proportion follows the person's own measured
+shoulder width.
+
+**Skins.** `Settings/ChromaticRainSkins.asset` (a `SilhouetteSkinSet`, assigned to `Chromatic Rain Showcase > Skins`) is a list of
+skins; each skin is the look (fill colour, edge softness, shape blend, outline on/off, colour, intensity, width) plus every body
+proportion in metres. Six ship: **Anatomical**, **Slim**, **Athletic**, **Neon**, **Soft glow**, **Minimal** (no outline). Select the
+asset and edit a skin (it applies live while the scene runs), add one with the `+` of the list, or right-click the asset header >
+"Add a copy of the first skin" / "Add the built-in skins that are missing". `Start Skin` is the one shown first; **B** cycles the list
+while the scene runs without changing the asset.
+
+**Debug views (V).** Normal, then the filled mask as white on black, then the mask with the landmarks and bones over it, then the
+contour only: use them to judge the shape before touching the rain.
+
+## A person at a laptop (the camera cuts the body off)
+
+A laptop webcam shows the head and shoulders, not the hips. With **Video Partial Body** on (the default, on the scene's AppBootstrap
+under Video Test Source) the sidecar decides every frame what anchors the skeleton - the hips while they are in the picture, then the
+shoulders, then the nose - so the showcase keeps working when the hips are not in the picture, and carries on if they are lost in the
+middle of a session. What you see: the silhouette has the head, neck, shoulders, chest and arms as measured, and the torso continues
+below the pelvis, as wide as the hips, past the bottom of the screen (the person does not end at the waist, the camera does). No leg is
+drawn: nothing measured is invented. The skin switch **Extend Cut Off Body** (in every skin of `ChromaticRainSkins.asset`) turns the
+continuation off, and then the torso ends at the pelvis. The debug view (key `D`) says "hips not in the picture: root estimated".
+
+The hip is then the sender's ESTIMATE (6-10 cm off in the measurements), so the operating volume judges it against **Volume Partial Near
+Metres** (0.35 m) instead of the stereo camera's 1.35 m; a measured hip is still held to 1.35 m. Set **Video Horizontal Fov Degrees** to the
+laptop camera's field of view: the default 60 is a guess and scales every distance. **Video Partial Body** off restores the old rule (no
+hips, no frame). Measured on recordings only, not on a physical webcam: see ADR-096.
+
+Keys (Game view focused): `S` source · `N` Dark Silhouette / Negative Space · `B` silhouette skin · `V` silhouette debug view · `F` fluid layer · `M`
 mirror · `R` recenter/reset · `C` clear fluid · `D` debug view · `H` hide the overlay text. While
 the debug view is up: `1-4` simulated arm pattern, `P` stop/start the simulated stream, `T`
 still/travel, `K` hands on/off, `L` lose the left arm joints, `J` lose the right leg joints.
@@ -44,7 +84,8 @@ Scripts/
                                 confidence/trust, joint grace + fade, snap)
   ScreenSpaceMapper.cs          world metres -> view metres (life-size, orthographic)
   ShowcaseStateMachine.cs       states A-F, debounce, silhouette alpha, fluid gate
-  SilhouetteBuilder.cs          landmarks -> capsules + head ellipse for the mask shader
+  SilhouetteBuilder.cs          landmarks -> trapezoids, tapered strokes + head ellipse for the mask shader (shapes from a skin)
+  SilhouetteSkin.cs             a skin (look + proportions) and the SilhouetteSkinSet asset
   SilhouetteMaskRenderer.cs     one R8 mask texture (global _ChromaMaskTex) + the dark overlay quad
   RainRenderer.cs               full-screen procedural rain, one material
   FluidLayer.cs                 FluXY solver + container + 3 targets, driven from valid joints
@@ -54,7 +95,7 @@ Scripts/
 Shaders/  Rain, SilhouetteMask, SilhouetteOverlay, FluidLayer
 Settings/ ChromaticRainSettings.asset (edit this live), FluXY storage, post-processing profile
 Editor/   ChromaticRainSceneBuilder (Showcase > Chromatic Rain > Build Showcase Scene; puts AppBootstrap in the scene)
-Tests/    28 EditMode tests (Showcase > Chromatic Rain > Run Self Tests, or the Test Runner)
+Tests/    60 EditMode tests (Showcase > Chromatic Rain > Run Self Tests, or the Test Runner)
 ```
 
 Dependencies: the project's `VirtualMirror.*` assemblies and FluXY 1.4.1 (`Assets/FluXY`, outside this package, unmodified: only

@@ -23,6 +23,7 @@ namespace ChromaticRain.EditorTools {
         public const string Root = "Assets/Games/viitorx-vrm-avtar-unity/Showcase/ChromaticRain";
         public const string ScenePath = Root + "/Scenes/ChromaticRain_Showcase.unity";
         private const string SettingsPath = Root + "/Settings/ChromaticRainSettings.asset";
+        private const string SkinsPath = Root + "/Settings/ChromaticRainSkins.asset";
         private const string StoragePath = Root + "/Settings/ChromaticRainFluxyStorage.asset";
         private const string VolumePath = Root + "/Settings/ChromaticRainPostProcess.asset";
         private const string FluxySimulationMaterial = "Assets/FluXY/Resources/Materials/FluidSimulation.mat";
@@ -182,6 +183,7 @@ namespace ChromaticRain.EditorTools {
 
             SerializedObject so = new SerializedObject(showcase);
             so.FindProperty("settings").objectReferenceValue = settings;
+            so.FindProperty("skins").objectReferenceValue = LoadOrCreate<SilhouetteSkinSet>(SkinsPath);
             so.FindProperty("showcaseCamera").objectReferenceValue = cam;
             so.FindProperty("rain").objectReferenceValue = rain;
             so.FindProperty("silhouette").objectReferenceValue = maskRenderer;

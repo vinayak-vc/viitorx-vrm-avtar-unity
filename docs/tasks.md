@@ -4,6 +4,34 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## F-60 - A body the camera cuts off: hips, then shoulders, then the nose (2026-10-12)
+
+- [x] Sidecar `framing.py`: per-person anchor tier (hips / shoulders / nose) decided every frame with hysteresis, learned shoulder-frame hip offset and body widths, depth cascade (height -> shoulders -> face -> 2.0 m), joints outside the image sent as absent. `--partial-body` (default on) / `--no-partial-body` in `video_udp_sender.py`, `host_multiperson.py` (per person), `sidecar_supervisor.py --video-partial-body`. Wire: additive `fr`.
+- [x] Measured on RTMW3D crops of real footage (`tools/video/f60_partial_body_eval.py`), live on the wire, and the auto-orient decision re-measured on upper-body crops (ADR-096).
+- [x] Unity: `PoseAnchor` carried end to end; relaxed operating-volume near limit for an estimated root only; Chromatic Rain and Fluid Disruption treat the estimated hip centre as the hip; cut-off torso continued below the screen (skin `extendCutOffBody`); `Video Partial Body` bool.
+- [x] Tests: sidecar `test_framing.py` 72/72 (18 mutations caught); Unity `PartialBodyF60Tests` 16 (incl. 2 over UDP), 9 cut-off tests in Chromatic Rain (60 total), 1 in Fluid Disruption (33 total); project suite 382 pass.
+- [ ] Try it on a real laptop webcam with a seated user; set `Video Horizontal Fov Degrees` for that camera; tune `Volume Partial Near Metres`.
+- [ ] Fluid Disruption in Play mode with a cut-off body; the VRM mirror app on a hip-less pose.
+
+---
+
+## F-59 - Chromatic Rain silhouette: anatomical filled body, skins, debug views (2026-10-12)
+
+- [x] Anatomical filled silhouette (rounded-trapezoid chest and pelvis, tapered limb strokes, calf, neck, sloped shoulders, hands, feet), separate optional outline, mask debug views (V), 16 new shape and skin tests.
+- [x] `SilhouetteSkinSet` with six built-in skins (Anatomical, Slim, Athletic, Neon, Soft glow, Minimal), editable live, B cycles.
+- [ ] Try the skins on the venue screen with a live camera; add the venue's own skin to the set.
+- [ ] Fluid Disruption: no silhouette there; unchanged.
+
+---
+
+## F-58 - Chromatic Rain shows several people (2026-10-12)
+
+- [x] One silhouette + one set of fluid targets per tracked person (`ShowcasePerson`, `PersonSlots`, MAX-blended shared mask, `FluidLayer` slots), placed by each person's own sideways position. 35 self tests, Play mode with two dancers.
+- [ ] Fluid Disruption: the same change (it still follows only the first person).
+- [ ] Try it on a live phone / webcam with three people.
+
+---
+
 ## F-57 - Auto orient: portrait / landscape / sideways from a LAN camera, webcam or video (2026-10-12)
 
 ```text

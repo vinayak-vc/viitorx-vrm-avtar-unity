@@ -193,7 +193,7 @@ namespace VirtualMirror.App {
             // own gate, and they must all read one definition of the working range.
             OperatingVolume.Enabled = useOperatingVolume;
             OperatingVolume.Configure(volumeNearMetres, volumeFarMetres, volumeHoldSeconds,
-                                      volumeSettlePoses);
+                                      volumeSettlePoses, volumePartialNearMetres);
             InitializeServices();
         }
 
@@ -1125,6 +1125,7 @@ namespace VirtualMirror.App {
                 VideoAssumeMeasuredDepth = videoAssumeMeasuredDepth,
                 VideoRotateDegrees = videoRotateDegrees,
                 VideoAutoOrient = videoAutoOrient,
+                VideoPartialBody = videoPartialBody,
                 VideoFlipHorizontal = videoFlipHorizontal,
                 VideoCameraWidth = videoCameraSize.x,
                 VideoCameraHeight = videoCameraSize.y,
@@ -1175,6 +1176,7 @@ namespace VirtualMirror.App {
             appliedVideoRange = videoDepthRangeMetres;
             appliedVideoRotate = videoRotateDegrees;
             appliedVideoAutoOrient = videoAutoOrient;
+            appliedVideoPartialBody = videoPartialBody;
             appliedVideoFlip = videoFlipHorizontal;
             appliedVideoCameraSize = videoCameraSize;
             appliedVideoMaxPeople = videoMaxPeople;
@@ -1193,6 +1195,7 @@ namespace VirtualMirror.App {
                 || appliedVideoRange != videoDepthRangeMetres
                 || appliedVideoRotate != videoRotateDegrees
                 || appliedVideoAutoOrient != videoAutoOrient
+                || appliedVideoPartialBody != videoPartialBody
                 || appliedVideoFlip != videoFlipHorizontal
                 || appliedVideoCameraSize != videoCameraSize
                 || appliedVideoMaxPeople != videoMaxPeople;

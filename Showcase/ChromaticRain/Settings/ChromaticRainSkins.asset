@@ -1,0 +1,250 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 0}
+  m_Name: ChromaticRainSkins
+  m_EditorClassIdentifier: ChromaticRain:ChromaticRain:SilhouetteSkinSet
+  startSkin: 0
+  skins:
+  - name: Anatomical
+    fillColor: {r: 0.018, g: 0.024, b: 0.04, a: 1}
+    edgeSoftness: 0.01
+    shapeBlend: 0.03
+    outlineEnabled: 1
+    outlineColor: {r: 0.22, g: 0.5, b: 1, a: 1}
+    outlineIntensity: 0.45
+    outlineWidth: 1.2
+    adaptToShoulderWidth: 1
+    referenceShoulderWidth: 0.4
+    headRadiusX: 0.092
+    headRadiusY: 0.118
+    neckRadius: 0.052
+    trapeziusRadius: 0.058
+    chestWidthScale: 0.92
+    waistRadius: 0.145
+    waistPosition: 0.5
+    torsoBottomRadius: 0.158
+    pelvisDepth: 0.1
+    shoulderDrop: 0.01
+    torsoRounding: 0.07
+    upperArmShoulderRadius: 0.056
+    upperArmElbowRadius: 0.043
+    foreArmElbowRadius: 0.043
+    foreArmWristRadius: 0.03
+    handPalmRadius: 0.034
+    handEndRadius: 0.028
+    fallbackHandLength: 0.09
+    thighHipRadius: 0.08
+    thighKneeRadius: 0.055
+    shinKneeRadius: 0.055
+    calfBulgeRadius: 0.056
+    calfBulgePosition: 0.27
+    shinAnkleRadius: 0.033
+    footAnkleRadius: 0.038
+    footToeRadius: 0.03
+    fallbackFootLength: 0.09
+    maxArmSegment: 0.46
+    maxLegSegment: 0.62
+  - name: Slim
+    fillColor: {r: 0.018, g: 0.024, b: 0.04, a: 1}
+    edgeSoftness: 0.01
+    shapeBlend: 0.03
+    outlineEnabled: 1
+    outlineColor: {r: 0.22, g: 0.5, b: 1, a: 1}
+    outlineIntensity: 0.45
+    outlineWidth: 1.2
+    adaptToShoulderWidth: 1
+    referenceShoulderWidth: 0.4
+    headRadiusX: 0.092
+    headRadiusY: 0.118
+    neckRadius: 0.046
+    trapeziusRadius: 0.05
+    chestWidthScale: 0.86
+    waistRadius: 0.122
+    waistPosition: 0.5
+    torsoBottomRadius: 0.138
+    pelvisDepth: 0.1
+    shoulderDrop: 0.01
+    torsoRounding: 0.07
+    upperArmShoulderRadius: 0.047
+    upperArmElbowRadius: 0.036
+    foreArmElbowRadius: 0.036
+    foreArmWristRadius: 0.026
+    handPalmRadius: 0.034
+    handEndRadius: 0.028
+    fallbackHandLength: 0.09
+    thighHipRadius: 0.068
+    thighKneeRadius: 0.047
+    shinKneeRadius: 0.047
+    calfBulgeRadius: 0.048
+    calfBulgePosition: 0.27
+    shinAnkleRadius: 0.028
+    footAnkleRadius: 0.038
+    footToeRadius: 0.03
+    fallbackFootLength: 0.09
+    maxArmSegment: 0.46
+    maxLegSegment: 0.62
+  - name: Athletic
+    fillColor: {r: 0.018, g: 0.024, b: 0.04, a: 1}
+    edgeSoftness: 0.01
+    shapeBlend: 0.03
+    outlineEnabled: 1
+    outlineColor: {r: 0.22, g: 0.5, b: 1, a: 1}
+    outlineIntensity: 0.45
+    outlineWidth: 1.2
+    adaptToShoulderWidth: 1
+    referenceShoulderWidth: 0.4
+    headRadiusX: 0.092
+    headRadiusY: 0.118
+    neckRadius: 0.062
+    trapeziusRadius: 0.07
+    chestWidthScale: 1.04
+    waistRadius: 0.158
+    waistPosition: 0.5
+    torsoBottomRadius: 0.168
+    pelvisDepth: 0.1
+    shoulderDrop: 0.01
+    torsoRounding: 0.07
+    upperArmShoulderRadius: 0.068
+    upperArmElbowRadius: 0.05
+    foreArmElbowRadius: 0.049
+    foreArmWristRadius: 0.034
+    handPalmRadius: 0.034
+    handEndRadius: 0.028
+    fallbackHandLength: 0.09
+    thighHipRadius: 0.094
+    thighKneeRadius: 0.063
+    shinKneeRadius: 0.062
+    calfBulgeRadius: 0.066
+    calfBulgePosition: 0.27
+    shinAnkleRadius: 0.037
+    footAnkleRadius: 0.038
+    footToeRadius: 0.03
+    fallbackFootLength: 0.09
+    maxArmSegment: 0.46
+    maxLegSegment: 0.62
+  - name: Neon
+    fillColor: {r: 0.008, g: 0.016, b: 0.04, a: 1}
+    edgeSoftness: 0.008
+    shapeBlend: 0.03
+    outlineEnabled: 1
+    outlineColor: {r: 0.1, g: 0.9, b: 1, a: 1}
+    outlineIntensity: 1.2
+    outlineWidth: 1.8
+    adaptToShoulderWidth: 1
+    referenceShoulderWidth: 0.4
+    headRadiusX: 0.092
+    headRadiusY: 0.118
+    neckRadius: 0.052
+    trapeziusRadius: 0.058
+    chestWidthScale: 0.92
+    waistRadius: 0.145
+    waistPosition: 0.5
+    torsoBottomRadius: 0.158
+    pelvisDepth: 0.1
+    shoulderDrop: 0.01
+    torsoRounding: 0.07
+    upperArmShoulderRadius: 0.056
+    upperArmElbowRadius: 0.043
+    foreArmElbowRadius: 0.043
+    foreArmWristRadius: 0.03
+    handPalmRadius: 0.034
+    handEndRadius: 0.028
+    fallbackHandLength: 0.09
+    thighHipRadius: 0.08
+    thighKneeRadius: 0.055
+    shinKneeRadius: 0.055
+    calfBulgeRadius: 0.056
+    calfBulgePosition: 0.27
+    shinAnkleRadius: 0.033
+    footAnkleRadius: 0.038
+    footToeRadius: 0.03
+    fallbackFootLength: 0.09
+    maxArmSegment: 0.46
+    maxLegSegment: 0.62
+  - name: Soft glow
+    fillColor: {r: 0.02, g: 0.016, b: 0.04, a: 1}
+    edgeSoftness: 0.03
+    shapeBlend: 0.06
+    outlineEnabled: 1
+    outlineColor: {r: 0.6, g: 0.35, b: 1, a: 1}
+    outlineIntensity: 0.8
+    outlineWidth: 3
+    adaptToShoulderWidth: 1
+    referenceShoulderWidth: 0.4
+    headRadiusX: 0.092
+    headRadiusY: 0.118
+    neckRadius: 0.052
+    trapeziusRadius: 0.058
+    chestWidthScale: 0.92
+    waistRadius: 0.145
+    waistPosition: 0.5
+    torsoBottomRadius: 0.158
+    pelvisDepth: 0.1
+    shoulderDrop: 0.01
+    torsoRounding: 0.09
+    upperArmShoulderRadius: 0.056
+    upperArmElbowRadius: 0.043
+    foreArmElbowRadius: 0.043
+    foreArmWristRadius: 0.03
+    handPalmRadius: 0.034
+    handEndRadius: 0.028
+    fallbackHandLength: 0.09
+    thighHipRadius: 0.08
+    thighKneeRadius: 0.055
+    shinKneeRadius: 0.055
+    calfBulgeRadius: 0.056
+    calfBulgePosition: 0.27
+    shinAnkleRadius: 0.033
+    footAnkleRadius: 0.038
+    footToeRadius: 0.03
+    fallbackFootLength: 0.09
+    maxArmSegment: 0.46
+    maxLegSegment: 0.62
+  - name: Minimal
+    fillColor: {r: 0.004, g: 0.005, b: 0.01, a: 1}
+    edgeSoftness: 0.01
+    shapeBlend: 0.03
+    outlineEnabled: 0
+    outlineColor: {r: 0.22, g: 0.5, b: 1, a: 1}
+    outlineIntensity: 0.45
+    outlineWidth: 1.2
+    adaptToShoulderWidth: 1
+    referenceShoulderWidth: 0.4
+    headRadiusX: 0.092
+    headRadiusY: 0.118
+    neckRadius: 0.052
+    trapeziusRadius: 0.058
+    chestWidthScale: 0.92
+    waistRadius: 0.145
+    waistPosition: 0.5
+    torsoBottomRadius: 0.158
+    pelvisDepth: 0.1
+    shoulderDrop: 0.01
+    torsoRounding: 0.07
+    upperArmShoulderRadius: 0.056
+    upperArmElbowRadius: 0.043
+    foreArmElbowRadius: 0.043
+    foreArmWristRadius: 0.03
+    handPalmRadius: 0.034
+    handEndRadius: 0.028
+    fallbackHandLength: 0.09
+    thighHipRadius: 0.08
+    thighKneeRadius: 0.055
+    shinKneeRadius: 0.055
+    calfBulgeRadius: 0.056
+    calfBulgePosition: 0.27
+    shinAnkleRadius: 0.033
+    footAnkleRadius: 0.038
+    footToeRadius: 0.03
+    fallbackFootLength: 0.09
+    maxArmSegment: 0.46
+    maxLegSegment: 0.62

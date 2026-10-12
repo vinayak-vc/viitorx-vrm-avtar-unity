@@ -310,6 +310,11 @@ namespace VirtualMirror.Tracking.OakD {
                     // works in portrait and landscape"; the focal length has to follow the lens, not the width.
                     sb.Append(" --video-auto-orient --video-hfov-axis long");
                 }
+                if (!options.VideoPartialBody) {
+                    // F-60. On in the sender by default, so only the opt-out is sent and the default command line is
+                    // the F-57 one, unchanged.
+                    sb.Append(" --no-video-partial-body");
+                }
                 if (options.VideoFlipHorizontal) {
                     sb.Append(" --video-flip");
                 }
@@ -764,6 +769,10 @@ namespace VirtualMirror.Tracking.OakD {
         /// down) and uses one focal length for both orientations of the same lens. <see cref="VideoRotateDegrees"/> is then
         /// only its starting guess. Off sends neither flag, so the command line is exactly the pre-F-57 one.</summary>
         public bool VideoAutoOrient;
+        /// <summary>F-60. The sender copes with a body the frame cuts off (hips, then shoulders, then the nose anchor
+        /// the skeleton). True is the sender's own default and sends nothing; false sends
+        /// <c>--no-video-partial-body</c>, the pre-F-60 hip gate.</summary>
+        public bool VideoPartialBody = true;
         /// <summary>Mirror each frame horizontally before inference: a front camera swaps left and right.</summary>
         public bool VideoFlipHorizontal;
         /// <summary>Requested webcam resolution; 0 leaves the sender's 1280x720. Ignored by files and streams.</summary>

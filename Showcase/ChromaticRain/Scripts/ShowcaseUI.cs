@@ -21,6 +21,7 @@ namespace ChromaticRain {
         private Color statusColor = Color.gray;
         private SignalStatus lastSignal = (SignalStatus)(-1);
         private bool lastPerson;
+        private int lastPeople;
         private bool lastEverReceived;
         private string lastLabel = string.Empty;
 
@@ -47,9 +48,10 @@ namespace ChromaticRain {
         private void RefreshStatus() {
             SignalStatus signal = showcase.Signal;
             bool person = showcase.PersonTracked;
+            int people = showcase.TrackedPeopleCount;
             bool everReceived = showcase.PacketsReceived > 0L;
             string label = showcase.LiveSourceLabel;
-            if (signal == lastSignal && person == lastPerson && everReceived == lastEverReceived
+            if (signal == lastSignal && person == lastPerson && people == lastPeople && everReceived == lastEverReceived
                 && string.Equals(label, lastLabel, System.StringComparison.Ordinal)) {
                 return;
             }
@@ -57,8 +59,9 @@ namespace ChromaticRain {
             string from = string.IsNullOrEmpty(label) ? string.Empty : " (" + label + ")";
             lastSignal = signal;
             lastPerson = person;
+            lastPeople = people;
             lastEverReceived = everReceived;
-            string who = person ? "person tracked" : "no person";
+            string who = person ? (people > 1 ? people + " people tracked" : "person tracked") : "no person";
             switch (signal) {
                 case SignalStatus.Live:
                     statusText = "LIVE" + from + "  -  " + who;

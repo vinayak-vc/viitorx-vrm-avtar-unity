@@ -21,6 +21,10 @@ namespace VirtualMirror.App {
         [Tooltip("Nearest hip distance, metres, at which depth is trusted. F-44 measured the usable " +
                  "band as ~1.4-4.5 m; 1.35 m leaves a 5 cm margin.")]
         [SerializeField] private float volumeNearMetres = OperatingVolume.DefaultNearLimitMetres;
+        [Tooltip("F-60: nearest hip distance, metres, for a pose whose hip is ESTIMATED because it is not in the " +
+                 "picture (a laptop webcam: head and shoulders). 1.35 m is the stereo camera's limit and would " +
+                 "refuse every webcam user. Never above the full-body near limit.")]
+        [SerializeField] private float volumePartialNearMetres = OperatingVolume.DefaultPartialNearLimitMetres;
         [Tooltip("Furthest hip distance, metres, at which depth is trusted. F-44's 4.5 m is " +
                  "arithmetic (pixels on target), not a capture - the 3-4 m recording is what confirms it.")]
         [SerializeField] private float volumeFarMetres = OperatingVolume.DefaultFarLimitMetres;

@@ -49,6 +49,10 @@ namespace ChromaticRain {
 
             DrawSkeleton();
             DrawHands();
+            if (!showcase.DebugVisible) {
+                // Only the landmarks view of the silhouette debug is up: bones and joints over the shape, no text.
+                return;
+            }
             DrawTargets();
             DrawMaskPreview();
             DrawInfo();
@@ -59,7 +63,15 @@ namespace ChromaticRain {
         }
 
         private void DrawSkeleton() {
-            ShowcaseBody body = showcase.Body;
+            for (int p = 0; p < showcase.PersonSlotCount; p++) {
+                ShowcasePerson person = showcase.PersonAt(p);
+                if (person.InUse) {
+                    DrawSkeleton(person.Body);
+                }
+            }
+        }
+
+        private void DrawSkeleton(ShowcaseBody body) {
             int[] bones = SkeletonPose.Bones;
             for (int i = 0; i + 1 < bones.Length; i += 2) {
                 int a = bones[i];
@@ -84,7 +96,15 @@ namespace ChromaticRain {
         }
 
         private void DrawHands() {
-            ShowcaseBody body = showcase.Body;
+            for (int p = 0; p < showcase.PersonSlotCount; p++) {
+                ShowcasePerson person = showcase.PersonAt(p);
+                if (person.InUse) {
+                    DrawHands(person.Body);
+                }
+            }
+        }
+
+        private void DrawHands(ShowcaseBody body) {
             LabelAt(Joint.LeftWrist, "L", body);
             LabelAt(Joint.RightWrist, "R", body);
             for (int slot = Joint.LeftHandEnd; slot <= Joint.RightHandEnd; slot++) {
@@ -107,7 +127,7 @@ namespace ChromaticRain {
             if (fluid == null || !fluid.IsOn) {
                 return;
             }
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < fluid.TargetCount; i++) {
                 Vector2 p;
                 if (fluid.TryGetTargetPosition(i, out p)) {
                     Vector2 g = ToGui(p);
@@ -159,7 +179,10 @@ namespace ChromaticRain {
             text.Append("packets ").Append(s.PacketsReceived).Append("   ownership ").Append(s.OwnershipState).Append('\n');
             text.Append("phase   ").Append(s.Machine.Phase).Append("   alpha ").Append(s.Machine.SilhouetteAlpha.ToString("F2"))
                 .Append("   fluid ").Append(s.Machine.FluidActivity.ToString("F2")).Append('\n');
-            text.Append("body    core ").Append(s.Body.CoreFresh ? "yes" : "no").Append("   energy ")
+            text.Append("people  ").Append(s.TrackedPeopleCount).Append(" tracked of ").Append(s.PersonSlotCount)
+                .Append(" slots (this line: person 1)").Append('\n');
+            text.Append("body    core ").Append(s.Body.CoreFresh ? "yes" : "no")
+                .Append(s.Body.RootEstimated ? " (hips not in the picture: root estimated)" : string.Empty).Append("   energy ")
                 .Append(s.Body.Energy.ToString("F2")).Append("   shoulders ").Append(s.Body.ShoulderWidth.ToString("F2")).Append(" m")
                 .Append("   caps ").Append(s.Builder.CapCount).Append("   width x").Append(s.Builder.WidthScale.ToString("F2")).Append('\n');
             text.Append("mirror  ").Append(s.MirrorX ? "ON (like a mirror)" : "off").Append("   mode ").Append(s.Mode)
@@ -174,7 +197,7 @@ namespace ChromaticRain {
                     .Append("  max ").Append(worst.ToString("F1")).Append("   GC ").Append(gc.ToString("F0")).Append(" B/frame");
             }
             text.Append('\n');
-            text.Append("keys  S source  N mode  F fluid  M mirror  R recenter  C clear fluid  D debug  H ui");
+            text.Append("keys  S source  N mode  B skin (").Append(s.ActiveSkin.name).Append(")  V silhouette view (").Append(s.DebugView).Append(")  F fluid  M mirror  R recenter  C clear fluid  D debug  H ui");
             GUI.Label(new Rect(18f, 66f, 900f, 180f), text.ToString(), infoStyle);
         }
 

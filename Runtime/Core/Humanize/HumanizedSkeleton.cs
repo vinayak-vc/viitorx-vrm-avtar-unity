@@ -860,6 +860,7 @@ namespace VirtualMirror.Core.Humanize {
                 stats.MaxCorrectionM = maxCorrection;
             }
             output.SetMeta(input.TimestampSeconds, true);
+            output.SetAnchor(input.Anchor);
             // Root translation is another channel's business (see the class remarks) - carried, never
             // altered, so nothing downstream can tell this layer ran.
             if (input.HasRootPosition) {

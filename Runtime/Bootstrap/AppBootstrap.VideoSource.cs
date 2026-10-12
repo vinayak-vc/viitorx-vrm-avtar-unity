@@ -59,6 +59,15 @@ namespace VirtualMirror.App {
                  "Needs the detector weights (tools/model/fetch_yolox_s.py); without them the sidecar says so and " +
                  "uses 'Video Rotate Degrees'. Off = exactly the old behaviour.")]
         [SerializeField] private bool videoAutoOrient = true;
+        [Tooltip("HEAD AND SHOULDERS ONLY IS FINE. A laptop webcam shows the upper body, not the hips or the legs. " +
+                 "With this on the sidecar decides frame by frame what anchors the skeleton - the hips while they are " +
+                 "in the picture, then the shoulders, then the nose - so a person is still tracked when the hips are " +
+                 "out of frame, and it carries on if the hips are lost in the middle of a session. A joint outside the " +
+                 "picture is reported as absent (never invented), depth comes from the shoulder or face width when " +
+                 "there are no ankles, and the scenes treat the shoulders as the torso. The root is then an ESTIMATE, " +
+                 "so the operating volume's near limit is relaxed to 'Volume Partial Near Metres'.\n\n" +
+                 "Off = the old rule: both hips confident or the frame is dropped.")]
+        [SerializeField] private bool videoPartialBody = true;
         [Tooltip("Rotate each frame CLOCKWISE before tracking. A phone held upright is often delivered as a " +
                  "sideways frame by webcam apps; the model reads the image, so it must be turned upright " +
                  "here. 0, 90, 180 or 270. With 'Video Auto Orient' on this is only the starting guess and the " +
@@ -123,6 +132,7 @@ namespace VirtualMirror.App {
         private Vector2 appliedVideoRange;
         private int appliedVideoRotate;
         private bool appliedVideoAutoOrient;
+        private bool appliedVideoPartialBody;
         private bool appliedVideoFlip;
         private Vector2Int appliedVideoCameraSize;
         private int appliedVideoMaxPeople;

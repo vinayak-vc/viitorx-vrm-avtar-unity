@@ -275,6 +275,7 @@ namespace VirtualMirror.Core {
                 dst.SetLandmark(i, src.GetLandmark((JointId)i));
             }
             dst.SetMeta(src.TimestampSeconds, src.IsValid);
+            dst.SetAnchor(src.Anchor);
             if (src.HasRootPosition) {
                 dst.SetRootPosition(src.RootPositionMetres);
             } else {
@@ -302,6 +303,8 @@ namespace VirtualMirror.Core {
             }
             double t = a.TimestampSeconds + (b.TimestampSeconds - a.TimestampSeconds) * alpha;
             output.SetMeta(t, a.IsValid && b.IsValid);
+            // The weaker anchor wins: a root blended from a measured and an estimated one is an estimate.
+            output.SetAnchor((PoseAnchor)Mathf.Max((int)a.Anchor, (int)b.Anchor));
             if (a.HasRootPosition && b.HasRootPosition) {
                 output.SetRootPosition(Vector3.Lerp(a.RootPositionMetres, b.RootPositionMetres, alpha));
             } else if (b.HasRootPosition) {

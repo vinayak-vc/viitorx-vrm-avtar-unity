@@ -1,13 +1,22 @@
-// The Dark Silhouette: a near-black body drawn over the rain and the fluid, with a faint inner rim
-// so the outline stays readable. It samples the same mask the rain and the fluid use, so all three
-// agree about where the body is. Disabled (renderer off) in Negative Space mode.
+// The Dark Silhouette: a near-black FILLED body drawn over the rain and the fluid, with an optional thin luminous
+// outline along its outer edge. The fill and the outline are separate: the fill is the mask itself (the rain and the
+// fluid sample the same mask, so all three agree about where the body is); the outline is only added on top and is
+// switched off by _RimIntensity = 0. Disabled (renderer off) in Negative Space mode.
+//
+// _DebugView inspects the mask without the rain in the way:
+//   0 normal composition
+//   1 the filled mask, white on black
+//   2 the filled mask, dim grey on black (the landmarks and bones are drawn over it by the debug overlay)
+//   3 the contour only
 Shader "ChromaticRain/SilhouetteOverlay"
 {
     Properties
     {
-        _BodyColor ("Body colour", Color) = (0.006, 0.008, 0.014, 1)
-        _RimColor ("Rim colour", Color) = (0.22, 0.5, 1, 1)
-        _RimIntensity ("Rim intensity", Range(0, 2)) = 0.45
+        _BodyColor ("Body colour", Color) = (0.018, 0.024, 0.040, 1)
+        _RimColor ("Outline colour", Color) = (0.22, 0.5, 1, 1)
+        _RimIntensity ("Outline intensity", Range(0, 2)) = 0.45
+        _RimWidth ("Outline width (mask pixels)", Range(0.5, 4)) = 1.2
+        _DebugView ("Debug view", Float) = 0
     }
     SubShader
     {
@@ -28,6 +37,8 @@ Shader "ChromaticRain/SilhouetteOverlay"
             float4 _BodyColor;
             float4 _RimColor;
             float _RimIntensity;
+            float _RimWidth;
+            float _DebugView;
             sampler2D _ChromaMaskTex;
             float4 _ChromaMaskTex_TexelSize;
 
@@ -54,17 +65,29 @@ Shader "ChromaticRain/SilhouetteOverlay"
             float4 frag(v2f i) : SV_Target
             {
                 float m = tex2D(_ChromaMaskTex, i.uv).r;
-                if (m <= 0.002)
-                    discard;
 
-                // Blurred coverage: the difference is positive just inside the edge.
-                float2 t = _ChromaMaskTex_TexelSize.xy * 1.1;
+                // Blurred coverage: the difference to the mask is positive just inside the edge and negative just
+                // outside it, so it traces the contour of the filled shape at the chosen width.
+                float2 t = _ChromaMaskTex_TexelSize.xy * _RimWidth;
                 float blur = 0.25 * (tex2D(_ChromaMaskTex, i.uv + float2(t.x, 0)).r
                                    + tex2D(_ChromaMaskTex, i.uv - float2(t.x, 0)).r
                                    + tex2D(_ChromaMaskTex, i.uv + float2(0, t.y)).r
                                    + tex2D(_ChromaMaskTex, i.uv - float2(0, t.y)).r);
-                float rim = saturate((m - blur) * 3.0) * m;
 
+                if (_DebugView > 0.5)
+                {
+                    if (_DebugView < 1.5)
+                        return float4(m, m, m, 1);
+                    if (_DebugView < 2.5)
+                        return float4(m * 0.30, m * 0.30, m * 0.34, 1);
+                    float edge = saturate(abs(m - blur) * 5.0);
+                    return float4(edge * 0.35, edge * 0.85, edge, 1);
+                }
+
+                if (m <= 0.002)
+                    discard;
+
+                float rim = saturate((m - blur) * 3.0) * m;
                 float3 color = _BodyColor.rgb + _RimColor.rgb * rim * _RimIntensity;
                 return float4(color, saturate(m));
             }

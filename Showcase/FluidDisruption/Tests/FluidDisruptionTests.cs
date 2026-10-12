@@ -582,6 +582,43 @@ namespace FluidDisruption.Tests {
             Assert.Less(perf.resolution * perf.supersampling, quality.resolution * quality.supersampling);
         }
 
+        // F-60: a person the camera cuts off has no hip joints; the torso point must stay in the middle of the torso.
+        private static ShowcaseBody TorsoBody(bool hipsPresent, bool rootEstimated) {
+            ShowcaseBody body = new ShowcaseBody();
+            int[] joints = { Joint.LeftShoulder, Joint.RightShoulder, Joint.LeftHip, Joint.RightHip };
+            float[] xs = { -0.2f, 0.2f, -0.09f, 0.09f };
+            float[] ys = { 0.5f, 0.5f, 0f, 0f };
+            for (int i = 0; i < joints.Length; i++) {
+                bool isHip = i >= 2;
+                body.Position[joints[i]] = new Vector2(xs[i], ys[i]);
+                body.Weight[joints[i]] = (isHip && !hipsPresent) ? 0f : 1f;
+                body.Fresh[joints[i]] = !(isHip && !hipsPresent);
+            }
+            body.CoreFresh = true;
+            body.RootEstimated = rootEstimated;
+            body.HipCentre = Vector2.zero;
+            return body;
+        }
+
+        private static float SettledTorsoY(ShowcaseBody body, FluidDisruptionSettings s) {
+            InteractionPointTracker tracker = new InteractionPointTracker();
+            for (int i = 0; i < 120; i++) {
+                tracker.Update(body, true, Dt, s);
+            }
+            return tracker.Torso.Position.y;
+        }
+
+        [Test]
+        public void Interaction_TheTorsoPointStaysInTheMiddleWhenAnEstimatedHipReplacesTheHipJoints() {
+            FluidDisruptionSettings s = NewSettings();
+            float full = SettledTorsoY(TorsoBody(true, false), s);
+            float cutOff = SettledTorsoY(TorsoBody(false, true), s);
+            float unflagged = SettledTorsoY(TorsoBody(false, false), s);
+            Assert.AreEqual(0.25f, full, 0.03f, "shoulders and hips: the middle of the torso");
+            Assert.AreEqual(full, cutOff, 0.03f, "the sender's estimated hip centre carries the hips' weight: no jump");
+            Assert.AreEqual(0.5f, unflagged, 0.03f, "with no estimated root the point is the shoulders, as before");
+        }
+
         [Test]
         public void SoftSplat_IsOpaqueInTheMiddleAndFadesSmoothlyToNothingAtTheRim() {
             Assert.AreEqual(1f, FluidTargets.SoftSplatFalloff(0f), 1e-6f);

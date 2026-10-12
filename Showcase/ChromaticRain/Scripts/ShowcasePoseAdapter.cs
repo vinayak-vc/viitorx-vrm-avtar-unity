@@ -40,6 +40,14 @@ namespace ChromaticRain {
         private Vector2 previousHip;
         private bool hasPreviousHip;
 
+        /// <summary>
+        /// Scene metres added to this person's world X before it is mapped to the screen. 0 (the default) is the
+        /// single-person behaviour, where the stage already places the body. With several people the stage places
+        /// everyone RELATIVE to the first one; the controller sets this so each person stands where the camera
+        /// actually sees them, and nobody jumps when the first person leaves.
+        /// </summary>
+        public float LateralShift;
+
         /// <summary>The next update with a measurable body places every joint exactly, with no
         /// smoothing from wherever the previous person stood.</summary>
         public void RequestSnap() {
@@ -66,13 +74,17 @@ namespace ChromaticRain {
             bool usable = sourceFresh && pose != null && pose.Valid;
 
             // Where the body is, for this frame. A frame without both hips keeps the last good
-            // centre rather than inventing one.
-            if (usable && pose.Present[Joint.LeftHip] && pose.Present[Joint.RightHip]
+            // centre rather than inventing one - unless the SENDER says it anchored the root itself because the
+            // hips are not in the picture (F-60: a webcam shows the shoulders, not the hips). That root is the
+            // sender's estimate, flagged on the wire, and is what the centre is made of.
+            bool estimated = usable && pose.RootEstimated;
+            if (usable && (estimated || (pose.Present[Joint.LeftHip] && pose.Present[Joint.RightHip]))
                 && IsFinite(pose.Centre)) {
                 lastCentreWorld = pose.Centre;
                 hasCentre = true;
             }
             Vector3 centre = lastCentreWorld;
+            centre.x += LateralShift;
             bool canMap = usable && hasCentre;
 
             for (int i = 0; i < Joint.SlotCount; i++) {
@@ -86,6 +98,7 @@ namespace ChromaticRain {
                     if (!pose.Present[j] || !IsFinite(world)) {
                         continue;
                     }
+                    world.x += LateralShift;
                     float conf = Mathf.InverseLerp(s.MinJointConfidence, s.MinJointConfidence + 0.2f,
                                                    pose.Confidence[j]);
                     rawWeight[j] = conf * TrustFactor(telemetry, j);
@@ -104,7 +117,8 @@ namespace ChromaticRain {
             // whole silhouette out, so the shape never collapses limb by limb.
             bool coreNow = canMap && rawWeight[Joint.LeftShoulder] > FreshWeight
                            && rawWeight[Joint.RightShoulder] > FreshWeight
-                           && (rawWeight[Joint.LeftHip] > FreshWeight || rawWeight[Joint.RightHip] > FreshWeight);
+                           && (rawWeight[Joint.LeftHip] > FreshWeight || rawWeight[Joint.RightHip] > FreshWeight
+                               || estimated);
 
             for (int j = 0; j < Joint.SlotCount; j++) {
                 bool fresh = rawWeight[j] > FreshWeight;
@@ -154,8 +168,9 @@ namespace ChromaticRain {
             }
 
             body.CoreFresh = coreNow;
+            body.RootEstimated = estimated;
 
-            UpdateDerived(body, pose, dt);
+            UpdateDerived(body, pose, dt, canMap && estimated, mapper.Map(centre, centre));
         }
 
         private void SetHand(int slot, HandPose hand, SkeletonPose pose, Vector3 centre,
@@ -169,16 +184,21 @@ namespace ChromaticRain {
             if (!IsFinite(end)) {
                 return;
             }
+            end.x += LateralShift;
             rawWeight[slot] = 1f;
             rawTarget[slot] = mapper.Map(end, centre);
         }
 
-        private void UpdateDerived(ShowcaseBody body, SkeletonPose pose, float dt) {
+        private void UpdateDerived(ShowcaseBody body, SkeletonPose pose, float dt, bool useRoot, Vector2 rootView) {
             float wl = body.Weight[Joint.LeftHip];
             float wr = body.Weight[Joint.RightHip];
-            if (wl > 0.05f || wr > 0.05f) {
-                Vector2 hip = (body.Position[Joint.LeftHip] * wl + body.Position[Joint.RightHip] * wr)
-                              / (wl + wr);
+            // The hip centre is the mean of the hips while they are drawn; once they are not (F-60) it is the
+            // sender's estimated root, in view space, so the body keeps a centre and a speed.
+            bool fromHips = (wl > 0.05f || wr > 0.05f) && !useRoot;
+            if (fromHips || useRoot) {
+                Vector2 hip = fromHips
+                    ? (body.Position[Joint.LeftHip] * wl + body.Position[Joint.RightHip] * wr) / (wl + wr)
+                    : rootView;
                 body.HipCentre = hip;
                 if (hasPreviousHip) {
                     Vector2 v = (hip - previousHip) / dt;

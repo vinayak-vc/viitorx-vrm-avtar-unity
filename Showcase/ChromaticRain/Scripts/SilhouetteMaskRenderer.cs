@@ -21,6 +21,11 @@ namespace ChromaticRain {
         private static readonly int BodyColorId = Shader.PropertyToID("_BodyColor");
         private static readonly int RimColorId = Shader.PropertyToID("_RimColor");
         private static readonly int RimIntensityId = Shader.PropertyToID("_RimIntensity");
+        private static readonly int RimWidthId = Shader.PropertyToID("_RimWidth");
+        private static readonly int DebugViewId = Shader.PropertyToID("_DebugView");
+        private static readonly int BlendOpId = Shader.PropertyToID("_BlendOp");
+        private static readonly int SrcBlendId = Shader.PropertyToID("_SrcBlend");
+        private static readonly int DstBlendId = Shader.PropertyToID("_DstBlend");
 
         [SerializeField] private Material maskMaterial;
         [SerializeField] private MeshRenderer overlayQuad;
@@ -31,6 +36,7 @@ namespace ChromaticRain {
         private RenderTexture mask;
         private int maskWidth;
         private int maskHeight;
+        private int drawnThisFrame;
 
         public RenderTexture Mask {
             get {
@@ -101,33 +107,74 @@ namespace ChromaticRain {
             RenderTexture.active = previous;
         }
 
+        /// <summary>One person, one frame: the single-person call, kept for callers that have exactly one body.</summary>
         public void Render(SilhouetteBuilder builder, float viewWidth, float viewHeight, float alpha,
-                           SilhouetteMode mode, ChromaticRainSettings s) {
+                           SilhouetteMode mode, SilhouetteSkin s) {
+            BeginFrame();
+            AddPerson(builder, viewWidth, viewHeight, alpha, s);
+            EndFrame(mode, s);
+        }
+
+        /// <summary>Starts a frame: the mask is cleared and nobody is drawn yet.</summary>
+        public void BeginFrame() {
+            drawnThisFrame = 0;
             if (!IsReady) {
                 return;
             }
-            bool draw = alpha > 0.001f && (builder.CapCount > 0 || builder.HeadDirection.z > 0.001f);
-            if (draw) {
-                runtimeMask.SetVectorArray(CapsId, builder.Caps);
-                runtimeMask.SetVectorArray(CapRadiiId, builder.CapRadii);
-                runtimeMask.SetInt(CapCountId, builder.CapCount);
-                runtimeMask.SetVector(HeadId, builder.Head);
-                runtimeMask.SetVector(HeadDirectionId, builder.HeadDirection);
-                runtimeMask.SetVector(ViewId, new Vector4(viewWidth, viewHeight, s.edgeSoftness, s.shapeBlend));
-                runtimeMask.SetFloat(FadeId, alpha);
-                Graphics.Blit(null, mask, runtimeMask, 0);
-            } else {
-                ClearMask();
-            }
+            ClearMask();
+        }
 
-            bool dark = mode == SilhouetteMode.DarkSilhouette && draw;
+        /// <summary>
+        /// Adds one person to the shared mask. Every person is drawn with a MAX blend, so each pixel keeps the
+        /// strongest coverage: two people who touch merge into one shape and nobody erases anybody. Returns whether
+        /// anything was drawn (a person with no alpha or no shape is skipped).
+        /// </summary>
+        public bool AddPerson(SilhouetteBuilder builder, float viewWidth, float viewHeight, float alpha,
+                              SilhouetteSkin s) {
+            if (!IsReady) {
+                return false;
+            }
+            bool draw = alpha > 0.001f && (builder.CapCount > 0 || builder.HeadDirection.z > 0.001f);
+            if (!draw) {
+                return false;
+            }
+            runtimeMask.SetFloat(BlendOpId, (float)BlendOp.Max);
+            runtimeMask.SetFloat(SrcBlendId, (float)BlendMode.One);
+            runtimeMask.SetFloat(DstBlendId, (float)BlendMode.One);
+            runtimeMask.SetVectorArray(CapsId, builder.Caps);
+            runtimeMask.SetVectorArray(CapRadiiId, builder.CapRadii);
+            runtimeMask.SetInt(CapCountId, builder.CapCount);
+            runtimeMask.SetVector(HeadId, builder.Head);
+            runtimeMask.SetVector(HeadDirectionId, builder.HeadDirection);
+            runtimeMask.SetVector(ViewId, new Vector4(viewWidth, viewHeight, s.edgeSoftness, s.shapeBlend));
+            runtimeMask.SetFloat(FadeId, alpha);
+            Graphics.Blit(null, mask, runtimeMask, 0);
+            drawnThisFrame = drawnThisFrame + 1;
+            return true;
+        }
+
+        /// <summary>Ends the frame: the dark overlay is shown only while somebody was drawn, or always while a debug view
+        /// is up (the debug views replace the whole picture).</summary>
+        public void EndFrame(SilhouetteMode mode, SilhouetteSkin s) {
+            EndFrame(mode, s, SilhouetteDebugView.Off);
+        }
+
+        public void EndFrame(SilhouetteMode mode, SilhouetteSkin s, SilhouetteDebugView view) {
+            if (!IsReady) {
+                return;
+            }
+            bool debug = view != SilhouetteDebugView.Off;
+            bool dark = debug || (mode == SilhouetteMode.DarkSilhouette && drawnThisFrame > 0);
             if (overlayQuad.enabled != dark) {
                 overlayQuad.enabled = dark;
             }
             if (dark) {
-                runtimeOverlay.SetColor(BodyColorId, s.silhouetteColor);
-                runtimeOverlay.SetColor(RimColorId, s.rimColor);
-                runtimeOverlay.SetFloat(RimIntensityId, s.rimIntensity);
+                runtimeOverlay.SetColor(BodyColorId, s.fillColor);
+                runtimeOverlay.SetColor(RimColorId, s.outlineColor);
+                // The outline is its own layer: off leaves the bare filled body.
+                runtimeOverlay.SetFloat(RimIntensityId, s.outlineEnabled ? s.outlineIntensity : 0f);
+                runtimeOverlay.SetFloat(RimWidthId, s.outlineWidth);
+                runtimeOverlay.SetFloat(DebugViewId, (float)view);
             }
         }
 

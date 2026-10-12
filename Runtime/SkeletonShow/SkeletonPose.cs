@@ -75,6 +75,18 @@ namespace VirtualMirror.SkeletonShow {
         /// <summary>Mid-hip in world space — where the body is.</summary>
         public Vector3 Centre;
 
+        /// <summary>F-60: what anchored this frame's root. <see cref="PoseAnchor.Hips"/> unless the sender found
+        /// no hips in the picture and placed the root from the shoulders or the face.</summary>
+        public PoseAnchor Anchor;
+
+        /// <summary>F-60: the mid-hip (<see cref="Centre"/>) is an estimate - the hips were not in the picture and
+        /// are not among the present joints. The body above them is measured as ever.</summary>
+        public bool RootEstimated {
+            get {
+                return Anchor != PoseAnchor.Hips;
+            }
+        }
+
         /// <summary>Whole-body movement, 0 = still, 1 = vigorous. Drives every mode's intensity so
         /// they respond to the person in the same way.</summary>
         public float Energy;
@@ -232,7 +244,11 @@ namespace VirtualMirror.SkeletonShow {
             }
             hasPrevious = true;
             Valid = true;
-            Centre = 0.5f * (World[23] + World[24]);
+            Anchor = frame.Anchor;
+            // Landmarks are relative to the root, so the root IS the origin. With the hips measured their mean is
+            // that point; with them absent (F-60) the absent landmarks sit at the origin and the mean is the origin
+            // too - but a single hip that is present would pull the mean off it, so it is stated directly.
+            Centre = RootEstimated ? origin : 0.5f * (World[23] + World[24]);
             float mean = counted > 0 ? total / counted : 0f;
             Energy = Mathf.Clamp01(mean / FastSpeed);
             UpdateFloor(dt);

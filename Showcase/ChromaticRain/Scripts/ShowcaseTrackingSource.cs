@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 using UnityEngine;
 
@@ -7,6 +8,26 @@ using VirtualMirror.SkeletonShow;
 using VirtualMirror.Tracking.OakD;
 
 namespace ChromaticRain {
+    /// <summary>One person of the live crowd, as a showcase needs them. Reused every frame.</summary>
+    public sealed class ShowcaseLiveBody {
+        /// <summary>The sidecar's track id: stable while the person is held, never reused.</summary>
+        public int Id;
+
+        /// <summary>World-space pose with this person's own history. Owned by the stage.</summary>
+        public SkeletonPose Pose;
+
+        /// <summary>The most-established person: the one the stage also publishes as its single pose, and the only
+        /// one that has hands and a trust channel.</summary>
+        public bool Primary;
+
+        /// <summary>True when <see cref="RootX"/> is a measurement.</summary>
+        public bool HasRoot;
+
+        /// <summary>Sideways position of the person's hips in scene metres, measured from the camera's axis
+        /// (mirrored like the pose). The stage itself only places everyone relative to the first person.</summary>
+        public float RootX;
+    }
+
     /// <summary>
     /// Where a showcase gets its person from: the EXISTING <see cref="TrackedStage"/> (the project's UDP
     /// provider, space converter, humanized layer and grounding), or a deterministic simulated pose that
@@ -28,6 +49,9 @@ namespace ChromaticRain {
 
         private TrackedStage stage;
         private readonly ILogService log;
+        private readonly CrowdFrame crowdCopy = new CrowdFrame();
+        private readonly List<ShowcaseLiveBody> liveBodies = new List<ShowcaseLiveBody>();
+        private int liveBodyCount;
         private ShowcaseSource lastMode;
         private bool started;
         private float labelTimer;
@@ -79,6 +103,26 @@ namespace ChromaticRain {
             get {
                 return simulationActive;
             }
+        }
+
+        /// <summary>True while the live sidecar is publishing a crowd (several people may be tracked). False for a
+        /// single-person sender and for the simulation: <see cref="LiveBodyCount"/> is then 0 and the pose that
+        /// <see cref="Tick"/> returns is the only person.</summary>
+        public bool CrowdActive {
+            get {
+                return liveBodyCount > 0;
+            }
+        }
+
+        /// <summary>How many people the live crowd holds this frame, most-established first.</summary>
+        public int LiveBodyCount {
+            get {
+                return liveBodyCount;
+            }
+        }
+
+        public ShowcaseLiveBody LiveBody(int index) {
+            return liveBodies[index];
         }
 
         public bool StreamFresh {
@@ -210,6 +254,7 @@ namespace ChromaticRain {
                 resetRequested = true;
             }
 
+            liveBodyCount = 0;
             if (simulationActive) {
                 if (simulated.StreamActive) {
                     simulated.mirrorX = MirrorX;
@@ -227,6 +272,7 @@ namespace ChromaticRain {
             }
 
             if (stage != null) {
+                CollectLiveBodies(liveFresh);
                 pose = stage.Pose;
                 left = stage.Left;
                 right = stage.Right;
@@ -238,6 +284,34 @@ namespace ChromaticRain {
                 telemetry = null;
             }
             return liveFresh;
+        }
+
+        // The crowd, with each person's ABSOLUTE sideways position. The stage places the first person at its own
+        // origin and everyone else relative to them, so if the first person leaves, the others would all jump; the
+        // sidecar's root position per person is what lets a showcase put each one where the camera sees them.
+        private void CollectLiveBodies(bool liveFresh) {
+            liveBodyCount = 0;
+            if (!liveFresh || !stage.HasCrowd || stage.Provider == null || !stage.Provider.TryGetCrowd(crowdCopy)) {
+                return;
+            }
+            IReadOnlyList<TrackedBody> bodies = stage.Bodies;
+            for (int i = 0; i < bodies.Count; i++) {
+                TrackedBody tracked = bodies[i];
+                if (tracked.Pose == null || !tracked.Pose.Valid) {
+                    continue;
+                }
+                while (liveBodies.Count <= liveBodyCount) {
+                    liveBodies.Add(new ShowcaseLiveBody());
+                }
+                ShowcaseLiveBody body = liveBodies[liveBodyCount];
+                body.Id = tracked.Id;
+                body.Pose = tracked.Pose;
+                body.Primary = i == 0;
+                PersonPose person = crowdCopy.ById(tracked.Id);
+                body.HasRoot = person != null && person.Pose.HasRootPosition;
+                body.RootX = body.HasRoot ? person.Pose.RootPositionMetres.x * stage.BodyScale : 0f;
+                liveBodyCount = liveBodyCount + 1;
+            }
         }
 
         /// <summary>Left/right mirroring, as a real mirror does. Restarts the live listener so the

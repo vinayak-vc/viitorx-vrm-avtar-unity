@@ -60,6 +60,18 @@ namespace VirtualMirror.Core.Humanize {
         /// measured here. Conservative on purpose: SR7's degradation began well inside 1.3 m.</summary>
         public const float DefaultNearLimitMetres = 1.35f;
 
+        /// <summary>
+        /// F-60 — the near limit for a frame whose root is ESTIMATED (<see cref="PoseFrame.RootEstimated"/>: the
+        /// hips were not in the picture, so the sender anchored on the shoulders or the face). The 1.35 m limit is
+        /// a property of the stereo camera and of a body that must fit the frame; a person at a laptop is 0.4-0.8 m
+        /// from a monocular webcam and is exactly what this source is for. 0.35 m: nearer than that the face fills
+        /// the picture, the shoulders leave it, and the sender's own depth floor is 0.25 m. The far limit is the
+        /// same band's; only the near edge differs.
+        ///
+        /// NOT A CLAMP, for the reason in the class remarks: a root nearer than this is still refused, not pinned.
+        /// </summary>
+        public const float DefaultPartialNearLimitMetres = 0.35f;
+
         /// <summary>Default far limit, metres. F-44: pixels-on-target at 4.5 m match what is measured
         /// good at 2 m. The claim is arithmetic, not a capture (F-44 §NOT DONE) - so this is the number
         /// the 3-4 m recording is there to confirm or move.</summary>
@@ -85,6 +97,7 @@ namespace VirtualMirror.Core.Humanize {
         // volatile: written on the main thread at startup, read wherever the next gate is built.
         private static volatile bool enabled = true;
         private static float nearLimit = DefaultNearLimitMetres;
+        private static float partialNearLimit = DefaultPartialNearLimitMetres;
         private static float farLimit = DefaultFarLimitMetres;
         private static float holdSeconds = DefaultHoldSeconds;
         private static int settlePoses = DefaultSettlePoses;
@@ -107,10 +120,22 @@ namespace VirtualMirror.Core.Humanize {
             }
         }
 
+        /// <summary>The near limit for an estimated root (F-60). Never above <see cref="NearLimitMetres"/>.</summary>
+        public static float PartialNearLimitMetres {
+            get {
+                return partialNearLimit;
+            }
+        }
+
         public static float FarLimitMetres {
             get {
                 return farLimit;
             }
+        }
+
+        /// <summary>The near limit that applies to a pose: the relaxed one for an estimated root.</summary>
+        public static float NearLimitFor(bool rootEstimated) {
+            return rootEstimated ? partialNearLimit : nearLimit;
         }
 
         public static float HoldSeconds {
@@ -129,10 +154,19 @@ namespace VirtualMirror.Core.Humanize {
         /// a far limit below the near limit would classify every pose as out of volume.</summary>
         public static void Configure(float nearMetres, float farMetres, float holdSecondsValue,
                                      int settlePosesValue) {
+            Configure(nearMetres, farMetres, holdSecondsValue, settlePosesValue, DefaultPartialNearLimitMetres);
+        }
+
+        /// <summary>As above, with the F-60 near limit for an estimated root. It is repaired to sit between
+        /// the smallest believable range and the full-body near limit: a relaxed limit above the strict one
+        /// would be a stricter one.</summary>
+        public static void Configure(float nearMetres, float farMetres, float holdSecondsValue,
+                                     int settlePosesValue, float partialNearMetres) {
             float near = Mathf.Max(InvalidBelowMetres + HysteresisMetres, nearMetres);
             float far = Mathf.Max(near + 2f * HysteresisMetres + 0.1f, farMetres);
             nearLimit = near;
             farLimit = far;
+            partialNearLimit = Mathf.Clamp(partialNearMetres, InvalidBelowMetres + HysteresisMetres, near);
             holdSeconds = Mathf.Max(0f, holdSecondsValue);
             settlePoses = Mathf.Max(0, settlePosesValue);
         }
@@ -141,6 +175,7 @@ namespace VirtualMirror.Core.Humanize {
         public static void ResetToDefaults() {
             enabled = true;
             nearLimit = DefaultNearLimitMetres;
+            partialNearLimit = DefaultPartialNearLimitMetres;
             farLimit = DefaultFarLimitMetres;
             holdSeconds = DefaultHoldSeconds;
             settlePoses = DefaultSettlePoses;
@@ -170,13 +205,22 @@ namespace VirtualMirror.Core.Humanize {
         /// TooNear must clear the limit by <see cref="HysteresisMetres"/> to count as in volume.
         /// </summary>
         public static VolumeVerdict Classify(float rangeMetres, VolumeVerdict previous) {
+            return Classify(rangeMetres, previous, false);
+        }
+
+        /// <summary>
+        /// As above; <paramref name="rootEstimated"/> selects the F-60 near limit. Only the near edge is
+        /// relaxed, and only for a frame whose sender said the hips were not in the picture.
+        /// </summary>
+        public static VolumeVerdict Classify(float rangeMetres, VolumeVerdict previous, bool rootEstimated) {
             if (rangeMetres < 0f) {
                 return VolumeVerdict.NoRoot;
             }
             if (float.IsNaN(rangeMetres) || rangeMetres < InvalidBelowMetres) {
                 return VolumeVerdict.RootInvalid;
             }
-            float near = previous == VolumeVerdict.TooNear ? nearLimit + HysteresisMetres : nearLimit;
+            float limit = NearLimitFor(rootEstimated);
+            float near = previous == VolumeVerdict.TooNear ? limit + HysteresisMetres : limit;
             float far = previous == VolumeVerdict.TooFar ? farLimit - HysteresisMetres : farLimit;
             if (rangeMetres < near) {
                 return VolumeVerdict.TooNear;

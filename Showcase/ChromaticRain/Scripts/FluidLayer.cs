@@ -5,7 +5,7 @@ using UnityEngine;
 namespace ChromaticRain {
     /// <summary>
     /// The FluXY layer: one <see cref="FluxySolver"/>, one <see cref="FluxyContainer"/> covering the
-    /// screen, and three <see cref="FluxyTarget"/>s (left hand, right hand, body). The targets are
+    /// screen, and three <see cref="FluxyTarget"/>s PER PERSON SLOT (left hand, right hand, body). The targets are
     /// driven only from valid tracked positions; a target that has no valid position is DISABLED, so
     /// it injects nothing and keeps no stale state, and a re-enabled target starts from its current
     /// position (FluxyTarget.OnEnable), so there is never a velocity impulse from a jump.
@@ -41,9 +41,13 @@ namespace ChromaticRain {
         [SerializeField] private Material splatMaterial;
         [SerializeField] private Texture splatTexture;
 
-        private readonly TargetState left = new TargetState();
-        private readonly TargetState right = new TargetState();
-        private readonly TargetState torso = new TargetState();
+        /// <summary>Targets per person: left hand, right hand, body.</summary>
+        public const int TargetsPerPerson = 3;
+
+        // Three states per person slot, in order left, right, body. Slot 0 uses the three targets of the scene; the
+        // others are created at run time when more than one person is shown.
+        private TargetState[] states = new TargetState[0];
+        private int slotCount = 1;
         private Material runtimeFluid;
         private Material runtimeSimulation;
         private Texture2D hueRing;
@@ -83,10 +87,18 @@ namespace ChromaticRain {
             }
         }
 
-        /// <summary>World position of a target for the debug view; valid only while it is enabled.</summary>
+        /// <summary>How many targets exist (three per person slot), for the debug view.</summary>
+        public int TargetCount {
+            get {
+                return states.Length;
+            }
+        }
+
+        /// <summary>World position of a target for the debug view; valid only while it is enabled. Index 0-2 are the
+        /// first person's left hand, right hand and body, 3-5 the second person's, and so on.</summary>
         public bool TryGetTargetPosition(int index, out Vector2 position) {
-            TargetState state = index == 0 ? left : (index == 1 ? right : torso);
-            if (state.Target != null && state.Target.enabled && state.WasValid) {
+            TargetState state = index >= 0 && index < states.Length ? states[index] : null;
+            if (state != null && state.Target != null && state.Target.enabled && state.WasValid) {
                 position = state.Last;
                 return true;
             }
@@ -95,6 +107,11 @@ namespace ChromaticRain {
         }
 
         public bool Initialize(ChromaticRainSettings s, float viewWidth, float viewHeight) {
+            return Initialize(s, viewWidth, viewHeight, 1);
+        }
+
+        /// <summary>Starts the layer with targets for <paramref name="people"/> person slots (1 to 6).</summary>
+        public bool Initialize(ChromaticRainSettings s, float viewWidth, float viewHeight, int people) {
             if (solver == null || container == null || containerRenderer == null
                 || leftHandTarget == null || rightHandTarget == null || bodyTarget == null
                 || fluidMaterial == null || simulationMaterial == null || splatMaterial == null) {
@@ -125,19 +142,38 @@ namespace ChromaticRain {
 
             ConfigureContainer(s, viewWidth, viewHeight);
 
-            left.Target = leftHandTarget;
-            right.Target = rightHandTarget;
-            torso.Target = bodyTarget;
-            left.ColorPhase = 0f;
-            right.ColorPhase = 2.1f;
-            torso.ColorPhase = 4.2f;
-            ConfigureTarget(left, s, s.handSplatSize);
-            ConfigureTarget(right, s, s.handSplatSize);
-            ConfigureTarget(torso, s, s.bodySplatSize);
-
-            container.targets = new FluxyTarget[] { leftHandTarget, rightHandTarget, bodyTarget };
+            slotCount = Mathf.Clamp(people, 1, 6);
+            states = new TargetState[slotCount * TargetsPerPerson];
+            FluxyTarget[] all = new FluxyTarget[states.Length];
+            for (int slot = 0; slot < slotCount; slot++) {
+                for (int k = 0; k < TargetsPerPerson; k++) {
+                    int index = slot * TargetsPerPerson + k;
+                    TargetState state = new TargetState();
+                    state.Target = slot == 0 ? SceneTarget(k) : CreateTarget(slot, k);
+                    // Each person's colour drifts on its own phase, so two people do not paint the same colour.
+                    state.ColorPhase = k * 2.1f + slot * 1.3f;
+                    ConfigureTarget(state, s, k == 2 ? s.bodySplatSize : s.handSplatSize);
+                    states[index] = state;
+                    all[index] = state.Target;
+                }
+            }
+            container.targets = all;
             IsReady = true;
             return true;
+        }
+
+        private FluxyTarget SceneTarget(int kind) {
+            return kind == 0 ? leftHandTarget : (kind == 1 ? rightHandTarget : bodyTarget);
+        }
+
+        // A target of another person: its own GameObject, because FluXY splats at the target's transform.
+        private FluxyTarget CreateTarget(int slot, int kind) {
+            string part = kind == 0 ? "L" : (kind == 1 ? "R" : "body");
+            GameObject host = new GameObject("FluidTarget_person" + slot + "_" + part);
+            host.transform.SetParent(transform, false);
+            FluxyTarget target = host.AddComponent<FluxyTarget>();
+            target.enabled = false;
+            return target;
         }
 
         private void ConfigureContainer(ChromaticRainSettings s, float width, float height) {
@@ -267,15 +303,33 @@ namespace ChromaticRain {
         /// machine's fluid gate: 0 means no target may inject.
         /// </summary>
         public void Tick(ShowcaseBody body, float activity, float dt, ChromaticRainSettings s) {
-            if (!IsReady || !gameObject.activeSelf) {
+            if (!BeginFrame(dt, s)) {
                 return;
+            }
+            DrivePerson(0, body, activity, dt, s);
+        }
+
+        /// <summary>Once per frame, before any <see cref="DrivePerson"/>: advances the clock and applies the live
+        /// settings. Returns false while the layer is off.</summary>
+        public bool BeginFrame(float dt, ChromaticRainSettings s) {
+            if (!IsReady || !gameObject.activeSelf) {
+                return false;
             }
             time += dt;
             ApplyFluidSettings(s);
+            return true;
+        }
 
-            DriveHand(left, body, Joint.LeftWrist, Joint.LeftHandEnd, activity, dt, s, s.handSplatSize, 1f);
-            DriveHand(right, body, Joint.RightWrist, Joint.RightHandEnd, activity, dt, s, s.handSplatSize, 1f);
-            DriveBody(torso, body, activity, dt, s);
+        /// <summary>Drives one person slot's three targets. A slot nobody uses passes a cleared body and activity 0,
+        /// which switches its targets off.</summary>
+        public void DrivePerson(int slot, ShowcaseBody body, float activity, float dt, ChromaticRainSettings s) {
+            if (!IsReady || !gameObject.activeSelf || slot < 0 || slot >= slotCount) {
+                return;
+            }
+            int baseIndex = slot * TargetsPerPerson;
+            DriveHand(states[baseIndex], body, Joint.LeftWrist, Joint.LeftHandEnd, activity, dt, s, s.handSplatSize, 1f);
+            DriveHand(states[baseIndex + 1], body, Joint.RightWrist, Joint.RightHandEnd, activity, dt, s, s.handSplatSize, 1f);
+            DriveBody(states[baseIndex + 2], body, activity, dt, s);
         }
 
         private void DriveHand(TargetState state, ShowcaseBody body, int wrist, int handEnd,
@@ -372,9 +426,9 @@ namespace ChromaticRain {
             if (hueRing != null) {
                 Destroy(hueRing);
             }
-            DestroySplat(left);
-            DestroySplat(right);
-            DestroySplat(torso);
+            for (int i = 0; i < states.Length; i++) {
+                DestroySplat(states[i]);
+            }
         }
 
         private static void DestroySplat(TargetState state) {

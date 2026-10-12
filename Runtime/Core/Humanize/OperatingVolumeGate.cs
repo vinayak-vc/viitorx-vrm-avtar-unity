@@ -30,6 +30,7 @@ namespace VirtualMirror.Core.Humanize {
         private float outsideSeconds;
         private int settledPoses;
         private bool expired;
+        private bool rootEstimated;
 
         /// <summary>What the most recent pose was judged to be.</summary>
         public VolumeVerdict Verdict {
@@ -51,6 +52,14 @@ namespace VirtualMirror.Core.Humanize {
         public bool Expired {
             get {
                 return expired;
+            }
+        }
+
+        /// <summary>F-60: the latest pose's root was ESTIMATED (the hips were not in the picture), so it was judged
+        /// against the relaxed near limit.</summary>
+        public bool RootEstimated {
+            get {
+                return rootEstimated;
             }
         }
 
@@ -96,6 +105,7 @@ namespace VirtualMirror.Core.Humanize {
             outsideSeconds = 0f;
             settledPoses = 0;
             expired = false;
+            rootEstimated = false;
         }
 
         public void ResetCounters() {
@@ -121,9 +131,11 @@ namespace VirtualMirror.Core.Humanize {
                 expired = false;
                 lastTimestamp = double.NaN;
                 rangeMetres = -1f;
+                rootEstimated = false;
                 return;
             }
 
+            rootEstimated = frame.RootEstimated;
             bool newPose = double.IsNaN(lastTimestamp) || frame.TimestampSeconds != lastTimestamp;
             lastTimestamp = frame.TimestampSeconds;
 
@@ -139,7 +151,7 @@ namespace VirtualMirror.Core.Humanize {
             }
 
             rangeMetres = OperatingVolume.RangeOf(frame);
-            verdict = OperatingVolume.Classify(rangeMetres, verdict);
+            verdict = OperatingVolume.Classify(rangeMetres, verdict, rootEstimated);
 
             if (verdict == VolumeVerdict.InVolume) {
                 outsideSeconds = 0f;
@@ -199,8 +211,8 @@ namespace VirtualMirror.Core.Humanize {
                 return shortText + " - the sensor sent no usable hip distance";
             }
             CultureInfo ci = CultureInfo.InvariantCulture;
-            return shortText + "   (hip " + rangeMetres.ToString("F2", ci) + " m, working range "
-                   + OperatingVolume.NearLimitMetres.ToString("F2", ci) + "-"
+            return shortText + "   (" + (rootEstimated ? "estimated hip " : "hip ") + rangeMetres.ToString("F2", ci)
+                   + " m, working range " + OperatingVolume.NearLimitFor(rootEstimated).ToString("F2", ci) + "-"
                    + OperatingVolume.FarLimitMetres.ToString("F2", ci) + " m)";
         }
 
@@ -228,8 +240,8 @@ namespace VirtualMirror.Core.Humanize {
             if (!OperatingVolume.Enabled) {
                 state = "OFF";
             }
-            return "VOLUME " + state + "  hip " + range
-                 + " [" + OperatingVolume.NearLimitMetres.ToString("F2", ci)
+            return "VOLUME " + state + (rootEstimated ? "  est.hip " : "  hip ") + range
+                 + " [" + OperatingVolume.NearLimitFor(rootEstimated).ToString("F2", ci)
                  + "-" + OperatingVolume.FarLimitMetres.ToString("F2", ci) + "]"
                  + "  near " + PosesTooNear + "  far " + PosesTooFar
                  + "  invalid " + PosesRootInvalid + "  held " + PosesHeld

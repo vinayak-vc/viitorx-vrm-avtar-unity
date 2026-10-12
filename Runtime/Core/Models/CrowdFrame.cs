@@ -161,6 +161,7 @@ namespace VirtualMirror.Core {
                         dst.Pose.ClearRootPosition();
                     }
                     dst.Pose.SetMeta(src.Pose.TimestampSeconds, src.Pose.IsValid);
+                    dst.Pose.SetAnchor(src.Pose.Anchor);
                 }
                 i = i + 1;
             }

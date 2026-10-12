@@ -580,6 +580,7 @@ namespace VirtualMirror.Tracking.OakD {
             }
 
             if (mapped > 0) {
+                target.SetAnchor(ReadAnchor(root));
                 // "xyz" = the OAK-D SpatialLocationCalculator's measured mid-hip position (millimetres, camera
                 // space: X right, Y down, Z forward). Run it through the same converter (axis/mirror parity)
                 // and hand it to the frame as a world anchor so the avatar can translate with the user.
@@ -884,6 +885,7 @@ namespace VirtualMirror.Tracking.OakD {
                     slot.Pose.ClearRootPosition();
                 }
                 slot.Pose.SetMeta(timestampSeconds, mapped > 0);
+                slot.Pose.SetAnchor(ReadAnchor(person));
                 i = i + 1;
             }
 
@@ -892,6 +894,24 @@ namespace VirtualMirror.Tracking.OakD {
                 workerCrowd.CopyTo(mainCrowd);
                 hasAnyCrowd = true;
             }
+        }
+
+        /// <summary>
+        /// F-60: the sender's <c>fr</c> field, which body part anchored the root (0 hips, 1 shoulders, 2 head).
+        /// Absent - every sender before F-60, and the OAK-D senders - means hips, so nothing changes for them. An
+        /// out-of-range or non-numeric value is read as the HIPS too: unknown data must not switch a frame
+        /// into the relaxed range the estimated roots use.
+        /// </summary>
+        public static PoseAnchor ReadAnchor(JObject holder) {
+            JToken token = holder != null ? holder["fr"] : null;
+            if (token == null || (token.Type != JTokenType.Integer && token.Type != JTokenType.Float)) {
+                return PoseAnchor.Hips;
+            }
+            double raw = token.Value<double>();
+            if (double.IsNaN(raw) || raw < 0.0 || raw > 2.0) {
+                return PoseAnchor.Hips;
+            }
+            return PoseFrame.AnchorFromWire((int)System.Math.Round(raw));
         }
 
         private void ParseHands(JObject root, double timestampSeconds) {

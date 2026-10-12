@@ -36,48 +36,15 @@ namespace ChromaticRain {
 
         [Header("Silhouette")]
         public SilhouetteMode silhouetteMode = SilhouetteMode.DarkSilhouette;
-        [Tooltip("Half-width of the feathered edge, in metres.")]
-        [Range(0.002f, 0.06f)] public float edgeSoftness = 0.012f;
-        [Tooltip("How far, in metres, neighbouring shapes melt into each other.")]
-        [Range(0f, 0.15f)] public float shapeBlend = 0.05f;
-        [Tooltip("Mask height in pixels. Width follows the screen aspect.")]
-        [Range(135, 540)] public int maskHeight = 270;
-        [Tooltip("Colour of the body in Dark Silhouette mode.")]
-        public Color silhouetteColor = new Color(0.006f, 0.008f, 0.014f, 1f);
-        [Tooltip("Colour of the faint inner rim that keeps the outline readable.")]
-        [ColorUsage(false, true)]
-        public Color rimColor = new Color(0.22f, 0.50f, 1.00f, 1f);
-        [Range(0f, 2f)] public float rimIntensity = 0.2f;
-        [Tooltip("Scale the body's widths by the measured shoulder width.")]
-        public bool adaptToShoulderWidth = true;
+        [Tooltip("Mask height in pixels. Width follows the screen aspect. Higher = a smoother contour. The look and the body "
+                 + "proportions of the silhouette are in the skins (ChromaticRainSkins.asset).")]
+        [Range(135, 540)] public int maskHeight = 540;
 
-        [Header("Body proportions (metres at a 0.40 m shoulder width)")]
-        public float referenceShoulderWidth = 0.40f;
-        public float headRadiusX = 0.090f;
-        public float headRadiusY = 0.115f;
-        public float neckRadius = 0.050f;
-        public float shoulderBarRadius = 0.060f;
-        public float torsoTopRadius = 0.160f;
-        public float torsoBottomRadius = 0.145f;
-        public float hipBarRadius = 0.085f;
-        public float upperArmShoulderRadius = 0.058f;
-        public float upperArmElbowRadius = 0.046f;
-        public float foreArmElbowRadius = 0.045f;
-        public float foreArmWristRadius = 0.036f;
-        public float handPalmRadius = 0.040f;
-        public float handEndRadius = 0.046f;
-        [Tooltip("Hand length drawn from the wrist when hand tracking is absent.")]
-        public float fallbackHandLength = 0.09f;
-        public float thighHipRadius = 0.095f;
-        public float thighKneeRadius = 0.068f;
-        public float shinKneeRadius = 0.066f;
-        public float shinAnkleRadius = 0.048f;
-        public float footAnkleRadius = 0.045f;
-        public float footToeRadius = 0.036f;
-        [Tooltip("Longest believable upper arm / forearm, in metres.")]
-        public float maxArmSegment = 0.46f;
-        [Tooltip("Longest believable thigh / shin, in metres.")]
-        public float maxLegSegment = 0.62f;
+        [Header("People")]
+        [Tooltip("Most people drawn at once (1-6): one silhouette and one set of fluid targets each. The sidecar decides how "
+                 + "many are TRACKED (AppBootstrap > Video Max People, or the OAK-D multi-person cap); this is only the "
+                 + "ceiling of what the scene draws. Read when the scene starts.")]
+        [Range(1, 6)] public int maxPeople = 4;
 
         [Header("Tracking and timing")]
         [Tooltip("Continuous good tracking needed before the silhouette appears.")]

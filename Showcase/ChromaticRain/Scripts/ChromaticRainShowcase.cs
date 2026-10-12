@@ -24,6 +24,8 @@ namespace ChromaticRain {
     public sealed class ChromaticRainShowcase : MonoBehaviour {
         [Header("Assets")]
         [SerializeField] private ChromaticRainSettings settings;
+        [Tooltip("The silhouette skins: body proportions and look. Edit them live, or add new ones. B cycles while it runs.")]
+        [SerializeField] private SilhouetteSkinSet skins;
 
         [Header("Input")]
         [Tooltip("Live = the Python sidecar. Simulated = built-in test pose. Auto = live, and the "
@@ -47,17 +49,18 @@ namespace ChromaticRain {
 
         [Header("Runtime toggles (start values)")]
         [SerializeField] private SilhouetteMode silhouetteMode = SilhouetteMode.DarkSilhouette;
+        [Tooltip("Inspect the silhouette without the rain: the filled mask, the landmarks over it, or its contour. V cycles.")]
+        [SerializeField] private SilhouetteDebugView silhouetteDebugView = SilhouetteDebugView.Off;
         [SerializeField] private bool fluidOn = true;
         [SerializeField] private bool mirrorX = true;
         [SerializeField] private bool uiVisible = true;
         [SerializeField] private bool debugVisible;
 
-        private readonly ShowcaseBody body = new ShowcaseBody();
-        private readonly ShowcasePoseAdapter adapter = new ShowcasePoseAdapter();
+        // One slot per person. Slot 0 is also what the single-person code (debug text, tests, the simulation) reads.
+        private ShowcasePerson[] people = new ShowcasePerson[] { new ShowcasePerson() };
         private readonly ScreenSpaceMapper mapper = new ScreenSpaceMapper();
-        private readonly ShowcaseStateMachine machine = new ShowcaseStateMachine();
-        private readonly SilhouetteBuilder builder = new SilhouetteBuilder();
         private ShowcaseTrackingSource tracking;
+        private int skinIndex;
         private bool ready;
         private float lastAspect;
         private bool lastFluidOn;
@@ -70,9 +73,34 @@ namespace ChromaticRain {
             }
         }
 
+        /// <summary>The first person slot's body.</summary>
         public ShowcaseBody Body {
             get {
-                return body;
+                return people[0].Body;
+            }
+        }
+
+        /// <summary>How many person slots the scene has (from the settings' Max People).</summary>
+        public int PersonSlotCount {
+            get {
+                return people.Length;
+            }
+        }
+
+        public ShowcasePerson PersonAt(int slot) {
+            return people[slot];
+        }
+
+        /// <summary>How many people are shown and measured this frame.</summary>
+        public int TrackedPeopleCount {
+            get {
+                int count = 0;
+                for (int i = 0; i < people.Length; i++) {
+                    if (people[i].Tracked) {
+                        count = count + 1;
+                    }
+                }
+                return count;
             }
         }
 
@@ -84,13 +112,13 @@ namespace ChromaticRain {
 
         public SilhouetteBuilder Builder {
             get {
-                return builder;
+                return people[0].Builder;
             }
         }
 
         public ShowcaseStateMachine Machine {
             get {
-                return machine;
+                return people[0].Machine;
             }
         }
 
@@ -121,6 +149,31 @@ namespace ChromaticRain {
         public SilhouetteMode Mode {
             get {
                 return silhouetteMode;
+            }
+        }
+
+        /// <summary>The skin in use: the proportions and look of the silhouette. Never null.</summary>
+        public SilhouetteSkin ActiveSkin {
+            get {
+                return skins.Get(skinIndex);
+            }
+        }
+
+        public int SkinIndex {
+            get {
+                return skinIndex;
+            }
+        }
+
+        public int SkinCount {
+            get {
+                return skins.Count;
+            }
+        }
+
+        public SilhouetteDebugView DebugView {
+            get {
+                return silhouetteDebugView;
             }
         }
 
@@ -184,10 +237,15 @@ namespace ChromaticRain {
             }
         }
 
+        /// <summary>Somebody is shown and measured this frame.</summary>
         public bool PersonTracked {
             get {
-                return machine.Phase != ShowcasePhase.NoPerson && machine.Phase != ShowcasePhase.Lost
-                       && body.CoreFresh;
+                for (int i = 0; i < people.Length; i++) {
+                    if (people[i].Tracked) {
+                        return true;
+                    }
+                }
+                return false;
             }
         }
 
@@ -226,6 +284,12 @@ namespace ChromaticRain {
                 enabled = false;
                 return;
             }
+            if (skins == null) {
+                Debug.LogWarning("[ChromaticRain] No SilhouetteSkinSet assigned: using the built-in skins. Assign "
+                                 + "Assets/Games/viitorx-vrm-avtar-unity/Showcase/ChromaticRain/Settings/ChromaticRainSkins.asset to edit them.", this);
+                skins = SilhouetteSkinSet.CreateDefault();
+            }
+            skinIndex = skins.StartSkin;
             if (showcaseCamera == null) {
                 showcaseCamera = Camera.main;
             }
@@ -233,6 +297,12 @@ namespace ChromaticRain {
                 Debug.LogError("[ChromaticRain] No camera assigned and no MainCamera in the scene.", this);
                 enabled = false;
                 return;
+            }
+
+            int slots = Mathf.Clamp(settings.maxPeople, 1, 6);
+            people = new ShowcasePerson[slots];
+            for (int i = 0; i < slots; i++) {
+                people[i] = new ShowcasePerson();
             }
 
             tracking = new ShowcaseTrackingSource("ChromaticRain", udpPort, poseInterpolationDelayMs,
@@ -253,7 +323,7 @@ namespace ChromaticRain {
             }
 
             if (fluid != null) {
-                bool fluidOk = fluid.Initialize(settings, mapper.ViewWidth, mapper.ViewHeight);
+                bool fluidOk = fluid.Initialize(settings, mapper.ViewWidth, mapper.ViewHeight, slots);
                 if (!fluidOk) {
                     Debug.LogWarning("[ChromaticRain] The FluXY layer is unavailable; continuing with rain "
                                      + "and silhouette only.", this);
@@ -265,9 +335,9 @@ namespace ChromaticRain {
                 fluid.SetLayerOn(lastFluidOn);
             }
 
-            adapter.Reset(body);
-            machine.Reset();
-            builder.Reset();
+            for (int i = 0; i < people.Length; i++) {
+                people[i].Release();
+            }
             ready = true;
         }
 
@@ -312,35 +382,112 @@ namespace ChromaticRain {
                 ResetPipeline();
             }
 
-            // 2. Adapter -> view-space body.
-            adapter.Update(body, pose, left, right, telemetry, sourceFresh, dt, settings, mapper);
+            // 2. Each person: adapter -> view-space body, state machine, silhouette shapes.
+            UpdatePeople(sourceFresh, pose, left, right, telemetry, dt);
 
-            // 3. State machine, on the same frame's answer.
-            bool trackedNow = sourceFresh && body.CoreFresh;
-            machine.Tick(trackedNow, body.Energy, dt, settings);
-            if (machine.SnapRequested) {
-                adapter.RequestSnap();
-                adapter.Update(body, pose, left, right, telemetry, sourceFresh, dt, settings, mapper);
-            }
-
-            // 4. Silhouette shapes, mask, rain.
-            builder.Build(body, settings, dt);
+            // 3. Mask (one texture for everybody), rain.
             silhouette.EnsureTexture(mapper.Aspect, settings.maskHeight);
-            silhouette.Render(builder, mapper.ViewWidth, mapper.ViewHeight, machine.SilhouetteAlpha,
-                              silhouetteMode, settings);
+            silhouette.BeginFrame();
+            for (int i = 0; i < people.Length; i++) {
+                ShowcasePerson person = people[i];
+                if (person.InUse) {
+                    silhouette.AddPerson(person.Builder, mapper.ViewWidth, mapper.ViewHeight,
+                                         person.Machine.SilhouetteAlpha, ActiveSkin);
+                }
+            }
+            silhouette.EndFrame(silhouetteMode, ActiveSkin, silhouetteDebugView);
             rain.Apply(settings, dt, mapper.Aspect);
             showcaseCamera.backgroundColor = settings.backgroundColor;
 
-            // 5. Fluid targets, before FluXY's own LateUpdate.
-            if (fluid != null && lastFluidOn) {
-                fluid.Tick(body, machine.FluidActivity, dt, settings);
+            // 4. Fluid targets, before FluXY's own LateUpdate. A free slot passes a cleared body: its targets go off.
+            if (fluid != null && lastFluidOn && fluid.BeginFrame(dt, settings)) {
+                for (int i = 0; i < people.Length; i++) {
+                    fluid.DrivePerson(i, people[i].Body, people[i].Machine.FluidActivity, dt, settings);
+                }
             }
         }
 
+        /// <summary>
+        /// Who is on screen this frame, and one pipeline step for each of them. With a crowd upstream every tracked
+        /// person gets a slot keyed on the sidecar's track id (stable, never reused). With a single-person sender, or
+        /// the simulation, there is one person in the slot keyed <see cref="PersonSlots.SingleId"/>, exactly as before.
+        /// A person who disappears keeps their slot while their silhouette fades out, then the slot is freed.
+        /// </summary>
+        private void UpdatePeople(bool sourceFresh, SkeletonPose pose, HandPose left, HandPose right,
+                                  TrackingTelemetry telemetry, float dt) {
+            for (int i = 0; i < people.Length; i++) {
+                people[i].Present = false;
+            }
+
+            if (tracking.CrowdActive) {
+                for (int b = 0; b < tracking.LiveBodyCount; b++) {
+                    ShowcaseLiveBody live = tracking.LiveBody(b);
+                    int slot = PersonSlots.Acquire(people, live.Id);
+                    if (slot == PersonSlots.NoSlot) {
+                        continue;
+                    }
+                    ShowcasePerson person = people[slot];
+                    person.Present = true;
+                    // Hands and the trust channel exist for the first person only; the rest are drawn from the body.
+                    UpdateLateralShift(person, live);
+                    StepPerson(person, live.Pose, live.Primary ? left : null, live.Primary ? right : null,
+                               live.Primary ? telemetry : null, true, dt);
+                }
+            } else {
+                int slot = PersonSlots.Acquire(people, PersonSlots.SingleId);
+                if (slot != PersonSlots.NoSlot) {
+                    ShowcasePerson person = people[slot];
+                    person.Present = true;
+                    person.Adapter.LateralShift = 0f;
+                    StepPerson(person, pose, left, right, telemetry, sourceFresh, dt);
+                }
+            }
+
+            for (int i = 0; i < people.Length; i++) {
+                ShowcasePerson person = people[i];
+                if (!person.InUse) {
+                    continue;
+                }
+                if (!person.Present) {
+                    StepPerson(person, null, null, null, null, false, dt);
+                    if (person.Machine.Phase == ShowcasePhase.NoPerson) {
+                        person.Release();
+                    }
+                }
+            }
+        }
+
+        // Where the camera sees this person, sideways, against where the stage staged them. Updated only while both hips
+        // are measured (the centre is the mid-hip) or the sender says it anchored the root itself (F-60); otherwise the
+        // last good value stays, so a person whose hips are briefly lost does not slide across the screen.
+        private static void UpdateLateralShift(ShowcasePerson person, ShowcaseLiveBody live) {
+            if (!live.HasRoot
+                || (!live.Pose.RootEstimated && (!live.Pose.Present[Joint.LeftHip] || !live.Pose.Present[Joint.RightHip]))) {
+                return;
+            }
+            float shift = live.RootX - live.Pose.Centre.x;
+            if (float.IsNaN(shift) || float.IsInfinity(shift)) {
+                return;
+            }
+            person.Adapter.LateralShift = shift;
+        }
+
+        private void StepPerson(ShowcasePerson person, SkeletonPose pose, HandPose left, HandPose right,
+                                TrackingTelemetry telemetry, bool fresh, float dt) {
+            person.Adapter.Update(person.Body, pose, left, right, telemetry, fresh, dt, settings, mapper);
+            bool trackedNow = fresh && person.Body.CoreFresh;
+            person.Machine.Tick(trackedNow, person.Body.Energy, dt, settings);
+            if (person.Machine.SnapRequested) {
+                person.Adapter.RequestSnap();
+                person.Adapter.Update(person.Body, pose, left, right, telemetry, fresh, dt, settings, mapper);
+            }
+            person.Builder.Build(person.Body, ActiveSkin, dt);
+        }
+
         private void ResetPipeline() {
-            adapter.Reset(body);
-            machine.Reset();
-            builder.Reset();
+            for (int i = 0; i < people.Length; i++) {
+                people[i].Release();
+            }
             if (fluid != null) {
                 fluid.Clear();
             }
@@ -397,6 +544,12 @@ namespace ChromaticRain {
         private void ReadKeys() {
             if (Input.GetKeyDown(KeyCode.D)) {
                 ToggleDebug();
+            }
+            if (Input.GetKeyDown(KeyCode.B)) {
+                SetSkin(skins.Next(skinIndex));
+            }
+            if (Input.GetKeyDown(KeyCode.V)) {
+                SetDebugView((SilhouetteDebugView)(((int)silhouetteDebugView + 1) % 4));
             }
             if (Input.GetKeyDown(KeyCode.N)) {
                 SetSilhouetteMode(silhouetteMode == SilhouetteMode.DarkSilhouette
@@ -464,12 +617,25 @@ namespace ChromaticRain {
         public void ToggleDebug() {
             debugVisible = !debugVisible;
             if (debugOverlay != null) {
-                debugOverlay.enabled = debugVisible;
+                debugOverlay.enabled = debugVisible || silhouetteDebugView == SilhouetteDebugView.Landmarks;
             }
+        }
+
+        /// <summary>Switches the silhouette skin by index (wrapped into the list). Does not touch the asset.</summary>
+        public void SetSkin(int index) {
+            skinIndex = ((index % skins.Count) + skins.Count) % skins.Count;
         }
 
         public void SetSilhouetteMode(SilhouetteMode mode) {
             silhouetteMode = mode;
+        }
+
+        /// <summary>Inspect the silhouette without the rain; the landmarks view needs the debug overlay, which is enabled for it.</summary>
+        public void SetDebugView(SilhouetteDebugView view) {
+            silhouetteDebugView = view;
+            if (debugOverlay != null) {
+                debugOverlay.enabled = debugVisible || view == SilhouetteDebugView.Landmarks;
+            }
         }
 
         public void SetSource(ShowcaseSource value) {
@@ -497,13 +663,13 @@ namespace ChromaticRain {
 
         private void OnValidate() {
             if (debugOverlay != null && Application.isPlaying) {
-                debugOverlay.enabled = debugVisible;
+                debugOverlay.enabled = debugVisible || silhouetteDebugView == SilhouetteDebugView.Landmarks;
             }
         }
 
         private void Start() {
             if (debugOverlay != null) {
-                debugOverlay.enabled = debugVisible;
+                debugOverlay.enabled = debugVisible || silhouetteDebugView == SilhouetteDebugView.Landmarks;
             }
         }
     }

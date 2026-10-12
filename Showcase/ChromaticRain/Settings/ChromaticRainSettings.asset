@@ -10,7 +10,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: cac88b12c5e40ae4e947697fccb98bdd, type: 3}
-  m_Name: 
+  m_Name: ChromaticRainSettings
   m_EditorClassIdentifier: ChromaticRain::ChromaticRain.ChromaticRainSettings
   rainDensity: 0.7
   fallSpeed: 0.85
@@ -27,36 +27,8 @@ MonoBehaviour:
   - {r: 1, g: 0.62, b: 0.12, a: 1}
   backgroundColor: {r: 0.004, g: 0.005, b: 0.01, a: 1}
   silhouetteMode: 0
-  edgeSoftness: 0.012
-  shapeBlend: 0.05
-  maskHeight: 270
-  silhouetteColor: {r: 0.006, g: 0.008, b: 0.014, a: 1}
-  rimColor: {r: 0.22, g: 0.5, b: 1, a: 1}
-  rimIntensity: 0.2
-  adaptToShoulderWidth: 1
-  referenceShoulderWidth: 0.4
-  headRadiusX: 0.09
-  headRadiusY: 0.115
-  neckRadius: 0.05
-  shoulderBarRadius: 0.06
-  torsoTopRadius: 0.16
-  torsoBottomRadius: 0.145
-  hipBarRadius: 0.085
-  upperArmShoulderRadius: 0.058
-  upperArmElbowRadius: 0.046
-  foreArmElbowRadius: 0.045
-  foreArmWristRadius: 0.036
-  handPalmRadius: 0.04
-  handEndRadius: 0.046
-  fallbackHandLength: 0.09
-  thighHipRadius: 0.095
-  thighKneeRadius: 0.068
-  shinKneeRadius: 0.066
-  shinAnkleRadius: 0.048
-  footAnkleRadius: 0.045
-  footToeRadius: 0.036
-  maxArmSegment: 0.46
-  maxLegSegment: 0.62
+  maskHeight: 540
+  maxPeople: 4
   enterSeconds: 0.25
   lostTimeoutSeconds: 0.6
   fadeInSeconds: 0.45

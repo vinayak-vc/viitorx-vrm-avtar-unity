@@ -13,6 +13,18 @@ namespace ChromaticRain {
         NegativeSpace
     }
 
+    /// <summary>Ways to inspect the silhouette without the rain in the way. Cycled with V.</summary>
+    public enum SilhouetteDebugView {
+        /// <summary>The normal composition.</summary>
+        Off,
+        /// <summary>The filled mask, white on black.</summary>
+        MaskOnly,
+        /// <summary>The filled mask in dim grey with the landmarks and bones drawn over it.</summary>
+        Landmarks,
+        /// <summary>The contour of the mask only.</summary>
+        ContourOnly
+    }
+
     /// <summary>The A-F interaction states. One enum, one place that changes it.</summary>
     public enum ShowcasePhase {
         /// <summary>A - nobody; full rain.</summary>

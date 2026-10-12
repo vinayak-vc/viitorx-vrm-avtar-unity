@@ -75,6 +75,15 @@ namespace FluidDisruption {
             AddJoint(body, Joint.RightShoulder, ref sum, ref weight);
             AddJoint(body, Joint.LeftHip, ref sum, ref weight);
             AddJoint(body, Joint.RightHip, ref sum, ref weight);
+            if (body.RootEstimated) {
+                // F-60: a body the camera cuts off has no hip joints. The sender's estimated hip centre stands in for
+                // the weight they would carry, so the torso point does not jump up to the shoulders when the hips go.
+                float shoulders = Mathf.Min(body.Weight[Joint.LeftShoulder], body.Weight[Joint.RightShoulder]);
+                float missing = 1f - Mathf.Max(body.Weight[Joint.LeftHip], body.Weight[Joint.RightHip]);
+                float w = 2f * shoulders * Mathf.Clamp01(missing);
+                sum += body.HipCentre * w;
+                weight += w;
+            }
             return weight > 0.01f ? sum / weight : body.HipCentre;
         }
 

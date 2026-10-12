@@ -17,8 +17,13 @@ namespace ChromaticRain {
         /// <summary>True for slots that were measured THIS frame (not held).</summary>
         public readonly bool[] Fresh = new bool[Joint.SlotCount];
 
-        /// <summary>Both shoulders and at least one hip were measured this frame.</summary>
+        /// <summary>Both shoulders were measured this frame, and the hip was either measured or - F-60, a body the frame
+        /// cuts off - ESTIMATED by the sender from the shoulders (<see cref="RootEstimated"/>).</summary>
         public bool CoreFresh;
+
+        /// <summary>The hips are not in the picture: <see cref="HipCentre"/> is the sender's estimate, there are no
+        /// hip joints to draw, and the legs are absent. The torso above is measured as ever.</summary>
+        public bool RootEstimated;
 
         /// <summary>Mean of the hips, in view metres.</summary>
         public Vector2 HipCentre;
@@ -40,6 +45,7 @@ namespace ChromaticRain {
                 Fresh[i] = false;
             }
             CoreFresh = false;
+            RootEstimated = false;
             HipCentre = Vector2.zero;
             HipVelocity = Vector2.zero;
             ShoulderWidth = 0f;
