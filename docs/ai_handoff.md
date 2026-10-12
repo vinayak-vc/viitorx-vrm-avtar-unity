@@ -1,7 +1,31 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-10-10 (F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
+Last updated: 2026-10-12 (F-57 / ADR-093: auto portrait / landscape / sideways for a LAN camera, webcam or video; F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## F-57 - AUTO ORIENT: portrait or landscape, upright or sideways, from a LAN camera / webcam / video (2026-10-12)
+
+Full record: [`tasks.md`](tasks.md) F-57, [`decisions.md`](decisions.md) **ADR-093**; sidecar side: `python-sidecar~/tools/video/frame_orientation.py`, README "Portrait or landscape" section.
+
+**The request.** The user is not on the OAK-D; the sources are the LAN camera server (a phone), a webcam and video files, and the first two can be portrait OR landscape (crowds need the wider landscape view). Landscape came out "weird". A recorded landscape clip tracks fine, so the causes found were: a sideways / upside-down delivered frame (a skeleton collapsed to 6 cm), the focal length being derived from the delivered WIDTH (a phone turned to portrait got a 1.78x shorter focal length than in landscape, which also moves the depth estimate against the 1.6-4.0 m clamp), and the single-person crop starting from a centred 3:4 box that covers only ~42% of a landscape frame.
+
+**What it is.** One Unity bool, `AppBootstrap > Video Test Source (F-49) > Video Auto Orient` (default ON). It sends `--video-auto-orient --video-hfov-axis long` through the supervisor to `video_udp_sender.py`:
+1. **Auto rotation.** At the start, on every frame-size change (a phone turned) and, slowly, while nothing is being emitted, the sidecar scores the four rotations (person detector x pose confidence x "body reads upright") on a few frames; 4 agreeing votes lock a rotation. `Video Rotate Degrees` is then only the starting guess and the fallback when nobody is in view for 4 s. Frames are not used while undecided.
+2. **One lens.** `Video Horizontal Fov Degrees` now means the FOV across the LONGER side, so one phone has one focal length in portrait and landscape.
+3. **Off-centre person.** The single-person path restarts a lost crop from the detector's most prominent person instead of the centred box.
+Off sends neither flag: the command line and behaviour are exactly the pre-F-57 ones. OAK-D senders are untouched (they keep `--portrait`).
+
+**Measured (RTX 3060, 2026-10-12, real recordings; nothing on a live phone):** the decision picked the right rotation in 96 of 96 runs (4 real clips x 24 start points x a random delivered rotation), 0 wrong, 0 time-outs, median 4-5 probe frames (max 34 where the person was out of shot). Through the real sender, a real portrait phone recording (720x1280): upright with auto off 1.85 m body / z pinned 1.60 (the clamp); delivered sideways with auto off: body 0.06 m (collapsed); with auto on and delivered upright, 90, 270 or 180: 1.645 m, z 2.48 m, identical to the centimetre in all four. A two-dancer landscape clip through the multi-person path: 2 people in every frame; the same clip delivered sideways (1080x1920) locks to rotate 270 and gives 1.451 m against 1.452 m upright (0.14 m without auto). Person at the right edge of a landscape frame: 41 lost frames at the start become 4. Through Unity itself (Play, `ChromaticRain_Showcase`, a sideways clip): the launcher sent the two flags, the status read `LIVE (VIDEO ph_cw90.mp4) - person tracked` and the silhouette stood upright. Tests: 55 new Python assertions (12 deliberate mutations, all caught; two weak spots found and fixed), all 8 sidecar test files pass (55 new + 157 / 73 / 78 / 19 / 32 / 46 / 37), 3 new C# tests in `VideoSourceF49Tests` pass (run by reflection in the Editor: the class's other 4 tests need NUnit SetUp, which that harness does not run).
+
+**Know before changing it.** (a) It needs a person in view to decide; an empty room keeps `Video Rotate Degrees`. (b) Turning auto ON changes numbers for a portrait source: the root z and the clamp interplay move (1.60 pinned -> 2.48 real), and the skeleton is 1.64 m instead of 1.85 m. (c) On a two-person clip run through the SINGLE-person path, the seeded crop picks the nearer person and 2 of 590 frames mixed two people (0 of 592 before); use `Video Max People` >= 2 for a crowd. (d) The default FOV (60 deg across the long side) is an assumption: set the phone's real value (roughly 65-75). (e) The size-change re-probe was tested with a fake scorer, not through a live WebRTC resolution change.
+
+**NOT tested:** a real phone on the LAN camera server, a real webcam, a player build, an empty room end to end, a live portrait <-> landscape turn.
+
+**Files:** new `python-sidecar~/tools/video/frame_orientation.py`, `python-sidecar~/tests/test_frame_orientation.py`; changed `python-sidecar~/tools/video/video_udp_sender.py`, `sidecar_supervisor.py`, `tests/test_video_source.py`, `README.md`; Unity `Runtime/Bootstrap/AppBootstrap.cs`, `AppBootstrap.VideoSource.cs`, `Runtime/Tracking/OakD/SidecarProcessLauncher.cs`, `Tests/EditMode/VideoSourceF49Tests.cs`. The sidecar is its own repo: commit there too.
+
+**Next recommended:** try it on the real phone (turn it between portrait and landscape while a person stands in view and read the sidecar log for `orientation:` lines), then set the phone's real FOV.
 
 ---
 

@@ -22,12 +22,12 @@ MonoBehaviour:
   - {r: 1, g: 0.25, b: 0.8, a: 1}
   backgroundLow: {r: 0, g: 0, b: 0, a: 1}
   backgroundHigh: {r: 0, g: 0, b: 0, a: 1}
-  fieldWeight: 0.2
+  fieldWeight: 0
   fieldRate: 10
   fieldDrift: {x: 0.05, y: 0.02}
   fieldDriftPeriod: {x: 70, y: 110}
-  fieldTintSwing: 0.18
-  fieldThickness: 0.16
+  fieldTintSwing: 0
+  fieldThickness: 0.4
   baselineSources:
   - centre: {x: 0, y: 0.34}
     radius: {x: 0.05, y: 0.07}
@@ -74,20 +74,20 @@ MonoBehaviour:
     size: {x: 6, y: 0.95}
     tilt: 4
     rate: 2
-  dyeDissipation: 0.02
-  viscosity: 0.15
-  turbulence: 9
+  dyeDissipation: 0.058
+  viscosity: 0.19
+  turbulence: 40
   pressure: 1
-  drift: {x: 0.01, y: 0}
-  overscan: 1.15
-  edgeWidth: 0.1
+  drift: {x: 0, y: 0}
+  overscan: 1.33
+  edgeWidth: 0.122
   edgeDrain: 0.9
-  baselineSwirl: 0.3
+  baselineSwirl: 2.35
   handMovement:
     deadZoneSpeed: 0.12
     fullSpeed: 1.6
-    maxSpeed: 5
-    glitchSpeed: 14
+    maxSpeed: 2.67
+    glitchSpeed: 35.8
     smoothingSeconds: 0.08
     startRampSeconds: 0.2
   torsoMovement:
@@ -100,7 +100,7 @@ MonoBehaviour:
   handSize: {x: 0.16, y: 0.3}
   torsoSize: 0.75
   splatsPerMetre: 40
-  handDensity: 0.14
+  handDensity: 0.683
   torsoDensity: 0.05
   handStir: 3.2
   torsoStir: 1.8
@@ -153,5 +153,5 @@ MonoBehaviour:
   rampGlow: 0.5
   chromaticSplit: 0.006
   streakLength: 0.05
-  motionGlow: 0.35
+  motionGlow: 1.63
   vignette: 0.35

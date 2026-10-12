@@ -448,10 +448,11 @@ MonoBehaviour:
   sidecarRgbIspScale: 1/1
   useVideoSource: 0
   useMediaPipeTracking: 1
-  trackFromVideo: 0
-  videoSource: Assets/Games/video/147_1080p.mp4
-  lanCameraPin: 
+  trackFromVideo: 1
+  videoSource: http://localhost:7777/viewer?room=123
+  lanCameraPin: 123456
   videoLoop: 1
+  videoAutoOrient: 1
   videoRotateDegrees: 0
   videoFlipHorizontal: 0
   videoCameraSize: {x: 1280, y: 720}
@@ -773,7 +774,7 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!43 &839737604
+--- !u!43 &1005482440
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -1294,7 +1295,7 @@ MeshFilter:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1581399819}
-  m_Mesh: {fileID: 839737604}
+  m_Mesh: {fileID: 1005482440}
 --- !u!1 &1693346085
 GameObject:
   m_ObjectHideFlags: 0

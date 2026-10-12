@@ -4,6 +4,21 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## F-57 - Auto orient: portrait / landscape / sideways from a LAN camera, webcam or video (2026-10-12)
+
+```text
+VERDICT: BUILT, TESTED ON RECORDINGS AND THROUGH UNITY PLAY MODE. NOT RUN ON A LIVE PHONE.
+```
+
+- [x] `frame_orientation.py`: four-rotation score (detector x pose x upright geometry), vote logic, size-change re-probe, stall self-check, long-axis focal length, detector-seeded crop. 55 Python assertions, 12 mutations caught.
+- [x] Sender flags `--auto-orient` / `--hfov-axis`; supervisor `--video-auto-orient` / `--video-hfov-axis`; Unity bool `videoAutoOrient` (default ON) -> `SidecarLaunchOptions.VideoAutoOrient`; live edits restart the sidecar like the other video fields. 3 C# tests.
+- [x] Decision measured on real clips (96/96) and end to end through the sender and through Unity Play mode.
+- [ ] Run it on the real phone via the LAN camera server and a real webcam, turning the device between portrait and landscape.
+- [ ] Set the phone's real FOV in `Video Horizontal Fov Degrees` (the default 60 across the long side is an assumption).
+- [ ] Optional: the same auto rotation for the OAK-D senders (they use the known mount, `--portrait`, today).
+
+---
+
 ## F-56 - FluXY 1.4.1 local fixes (2026-10-11)
 
 - [x] `DisposeFramebuffer` releases `tileID`; readback textures only on demand, reused, destroyed; `GetCurrentLOD` null-camera crash; per-solver `_TileData` / `_TileID` binding and per-container property block. Patch: `docs/fluxy-1.4.1-local-fixes.patch`.

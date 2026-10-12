@@ -305,6 +305,11 @@ namespace VirtualMirror.Tracking.OakD {
                     || options.VideoRotateDegrees == 270) {
                     sb.Append(" --video-rotate ").Append(options.VideoRotateDegrees);
                 }
+                if (options.VideoAutoOrient) {
+                    // F-57. Two flags, one switch: finding the upright rotation is only half of "the same phone
+                    // works in portrait and landscape"; the focal length has to follow the lens, not the width.
+                    sb.Append(" --video-auto-orient --video-hfov-axis long");
+                }
                 if (options.VideoFlipHorizontal) {
                     sb.Append(" --video-flip");
                 }
@@ -755,6 +760,10 @@ namespace VirtualMirror.Tracking.OakD {
         /// <summary>Rotate each frame clockwise before inference: a portrait phone arrives sideways.
         /// 0, 90, 180 or 270; anything else is ignored.</summary>
         public int VideoRotateDegrees;
+        /// <summary>F-57. The sender finds which way is up itself (portrait or landscape, upright, sideways or upside
+        /// down) and uses one focal length for both orientations of the same lens. <see cref="VideoRotateDegrees"/> is then
+        /// only its starting guess. Off sends neither flag, so the command line is exactly the pre-F-57 one.</summary>
+        public bool VideoAutoOrient;
         /// <summary>Mirror each frame horizontally before inference: a front camera swaps left and right.</summary>
         public bool VideoFlipHorizontal;
         /// <summary>Requested webcam resolution; 0 leaves the sender's 1280x720. Ignored by files and streams.</summary>
