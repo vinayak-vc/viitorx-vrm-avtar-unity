@@ -1,0 +1,157 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: eaffae1986ec0cb41ba65cfc77570831, type: 3}
+  m_Name: FluidDisruptionSettings
+  m_EditorClassIdentifier: FluidDisruption::FluidDisruption.FluidDisruptionSettings
+  palette:
+  - {r: 0.05, g: 0.09, b: 0.42, a: 1}
+  - {r: 0, g: 0.82, b: 1, a: 1}
+  - {r: 0.05, g: 0.86, b: 0.88, a: 1}
+  - {r: 0.1, g: 0.36, b: 1, a: 1}
+  - {r: 0.48, g: 0.26, b: 1, a: 1}
+  - {r: 0.74, g: 0.64, b: 1, a: 1}
+  - {r: 1, g: 0.2, b: 0.78, a: 1}
+  backgroundLow: {r: 0.04, g: 0.08, b: 0.22, a: 1}
+  backgroundHigh: {r: 0.07, g: 0.16, b: 0.4, a: 1}
+  fieldWeight: 0.2
+  fieldRate: 10
+  fieldDrift: {x: 0.05, y: 0.02}
+  fieldDriftPeriod: {x: 70, y: 110}
+  fieldTintSwing: 0.18
+  fieldThickness: 0.16
+  baselineSources:
+  - centre: {x: 0, y: 0.34}
+    radius: {x: 0.05, y: 0.07}
+    period: 74
+    phase: 0
+    flowAngle: 0
+    flowStrength: 0.06
+    size: {x: 6, y: 0.95}
+    tilt: 3
+    rate: 2
+  - centre: {x: 0, y: 0.17}
+    radius: {x: 0.05, y: 0.07}
+    period: 86
+    phase: 0.3
+    flowAngle: 180
+    flowStrength: 0.06
+    size: {x: 6, y: 0.95}
+    tilt: -4
+    rate: 2
+  - centre: {x: 0, y: 0}
+    radius: {x: 0.05, y: 0.07}
+    period: 66
+    phase: 0.55
+    flowAngle: 0
+    flowStrength: 0.05
+    size: {x: 6, y: 0.95}
+    tilt: 2
+    rate: 2
+  - centre: {x: 0, y: -0.17}
+    radius: {x: 0.05, y: 0.07}
+    period: 92
+    phase: 0.15
+    flowAngle: 180
+    flowStrength: 0.06
+    size: {x: 6, y: 0.95}
+    tilt: -3
+    rate: 2
+  - centre: {x: 0, y: -0.34}
+    radius: {x: 0.05, y: 0.07}
+    period: 78
+    phase: 0.8
+    flowAngle: 0
+    flowStrength: 0.06
+    size: {x: 6, y: 0.95}
+    tilt: 4
+    rate: 2
+  dyeDissipation: 0.02
+  viscosity: 0.15
+  turbulence: 9
+  pressure: 1
+  drift: {x: 0.01, y: 0}
+  overscan: 1.15
+  edgeWidth: 0.1
+  edgeDrain: 0.9
+  baselineSwirl: 0.3
+  handMovement:
+    deadZoneSpeed: 0.12
+    fullSpeed: 1.6
+    maxSpeed: 5
+    glitchSpeed: 14
+    smoothingSeconds: 0.08
+    startRampSeconds: 0.2
+  torsoMovement:
+    deadZoneSpeed: 0.1
+    fullSpeed: 0.9
+    maxSpeed: 3
+    glitchSpeed: 8
+    smoothingSeconds: 0.18
+    startRampSeconds: 0.2
+  handSize: {x: 0.16, y: 0.3}
+  torsoSize: 0.75
+  splatsPerMetre: 40
+  handDensity: 0.14
+  torsoDensity: 0.05
+  handStir: 3.2
+  torsoStir: 1.8
+  velocityWeight: 0.6
+  handTurbulence: 3.5
+  leftHandColour: 1
+  rightHandColour: 4
+  accentColour: 5
+  accentAtFullSpeed: 0.35
+  maxTargetJump: 1.2
+  pulseSeconds: 1.2
+  pulseRate: 14
+  pulseDensity: 0.22
+  pulseSwirl: 2.6
+  pulseSize: 1
+  enterSeconds: 0.25
+  lostTimeoutSeconds: 0.5
+  lostHoldSeconds: 2.5
+  movingThreshold: 0.12
+  stillThreshold: 0.05
+  settleHoldSeconds: 1
+  gateSeconds: 0.35
+  minJointConfidence: 0.1
+  jointGraceSeconds: 0.4
+  jointFadeSeconds: 0.35
+  maxPoseAgeSeconds: 0.5
+  autoFallbackSeconds: 3
+  smoothingSlowTau: 0.09
+  smoothingFastTau: 0.025
+  smoothingFastSpeed: 1.5
+  viewHeightMetres: 2.4
+  viewCentreY: 1.05
+  lateralGain: 1.8
+  performanceProfile:
+    resolution: 1024
+    supersampling: 1
+    maxSteps: 2
+  qualityProfile:
+    resolution: 2048
+    supersampling: 2
+    maxSteps: 3
+  dyeGain: 3.4
+  crestStrength: 0.7
+  relief: 8
+  detailAmount: 0.35
+  detailScale: 2.2
+  detailAdvection: 1.2
+  layers: 5
+  layerDepth: 0.15
+  rampGlow: 0.5
+  chromaticSplit: 0.006
+  streakLength: 0.05
+  motionGlow: 0.35
+  vignette: 0.35

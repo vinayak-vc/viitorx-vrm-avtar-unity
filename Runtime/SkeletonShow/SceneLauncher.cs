@@ -81,6 +81,8 @@ namespace VirtualMirror.SkeletonShow {
                       "Stand still. The floor remembers how long you stayed."),
             new Entry("TimeEcho", "TIME ECHO",
                       "Move. Everything you just did is still happening behind you."),
+            new Entry("ChromaticRain_Showcase", "CHROMATIC RAIN",
+                      "Move your body to disturb the colors. You are the gap in the rain."),
         };
 
         private static readonly Entry[] MultiPerson = {

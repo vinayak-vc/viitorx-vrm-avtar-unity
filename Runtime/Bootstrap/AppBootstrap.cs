@@ -1124,6 +1124,7 @@ namespace VirtualMirror.App {
                 VideoLoopCount = videoLoop ? 0 : 1,
                 VideoAssumeMeasuredDepth = videoAssumeMeasuredDepth,
                 VideoRotateDegrees = videoRotateDegrees,
+                VideoAutoOrient = videoAutoOrient,
                 VideoFlipHorizontal = videoFlipHorizontal,
                 VideoCameraWidth = videoCameraSize.x,
                 VideoCameraHeight = videoCameraSize.y,
@@ -1173,6 +1174,7 @@ namespace VirtualMirror.App {
             appliedVideoClamp = videoClampDepth;
             appliedVideoRange = videoDepthRangeMetres;
             appliedVideoRotate = videoRotateDegrees;
+            appliedVideoAutoOrient = videoAutoOrient;
             appliedVideoFlip = videoFlipHorizontal;
             appliedVideoCameraSize = videoCameraSize;
             appliedVideoMaxPeople = videoMaxPeople;
@@ -1190,6 +1192,7 @@ namespace VirtualMirror.App {
                 || appliedVideoClamp != videoClampDepth
                 || appliedVideoRange != videoDepthRangeMetres
                 || appliedVideoRotate != videoRotateDegrees
+                || appliedVideoAutoOrient != videoAutoOrient
                 || appliedVideoFlip != videoFlipHorizontal
                 || appliedVideoCameraSize != videoCameraSize
                 || appliedVideoMaxPeople != videoMaxPeople;

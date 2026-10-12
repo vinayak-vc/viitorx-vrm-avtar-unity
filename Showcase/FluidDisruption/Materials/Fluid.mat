@@ -1,0 +1,42 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Fluid
+  m_Shader: {fileID: 4800000, guid: 1385d2deb74af1946a80dd8c5886d93f, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs: []
+    m_Ints: []
+    m_Floats:
+    - _Chroma: 0.006
+    - _Crest: 1.1
+    - _DyeTexel: 0.002
+    - _Enhance: 1
+    - _Gain: 2.4
+    - _MotionGlow: 0.6
+    - _Relief: 14
+    - _StreakLength: 0.05
+    - _Vignette: 0.35
+    m_Colors:
+    - _Accent: {r: 0.74, g: 0.64, b: 1, a: 1}
+    - _BgHigh: {r: 0.018, g: 0.044999972, b: 0.13999996, a: 1}
+    - _BgLow: {r: 0.01, g: 0.02, b: 0.07499998, a: 1}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

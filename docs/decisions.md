@@ -4513,3 +4513,55 @@ were migrated by hand. A partial class and an editor-side grouping change nothin
 * **To group another component:** add `[InspectorGroup]` to its fields and `[CustomEditor(typeof(X))] sealed class XEditor : GroupedInspectorEditor { }`.
 
 ---
+
+
+---
+
+## ADR-090 - Chromatic Rain: tracking belongs to the AppBootstrap, the scene only listens, and the mask is analytic
+
+**Decision.** The showcase scene does not start, supervise or configure the sidecar and has no video-source code of its own. It carries an `AppBootstrap` (the same component and Inspector sections as `Bootstrap.unity`), which owns the sidecar and the source choice; the scene reads the stream through the existing `TrackedStage`. It is registered in the Launcher (`SceneLauncher` row, one-person) so `AppBootstrap.EnsureSidecarForScene` treats it like any experience. The silhouette is drawn by one fragment shader that evaluates tapered capsules and a head ellipse (smooth-min) into a single R8 mask texture shared by the rain, the fluid layer and the dark overlay.
+
+**Why.** Every experience scene already splits the work this way (bootstrap = process and source, scene = listener), and F-49..F-52 put all source options behind that one component; a second copy in the scene would drift. The sidecar carries landmarks only (no segmentation mask, no image coordinates), so the body is stylised from joints; an analytic shape is anti-aliased at any mask size and keeps limbs continuous.
+
+**Do not.** Add a second UDP listener or a source selector to the scene; start the sidecar from the scene; make the scene's `AppBootstrap` navigate away (`mirrorSceneName` = the scene's own name, `loadMirrorSceneOnStart` off); use the sim's `O` key (the bootstrap owns it). **Tune** through `ChromaticRainSettings` (live) and `AppBootstrap > Video Test Source`.
+
+**Known:** `Auto` falls back to the simulation only after 3 s of no pose, and the sender emits nothing for an empty room, so use `Live` for an unattended install. The rain phase wraps at exactly 1 (whole-number cycles per column) so it never loses precision or visibly resets; keep `REF_FALL` / `WRAP_SECONDS` in the rain shader and `RainRenderer` in step.
+
+
+---
+
+## ADR-091 - Fluid Disruption: the calm baseline is a field the dye is pulled toward, not blobs that are injected; shared showcase source
+
+**Decision.** (1) The baseline is a procedural band pattern used twice: as the container's `clearTexture` and as the density texture of one full-area `FluxyTarget` that splats it a few times a second with a small weight, so every pass relaxes the dye toward the pattern. Flow targets only push (no dye). (2) The three interaction targets splat by distance travelled and every weight (dye, velocity, scale, turbulence) is multiplied by the filtered movement strength. (3) A point with no measured landmark has its target disabled in place; a re-enabled target re-seeds FluXY's old position. (4) The showcase uses the same shared source / adapter / status classes as Chromatic Rain; both reach tracking only through the scene's `AppBootstrap`.
+
+**Why.** Injected dye blobs with a subtractive dissipation became flat, over-saturated lumps with torn edges within 30 s, and nothing brought the surface back to a recognisable look after a disturbance. Relaxation toward a fixed pattern keeps the first-frame look forever, settles disturbances without ever clearing the solver, and costs one extra splat pass. Gating by distance and multiplying by strength means a still or jittering hand injects nothing and cannot act as an eraser (a zero-weight splat still blends velocity toward zero). Disabling instead of moving avoids any jump to the origin. Extracting the source selection removes a second copy of the part of the project most likely to drift.
+
+**Do not.** Clear the solver when a person enters or leaves (the gate is the only thing that changes); scale a stationary target's size instead of its weights; read thickness from the dye buffer's alpha (it accumulates as alpha squared); raise dye dissipation to "settle faster" (it tears edges: raise `fieldWeight` / `fieldRate` instead); give `FluidDisruptionSettings` runtime toggles (quality, enhancements, FluXY on/off) - a ScriptableObject edited in Play mode persists in the Editor; trust the scene's `MeshFilter` mesh for a FluXY container.
+
+**Known:** the per-pass relaxation also fades a person's bright dye (about 5 s); that is the intended "settle". A FluXY container needs its own procedural mesh on the `MeshFilter`; an Editor-saved scene can carry a stale one.
+
+
+---
+
+## ADR-092 - FluXY is patched in place; the patch is kept in docs/
+
+**Decision.** Four defects in FluXY 1.4.1 are fixed directly in `Assets/FluXY/Scripts` (FluxySolver, FluxyContainer, FluxyStorage). The diff is kept as `docs/fluxy-1.4.1-local-fixes.patch`. The asmdef version define and the third-party code style are NOT touched.
+
+**Why.** The defects (an unreleased render texture per dispose, two new textures plus two huge arrays per `OnValidate`, a null dereference without `Camera.main`, global shader values shared between solvers) cannot be worked around from outside: they live in private methods that run on enable, on validate and every frame. `Assets/FluXY` is untracked in the outer repo, so without the patch file the change would be invisible and silently lost on an update.
+
+**Do not.** Rewrite the `fluxy.asmdef` version define as an interval (it stops defining `FLUXY_URP`); reformat the plugin; set `_TileData` / `_TileID` only when something changed (they are globals shared by every solver); create readback textures when `readable` is `None`.
+
+
+---
+
+## ADR-093 - Auto orient: the four rotations are scored and voted on; the lens follows the long side
+
+**Decision.** (1) For a video / webcam / LAN-camera source the sidecar can choose the rotation itself (`--auto-orient`, Unity `Video Auto Orient`). Each probe frame is rotated 0/90/180/270; each candidate scores detector score x pose confidence x (0.25 + 0.75 x upright geometry), where geometry is the share of head-to-feet steps (between the keypoint groups that were confidently seen) that go downward. A frame votes only when the winner scores >= 0.35 and >= 1.3x the runner-up; 4 votes holding >= 75% of all votes lock a rotation. (2) It re-opens on every change of the delivered frame size, and, while no pose has been emitted for 3 s, a check every second switches only after 3 consecutive agreeing checks. While undecided frames are not used, for at most 4 s; then it keeps `--rotate`. (3) With the same bool the focal length is derived from the LONGER side (`--hfov-axis long`), so one phone has one focal length in pixels in portrait and in landscape. (4) With the detector loaded, the single-person path restarts a lost crop from the most prominent detected person (score x area) instead of the centred 3:4 box. Off (the default in the sidecar) is byte-identical to F-49; Unity defaults the bool ON.
+
+**Why.** The models read upright people, so a sideways frame is not an error, it is a collapsed skeleton (0.06 m measured). Phones on the LAN camera and webcams are turned by hand and apps differ in what they deliver, so a fixed `--rotate` cannot be right for both orientations. Measured: detector x pose x geometry picked the upright rotation in 210 of 212 sampled frames over five real clips (the two misses had no confidently detected upright person) and the vote logic locked correctly in 96 of 96 runs from random start points and random delivered rotations, median 4-5 frames. Pose confidence alone was right 45-50%, geometry alone 85-90% (first three clips). The focal length of a lens in pixels does not change when the phone is turned, but F-49 derived it from the delivered width; for a 720x1280 portrait frame at 60 deg that is 623 px against 1108 px in landscape, a 1.78x difference in the estimated distance. The centred 3:4 box is 42% of a 16:9 frame's width, so a person standing to the side was lost for 38-41 frames; seeded from the detector it is 4.
+
+**Measured effect (real portrait phone recording, through the sender):** auto off, upright: body 1.85 m, z 1.60 m (clamped); auto off, sideways: body 0.06 m; auto on, delivered at 0 / 90 / 270 / 180: 1.645 m and z 2.48 m in all four. Multi-person landscape clip sideways: 1.451 m against 1.452 m upright. Cost: 4 detector + 4 pose runs per probe frame, only for the first ~5 frames after a start or a size change; none while poses are emitted (tested), datagram rate 29.2-29.5 per second with it on against 29.4-29.6 off.
+
+**Do not.** Run the probe on every frame; decide from one frame; make the detector-only score the rule without re-measuring on single people (it was 100% only on the two-dancer clips and its margin is thin); change the thresholds without re-running the 96-run decision test; add the OAK-D senders to this (their mount is known and they carry a `--portrait` pipeline that rotates depth and intrinsics too); read `Video Horizontal Fov Degrees` as the width FOV when auto is on; treat a still empty room as "upright" (it keeps `--rotate`).
+
+**Known:** a person must be in view to decide. With auto on, the numbers of a portrait source move (z 1.60 -> 2.48, body 1.85 -> 1.64 m): that is the clamp no longer being hit, not a regression. On a two-person clip through the SINGLE-person path the seeded crop picks the nearer person and 2 of 590 frames mixed two people (0 of 592 before). The default 60 deg across the long side is an assumption. Never run on a live phone or webcam; the size-change re-probe was tested with a fake scorer only.

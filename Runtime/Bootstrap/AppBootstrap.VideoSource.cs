@@ -47,9 +47,22 @@ namespace VirtualMirror.App {
         [Tooltip("FILES ONLY. Replay the clip forever. Off: it plays once and then the sidecar idles, so " +
                  "tracking goes stale rather than the clip restarting. A camera or stream has no end.")]
         [SerializeField] private bool videoLoop = true;
+        [Tooltip("PORTRAIT OR LANDSCAPE, UPRIGHT OR SIDEWAYS: FIND OUT BY ITSELF. A phone on the LAN camera, a " +
+                 "webcam or a clip can arrive portrait or landscape, and a webcam app may hand over a sideways or " +
+                 "upside-down picture. With this on the sidecar tries the four rotations on a few frames (a person " +
+                 "has to be in view), turns the picture upright, and repeats whenever the frame changes size (you " +
+                 "turn the phone) or nothing has been tracked for a few seconds. It also uses one focal length for " +
+                 "both orientations of the same lens, so the person is the same size and distance in portrait and " +
+                 "landscape. 'Video Horizontal Fov Degrees' then means the field of view across the LONGER side " +
+                 "of the picture. In landscape a person standing to one side is found by the person detector instead " +
+                 "of waiting for them to cross the middle.\n\n" +
+                 "Needs the detector weights (tools/model/fetch_yolox_s.py); without them the sidecar says so and " +
+                 "uses 'Video Rotate Degrees'. Off = exactly the old behaviour.")]
+        [SerializeField] private bool videoAutoOrient = true;
         [Tooltip("Rotate each frame CLOCKWISE before tracking. A phone held upright is often delivered as a " +
                  "sideways frame by webcam apps; the model reads the image, so it must be turned upright " +
-                 "here. 0, 90, 180 or 270.")]
+                 "here. 0, 90, 180 or 270. With 'Video Auto Orient' on this is only the starting guess and the " +
+                 "fallback when nobody is in view.")]
         [SerializeField] private int videoRotateDegrees = 0;
         [Tooltip("Mirror each frame left-right before tracking. A FRONT (selfie) camera usually arrives " +
                  "mirrored, which swaps the person's left and right. Note this is separate from the scenes' " +
@@ -109,6 +122,7 @@ namespace VirtualMirror.App {
         private bool appliedVideoClamp;
         private Vector2 appliedVideoRange;
         private int appliedVideoRotate;
+        private bool appliedVideoAutoOrient;
         private bool appliedVideoFlip;
         private Vector2Int appliedVideoCameraSize;
         private int appliedVideoMaxPeople;

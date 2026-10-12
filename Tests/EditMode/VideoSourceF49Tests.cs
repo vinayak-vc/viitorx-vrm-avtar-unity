@@ -414,6 +414,41 @@ namespace VirtualMirror.Tests {
         }
 
         [Test]
+        public void AutoOrientSendsItsTwoFlagsAndNothingElseChanges() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "camera:0";
+            string before = BuildArguments(options);
+            StringAssert.DoesNotContain("--video-auto-orient", before, "off is the pre-F-57 command line, byte for byte");
+            StringAssert.DoesNotContain("--video-hfov-axis", before);
+
+            options.VideoAutoOrient = true;
+            string after = BuildArguments(options);
+            StringAssert.Contains("--video-auto-orient --video-hfov-axis long", after,
+                                  "one switch sets both: the upright rotation and the lens rule that goes with it");
+            Assert.AreEqual(before, after.Replace(" --video-auto-orient --video-hfov-axis long", string.Empty),
+                            "nothing else on the command line changes");
+        }
+
+        [Test]
+        public void AutoOrientStillForwardsTheManualRotationAsTheStartingGuess() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoSource = "camera:0";
+            options.VideoAutoOrient = true;
+            options.VideoRotateDegrees = 90;
+            string args = BuildArguments(options);
+            StringAssert.Contains("--video-rotate 90", args);
+            StringAssert.Contains("--video-auto-orient", args);
+        }
+
+        [Test]
+        public void AutoOrientIsNeverSentForACameraSessionWithNoVideo() {
+            SidecarLaunchOptions options = new SidecarLaunchOptions();
+            options.VideoAutoOrient = true;
+            StringAssert.DoesNotContain("--video-auto-orient", BuildArguments(options),
+                                        "the OAK-D command line must be untouched whatever the bool says");
+        }
+
+        [Test]
         public void AnInvalidRotationOrSizeIsDroppedNotForwarded() {
             // The sender's argparse accepts 0/90/180/270 only; anything else would make Python exit
             // before the camera opens.

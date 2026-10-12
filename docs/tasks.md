@@ -4,6 +4,59 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## F-57 - Auto orient: portrait / landscape / sideways from a LAN camera, webcam or video (2026-10-12)
+
+```text
+VERDICT: BUILT, TESTED ON RECORDINGS AND THROUGH UNITY PLAY MODE. NOT RUN ON A LIVE PHONE.
+```
+
+- [x] `frame_orientation.py`: four-rotation score (detector x pose x upright geometry), vote logic, size-change re-probe, stall self-check, long-axis focal length, detector-seeded crop. 55 Python assertions, 12 mutations caught.
+- [x] Sender flags `--auto-orient` / `--hfov-axis`; supervisor `--video-auto-orient` / `--video-hfov-axis`; Unity bool `videoAutoOrient` (default ON) -> `SidecarLaunchOptions.VideoAutoOrient`; live edits restart the sidecar like the other video fields. 3 C# tests.
+- [x] Decision measured on real clips (96/96) and end to end through the sender and through Unity Play mode.
+- [ ] Run it on the real phone via the LAN camera server and a real webcam, turning the device between portrait and landscape.
+- [ ] Set the phone's real FOV in `Video Horizontal Fov Degrees` (the default 60 across the long side is an assumption).
+- [ ] Optional: the same auto rotation for the OAK-D senders (they use the known mount, `--portrait`, today).
+
+---
+
+## F-56 - FluXY 1.4.1 local fixes (2026-10-11)
+
+- [x] `DisposeFramebuffer` releases `tileID`; readback textures only on demand, reused, destroyed; `GetCurrentLOD` null-camera crash; per-solver `_TileData` / `_TileID` binding and per-container property block. Patch: `docs/fluxy-1.4.1-local-fixes.patch`.
+- [x] Each defect reproduced on the original code and gone on the fixed code (leak counts, NRE, two-solver tile corruption).
+- [ ] Re-apply the patch if FluXY is updated or re-imported; consider reporting the defects upstream.
+
+---
+
+## F-55 - Fluid Disruption showcase (2026-10-11)
+
+```text
+VERDICT: BUILT, COMPILING, TESTED IN THE EDITOR. NOT RUN ON A PHYSICAL CAMERA.
+```
+
+- [x] Scene, FluXY baseline (seeded field + relaxation + flow sources), interaction targets, state machine A-F, movement estimator, demo programme, UI, debug view, shader, scene builder, 31 EditMode tests (`Showcase/FluidDisruption`).
+- [x] Tracking handled by the scene's `AppBootstrap`; shared source / status / adapter code extracted from Chromatic Rain instead of copied (`ShowcaseTrackingSource`, `ITrackingTuning`, `ShowcaseBuilderUtil`); the 28 Chromatic Rain tests still pass.
+- [ ] DECISION: a Launcher row (and Build Settings registration). The one-person column is full (10-row cap pinned by `SceneLauncherF35Tests.EveryColumnFitsTheNumberKeyShortcut`); not done on purpose.
+- [x] Verified in Play mode (see `ai_handoff.md` F-55): calm baseline from frame 1, hand independence, torso travel, stillness settles, hand-landmark loss and restore without a jump, stream cut and restore, person leaves and returns, quality levels, shader extras off, FluXY off, and the live path through the real sidecar on a recorded video.
+- [ ] Run on the physical OAK-D / camera. Tune the visuals on the venue screen.
+- [ ] Measure a player build (the numbers are the Editor).
+
+---
+
+## F-54 - Chromatic Rain showcase (2026-10-11)
+
+```text
+VERDICT: BUILT, COMPILING, TESTED IN THE EDITOR. NOT RUN ON A PHYSICAL CAMERA.
+```
+
+- [x] Scene, shaders, silhouette, rain, FluXY layer, UI, debug view, simulated pose, scene builder, 28 EditMode tests (`Showcase/ChromaticRain`).
+- [x] Tracking handled by the scene's `AppBootstrap` (video / webcam / phone / OAK-D sources exactly as in `Bootstrap.unity`); the showcase only listens.
+- [x] Launcher row + ESC to menu + Build Settings registration (`SceneLauncher`, `SceneRegistrar`).
+- [x] Verified: bootstrap-launched video sidecar -> LIVE; Launcher round trip; port-in-use is reported, not fatal; stream loss fades the silhouette and stops the fluid targets; mirror flip; mutation-checked tests.
+- [ ] Run on the physical OAK-D / camera. Tune the visuals on the venue screen.
+- [ ] Measure a player build (the 4 ms figure is the Editor).
+
+---
+
 ## PER-PERSON FILTERS (F-33, 2026-09-17) — multi-person gets the measured single-person chain
 
 ```text

@@ -170,78 +170,6 @@ MonoBehaviour:
   mirrorLogToConsole: 1
   maxAvatarFileBytes: 268435456
   surviveSceneLoads: 1
-  useOakUdpTracking: 1
-  oakUdpPort: 8899
-  autoStartSidecar: 1
-  sidecarLockPort: 8897
-  sidecarSinglePersonSender: wholebody_udp_sender.py
-  sidecarMultiPersonSender: multiperson_udp_sender.py
-  sidecarMaxPoses: 3
-  sidecarShowPreview: 1
-  sidecarModelPathOverride: 
-  sidecarSinglePersonPortrait: 1
-  sidecarMultiPersonPortrait: 0
-  sidecarPortraitDirection: ccw
-  sidecarSubpixelBits: 3
-  sidecarMonoResolution: 800p
-  sidecarRgbIspScale: 1/1
-  useVideoSource: 0
-  useMediaPipeTracking: 1
-  trackFromVideo: 1
-  videoSource: http://localhost:7777/viewer?room=room-b3w653
-  lanCameraPin: 123456
-  videoLoop: 1
-  videoRotateDegrees: 0
-  videoFlipHorizontal: 0
-  videoCameraSize: {x: 1280, y: 720}
-  videoAssumeMeasuredDepth: 0
-  videoSubjectHeightMetres: 1.7
-  videoHorizontalFovDegrees: 60
-  videoClampDepth: 1
-  videoDepthRangeMetres: {x: 1.6, y: 4}
-  useKalidokitBody: 1
-  kalidokitBodyFlipQuat: 2
-  kalidokitBodyEulerSigns: {x: 1, y: 1, z: 1}
-  kalidokitBodyLerp: 0.5
-  kalidokitBodyMirror: 0
-  kalidokitBodyTorsoRoll: 1
-  kalidokitSpineBendScale: 1
-  kalidokitSpineBendBaselineTau: 8
-  kalidokitTorsoYawScale: 1
-  kalidokitBodyLegs: 1
-  kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
-  kalidokitFingerWeight: 1
-  poseInterpolationDelayMs: 40
-  kalidokitAimArms: 1
-  kalidokitDirectionTrace: 0
-  kalidokitDirectionTraceEveryFrames: 60
-  limbConfidenceThreshold: 0.3
-  useHumanizedSkeleton: 1
-  humanizedConfidenceFloor: 0.05
-  humanizedRecoverSeconds: 0.15
-  humanizeVelocity: 1
-  humanizeBoneLengths: 1
-  humanizeAngles: 1
-  useOperatingVolume: 1
-  volumeNearMetres: 1.35
-  volumeFarMetres: 4.5
-  volumeHoldSeconds: 0.75
-  volumeSettlePoses: 6
-  poseFlipX: 0
-  poseFlipY: 1
-  poseFlipZ: 0
-  cameraTiltDegrees: 6
-  useFaceTracking: 1
-  useHandTracking: 1
-  wristRotationWeight: 0
-  trackLegs: 1
-  trackPosition: 1
-  positionScale: 1
-  showDebugSkeleton: 1
-  debugSkeletonScale: 1.5
-  debugSkeletonOffset: {x: 1.4, y: 1, z: 0}
-  pipelineLogging: 0
-  pipelineLogDir: D:/Unity/viitorx-vrm-avtar-unity-base-project/Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/pipeline_logs
   poseModelFileName: pose_landmarker_heavy.bytes
   sampleVideoPath: C:/Unity/viitorx-vrm-avtar-unity-base-project/sampleVRMFiles/sample
     video.mp4
@@ -268,6 +196,79 @@ MonoBehaviour:
   sentisPersonCrop: 1
   sentisFilterBeta: 0.6
   sentisFilterMinCutoff: 1.5
+  showDebugSkeleton: 1
+  debugSkeletonScale: 1.5
+  debugSkeletonOffset: {x: 1.4, y: 1, z: 0}
+  pipelineLogging: 0
+  pipelineLogDir: D:/Unity/viitorx-vrm-avtar-unity-base-project/Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/pipeline_logs
+  useFaceTracking: 1
+  useHandTracking: 1
+  wristRotationWeight: 0
+  trackLegs: 1
+  trackPosition: 1
+  positionScale: 1
+  useHumanizedSkeleton: 1
+  humanizedConfidenceFloor: 0.05
+  humanizedRecoverSeconds: 0.15
+  humanizeVelocity: 1
+  humanizeBoneLengths: 1
+  humanizeAngles: 1
+  useKalidokitBody: 1
+  kalidokitBodyFlipQuat: 2
+  kalidokitBodyEulerSigns: {x: 1, y: 1, z: 1}
+  kalidokitBodyLerp: 0.5
+  kalidokitBodyMirror: 0
+  kalidokitBodyTorsoRoll: 1
+  kalidokitSpineBendScale: 1
+  kalidokitSpineBendBaselineTau: 8
+  kalidokitTorsoYawScale: 1
+  kalidokitBodyLegs: 1
+  kalidokitFingerCurlAxis: {x: 0, y: 0, z: -1}
+  kalidokitFingerWeight: 1
+  poseInterpolationDelayMs: 40
+  kalidokitAimArms: 1
+  kalidokitDirectionTrace: 0
+  kalidokitDirectionTraceEveryFrames: 60
+  limbConfidenceThreshold: 0.3
+  useOperatingVolume: 1
+  volumeNearMetres: 1.35
+  volumeFarMetres: 4.5
+  volumeHoldSeconds: 0.75
+  volumeSettlePoses: 6
+  poseFlipX: 0
+  poseFlipY: 1
+  poseFlipZ: 0
+  cameraTiltDegrees: 6
+  useOakUdpTracking: 1
+  oakUdpPort: 8899
+  autoStartSidecar: 1
+  sidecarLockPort: 8897
+  sidecarSinglePersonSender: wholebody_udp_sender.py
+  sidecarMultiPersonSender: multiperson_udp_sender.py
+  sidecarMaxPoses: 3
+  sidecarShowPreview: 1
+  sidecarModelPathOverride: 
+  sidecarSinglePersonPortrait: 1
+  sidecarMultiPersonPortrait: 0
+  sidecarPortraitDirection: ccw
+  sidecarSubpixelBits: 3
+  sidecarMonoResolution: 800p
+  sidecarRgbIspScale: 1/1
+  useVideoSource: 0
+  useMediaPipeTracking: 1
+  trackFromVideo: 1
+  videoSource: http://localhost:7777/viewer?room=123
+  lanCameraPin: 123456
+  videoLoop: 1
+  videoRotateDegrees: 0
+  videoFlipHorizontal: 0
+  videoCameraSize: {x: 1280, y: 720}
+  videoAssumeMeasuredDepth: 0
+  videoSubjectHeightMetres: 1.7
+  videoHorizontalFovDegrees: 60
+  videoClampDepth: 1
+  videoDepthRangeMetres: {x: 1.6, y: 4}
+  videoMaxPeople: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

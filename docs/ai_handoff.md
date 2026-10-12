@@ -1,7 +1,88 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-10-10 (F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
+Last updated: 2026-10-12 (F-57 / ADR-093: auto portrait / landscape / sideways for a LAN camera, webcam or video; F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## F-57 - AUTO ORIENT: portrait or landscape, upright or sideways, from a LAN camera / webcam / video (2026-10-12)
+
+Full record: [`tasks.md`](tasks.md) F-57, [`decisions.md`](decisions.md) **ADR-093**; sidecar side: `python-sidecar~/tools/video/frame_orientation.py`, README "Portrait or landscape" section.
+
+**The request.** The user is not on the OAK-D; the sources are the LAN camera server (a phone), a webcam and video files, and the first two can be portrait OR landscape (crowds need the wider landscape view). Landscape came out "weird". A recorded landscape clip tracks fine, so the causes found were: a sideways / upside-down delivered frame (a skeleton collapsed to 6 cm), the focal length being derived from the delivered WIDTH (a phone turned to portrait got a 1.78x shorter focal length than in landscape, which also moves the depth estimate against the 1.6-4.0 m clamp), and the single-person crop starting from a centred 3:4 box that covers only ~42% of a landscape frame.
+
+**What it is.** One Unity bool, `AppBootstrap > Video Test Source (F-49) > Video Auto Orient` (default ON). It sends `--video-auto-orient --video-hfov-axis long` through the supervisor to `video_udp_sender.py`:
+1. **Auto rotation.** At the start, on every frame-size change (a phone turned) and, slowly, while nothing is being emitted, the sidecar scores the four rotations (person detector x pose confidence x "body reads upright") on a few frames; 4 agreeing votes lock a rotation. `Video Rotate Degrees` is then only the starting guess and the fallback when nobody is in view for 4 s. Frames are not used while undecided.
+2. **One lens.** `Video Horizontal Fov Degrees` now means the FOV across the LONGER side, so one phone has one focal length in portrait and landscape.
+3. **Off-centre person.** The single-person path restarts a lost crop from the detector's most prominent person instead of the centred box.
+Off sends neither flag: the command line and behaviour are exactly the pre-F-57 ones. OAK-D senders are untouched (they keep `--portrait`).
+
+**Measured (RTX 3060, 2026-10-12, real recordings; nothing on a live phone):** the decision picked the right rotation in 96 of 96 runs (4 real clips x 24 start points x a random delivered rotation), 0 wrong, 0 time-outs, median 4-5 probe frames (max 34 where the person was out of shot). Through the real sender, a real portrait phone recording (720x1280): upright with auto off 1.85 m body / z pinned 1.60 (the clamp); delivered sideways with auto off: body 0.06 m (collapsed); with auto on and delivered upright, 90, 270 or 180: 1.645 m, z 2.48 m, identical to the centimetre in all four. A two-dancer landscape clip through the multi-person path: 2 people in every frame; the same clip delivered sideways (1080x1920) locks to rotate 270 and gives 1.451 m against 1.452 m upright (0.14 m without auto). Person at the right edge of a landscape frame: 41 lost frames at the start become 4. Through Unity itself (Play, `ChromaticRain_Showcase`, a sideways clip): the launcher sent the two flags, the status read `LIVE (VIDEO ph_cw90.mp4) - person tracked` and the silhouette stood upright. Tests: 55 new Python assertions (12 deliberate mutations, all caught; two weak spots found and fixed), all 8 sidecar test files pass (55 new + 157 / 73 / 78 / 19 / 32 / 46 / 37), 3 new C# tests in `VideoSourceF49Tests` pass (run by reflection in the Editor: the class's other 4 tests need NUnit SetUp, which that harness does not run).
+
+**Know before changing it.** (a) It needs a person in view to decide; an empty room keeps `Video Rotate Degrees`. (b) Turning auto ON changes numbers for a portrait source: the root z and the clamp interplay move (1.60 pinned -> 2.48 real), and the skeleton is 1.64 m instead of 1.85 m. (c) On a two-person clip run through the SINGLE-person path, the seeded crop picks the nearer person and 2 of 590 frames mixed two people (0 of 592 before); use `Video Max People` >= 2 for a crowd. (d) The default FOV (60 deg across the long side) is an assumption: set the phone's real value (roughly 65-75). (e) The size-change re-probe was tested with a fake scorer, not through a live WebRTC resolution change.
+
+**NOT tested:** a real phone on the LAN camera server, a real webcam, a player build, an empty room end to end, a live portrait <-> landscape turn.
+
+**Files:** new `python-sidecar~/tools/video/frame_orientation.py`, `python-sidecar~/tests/test_frame_orientation.py`; changed `python-sidecar~/tools/video/video_udp_sender.py`, `sidecar_supervisor.py`, `tests/test_video_source.py`, `README.md`; Unity `Runtime/Bootstrap/AppBootstrap.cs`, `AppBootstrap.VideoSource.cs`, `Runtime/Tracking/OakD/SidecarProcessLauncher.cs`, `Tests/EditMode/VideoSourceF49Tests.cs`. The sidecar is its own repo: commit there too.
+
+**Next recommended:** try it on the real phone (turn it between portrait and landscape while a person stands in view and read the sidecar log for `orientation:` lines), then set the phone's real FOV.
+
+---
+
+## F-56 - FLUXY 1.4.1 LOCAL FIXES (leaks, a crash, shared global state) (2026-10-11)
+
+**What changed.** `Assets/FluXY/Scripts/{FluxySolver,FluxyContainer,FluxyStorage}.cs` (outside this repo; the folder is untracked in the outer repo). The exact diff is [`fluxy-1.4.1-local-fixes.patch`](fluxy-1.4.1-local-fixes.patch): after re-importing or updating FluXY, run `git apply -p2` from inside `Assets/FluXY` (or `patch -p2`) with it; checked against the original files. Full record: ADR-092, tasks F-56.
+
+1. **tileID leak.** `FluxyStorage.DisposeFramebuffer` released four render textures but not `tileID`. Now released (and the framebuffer's references cleared). Measured: 30 solver disable/enable cycles leaked 30 RenderTextures before, 0 after.
+2. **Readback textures.** `UpdateFramebuffer` (also run from `OnValidate`) created two new `Texture2D`s and two `Color[]` of full buffer size on every call, even with `readable = None`, and never destroyed the old ones. Now they exist only while `readable` asks for them, are reused while the size is unchanged, follow a runtime change of `readable`, and are destroyed (`DestroyImmediate` outside play mode). A readback result for a texture that was replaced is ignored. Measured: 50 `OnValidate` calls leaked 100 Texture2D before, 0 after; readback still delivers data (142 of 153 sample points carried dye). `OnValidate` on a disabled solver no longer creates buffers (they would never be disposed).
+3. **No-camera crash.** `GetCurrentLOD` dereferenced a null `Camera.main` when a `LODGroup` was present. Now it keeps the current level; it also guards `lodBias = 0` and caches `GetLODs()` instead of allocating it every frame, and `UpdateLOD` returns at once without a `LODGroup` (no `Camera.main` lookup per frame). Measured: a LODGroup solver with no MainCamera logged a NullReferenceException before, nothing after.
+4. **Shared global state.** `_TileData` was set only when the tile layout changed and `_TileID` once per solver, so with several solvers each one simulated and rendered with whichever solver set them last. Now every solver binds its own `_TileData` / `_TileID` before its splats, simulation passes and clears, and each container carries its own copies (and `_ContainerSize`) in its property block for rendering. Measured with two solvers of different aspect (16:9 and square): before, 65.8% of solver A's dye ended up outside its own tile; after, 0.00%, and B's dye centroid is at its target (0.50, 0.50).
+
+**Not changed, on purpose.** (5) `FLUXY_URP` in `fluxy.asmdef`: it IS defined with URP 17.3.0; a bare version in a Unity version define means "this version or newer". Rewriting it as `[7.3.0,)` made the define vanish (tried, reverted). (6) The third-party code style (`var`, `new()`, expression bodies) was left alone.
+
+**Performance.** Frame cost is Editor-bound and did not change measurably (CPU 5.6 ms, Fluid Disruption Quality, busy). The gains are memory (no leaked buffers or textures), no per-call 2 x 1M-element `Color[]` allocations in the Inspector, and one less `Camera.main` lookup per frame without a LODGroup.
+
+**Verified after the fix:** both showcases compile and run, 32 + 28 self tests and 15 launcher tests pass, no console errors.
+
+---
+
+## F-55 - FLUID DISRUPTION SHOWCASE: a calm FluXY liquid that a person's hands and torso disturb (2026-10-11)
+
+Full record: [`tasks.md`](tasks.md) F-55, [`decisions.md`](decisions.md) **ADR-091**. User guide: `Showcase/FluidDisruption/README.md`.
+
+**What it is.** `Showcase/FluidDisruption/Scenes/FluidDisruption_Showcase.unity`: a dark midnight screen with a luminous, layered liquid sheet (a real FluXY simulation, rendered by its own shader) that flows calmly by itself and is stirred by the tracked person's hands and torso. **Not a Launcher row (yet):** the one-person column is at the 10-row cap that `SceneLauncherF35Tests.EveryColumnFitsTheNumberKeyShortcut` pins, and an unlisted scene is `TrackingNeed.Unspecified`. It runs on its own (its bootstrap starts tracking); ESC-to-menu is wired for when it gets a row. Adding the row is a decision about that cap, so it was left alone, and the scene is not in Build Settings.
+
+**Same rule as F-54: tracking is the bootstrap's job.** The scene carries an `AppBootstrap` (same Inspector, incl. "Video Test Source (F-49)"); the showcase only listens through the existing `TrackedStage`. **No tracking code was written twice**: the live / simulated / auto selection, the truthful `LIVE` / `SIMULATED` status, the source label and the pose adapter were taken out of the Chromatic Rain controller into shared classes (`ShowcaseTrackingSource`, `ITrackingTuning`, `ShowcaseBuilderUtil` in the `ChromaticRain` assembly) and both showcases use them. `SimulatedPoseSource` got an opt-in external-control hook (default off) so the demo programme drives the same landmark format.
+
+**Calm baseline.** Not injected blobs (tried, degraded into flat soup with torn edges within 30 s). A procedural colour-band pattern is the container's `clearTexture` (frame 1 is already populated; `C` / the reset control returns to it) and a field `FluxyTarget` splats the same pattern over the whole area ten times a second with a small weight, so the dye is always pulled back toward it: recognisable palette, settles after a disturbance, never cleared. Five flow targets (wide bands, alternating directions) bend it into waves. The baseline never reads tracking.
+
+**Interaction.** `MovementImpulseEstimator` (real dt, dead zone, glitch rejection, start ramp) per point (left hand, right hand, torso) -> strength multiplies dye weight, velocity weight, velocity scale and curl turbulence of three pooled `FluxyTarget`s that splat only by distance travelled. A point without a measured landmark has its target disabled in place; re-enabling re-seeds FluXY's old position (no jump). State A-F in `FluidDisruptionStateController`; entering / leaving only moves an eased gate.
+
+**Verified (Editor, RTX 3060, 1920x1080, 2026-10-11):** 32 EditMode tests (5 deliberate mutations, 2 rounds, each caught, then reverted; two weak spots found by that and fixed); compiles with 0 errors / 0 warnings; Play-mode matrix on the demo programme (calm, appear, torso travel, left hand slow, right hand fast, both hands, converge, stillness, hand-landmark loss and restore, stream cut and restore, disappear / reappear): no target ever enabled without a valid sample; a lost hand's track stops 2 frames after its landmark goes and restarts with a 0.006 m placement and no kick; a stream cut turns every target off within 2 frames and reaches Lost, the fluid keeps evolving; Calm keeps the gate closed. **Live path with the project's real sidecar on `Assets/Games/video/147_1080p.mp4` (the F-49 video test source, status `LIVE (VIDEO 147_1080p.mp4)`):** person tracked in 100% of frames, both hands 98%, torso inside the view 100%; with mirror on the left hand is left of the right 74% of the time and 5% with it off; the debug rings (the actual FluXY targets) sit on the tracked points. Performance (FrameTimingManager): Quality (512 x2) busy 1.41 ms GPU, 5.2 ms wall; Performance (256 x1) 1.57 ms GPU; shader extras off 1.15 ms; FluXY off 0.84 ms (the Editor's own floor); 5 ms CPU in every case is the Editor. Managed allocation is about 34 KB/frame with FluXY off, UI hidden or the bootstrap off alike, so it is Editor overhead; the showcase's own share is below the noise. **Never run on a physical OAK-D / camera. No player build was measured.**
+
+**Know before changing it.** FluXY's container mesh must be the one on the `MeshFilter`: a scene saved in the Editor can carry a stale 1 x 1 m mesh and the fluid then fills 1 m of the screen. `FluidDisruptionFluid` binds `container.containerMesh` explicitly and the builder saves no mesh. The dye buffer's alpha accumulates as alpha squared and stays tiny: thickness is the strongest dye channel. Dye dissipation is subtractive per channel, so a high value cuts thin fringes into torn edges; keep it low. FluXY rounds its resolution DOWN to a power of two. The sidecar sends NO pose for an empty room: use Source = Live for an unattended install.
+
+**Files:** new `Showcase/FluidDisruption/**`; new shared `Showcase/ChromaticRain/Scripts/{ShowcaseTrackingSource,ITrackingTuning}.cs` and `Editor/ShowcaseBuilderUtil.cs`; changed `ChromaticRainShowcase` (delegates to the shared source), `ChromaticRainSettings` (implements `ITrackingTuning`), `ShowcasePoseAdapter` / `ScreenSpaceMapper` (take the interface), `SimulatedPoseSource` (external control), `ChromaticRainSceneBuilder` (delegates to the shared helpers). Nothing outside `Showcase/` changed. New files need their `.meta` files committed. The 28 Chromatic Rain tests and the 15 `SceneLauncherF35Tests` still pass, and the Chromatic Rain scene was re-run in Play mode after the refactor.
+
+**Next recommended:** run it on the physical camera and tune `FluidDisruptionSettings` on the venue screen; measure a player build.
+
+---
+
+## F-54 - CHROMATIC RAIN SHOWCASE: a rain-and-fluid scene driven by the existing bootstrap (2026-10-11)
+
+Full record: [`tasks.md`](tasks.md) F-54, [`decisions.md`](decisions.md) **ADR-090**. User guide: `Showcase/ChromaticRain/README.md`.
+
+**What it is.** `Showcase/ChromaticRain/Scenes/ChromaticRain_Showcase.unity`: procedural multicolour rain, a human silhouette built from the tracked landmarks that blocks the rain, and a FluXY fluid layer stirred by the hands. It is a row in the Launcher (one-person column, built list updated by `Virtual Mirror > Register All Scenes in Build Settings`), and ESC returns to the menu.
+
+**Tracking is the bootstrap's job, not the scene's.** The scene carries an `AppBootstrap` component (its Inspector has the same "Tracking Source" and "Video Test Source (F-49)" sections as `Bootstrap.unity`). That component starts and supervises the sidecar, picks OAK-D / video file / webcam / phone / LAN camera, and restarts it when the video fields change. The showcase only LISTENS, through the existing `TrackedStage`, like every experience scene. Reached through `Bootstrap.unity` the scene's copy destroys itself (AppBootstrap is a singleton) and the real one keeps going. **To use a video:** select `Tracking (AppBootstrap)` in the scene, tick `Track From Video`, set `Video Source`, press Play. No tracking code was duplicated.
+
+**Verified (Editor, 2026-10-11):** the scene's own `AppBootstrap` launched the real supervised video sidecar and the showcase went `LIVE (VIDEO 147_1080p.mp4)`; Launcher -> scene -> Launcher round trip leaves exactly one `AppBootstrap` and no console errors; 28 showcase EditMode tests and the 15 `SceneLauncherF35Tests` pass; 1080p Editor frame time about 4 ms with the full effect (rain 3.5 ms, +silhouette 3.6, +FluXY 4.1). **Never run on a physical OAK-D / camera.**
+
+**Know before changing it.** The sidecar sends NO pose for an empty room, so `Source = Live` reads `NO SIGNAL` with nobody present and `Auto` falls back to the simulation (visibly) after 3 s; use `Live` for an unattended installation. FluXY rounds its resolution DOWN to a power of two. The showcase assembly references FluXY (`Assets/FluXY`, outside this repo): without it only the `ChromaticRain` assemblies fail to compile. The sim's "still/travel" debug key is `T` because `O` is the bootstrap's camera-orientation key.
+
+**Files:** new `Showcase/ChromaticRain/**` (scripts, 4 shaders, materials, settings, scene, editor builder, 28 tests, README); changed `Runtime/SkeletonShow/SceneLauncher.cs` (one catalogue row), `Editor/SceneRegistrar.cs` (also registers `Showcase/**/Scenes`). New files need their `.meta` files committed.
+
+**Next recommended:** run it on the physical camera and tune `ChromaticRainSettings` on the venue screen.
 
 ---
 
