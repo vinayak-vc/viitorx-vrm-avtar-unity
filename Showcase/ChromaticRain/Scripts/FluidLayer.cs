@@ -1,3 +1,7 @@
+using ShowcaseShared;
+
+using Joint = ShowcaseShared.Joint;
+
 using Fluxy;
 
 using UnityEngine;

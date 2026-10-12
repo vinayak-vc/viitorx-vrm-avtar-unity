@@ -1,3 +1,7 @@
+using ShowcaseShared;
+
+using Joint = ShowcaseShared.Joint;
+
 using NUnit.Framework;
 
 using UnityEngine;
@@ -1030,6 +1034,54 @@ namespace ChromaticRain.Tests {
         }
 
         [Test]
+        public void Loss_ALostWristTravelsWithItsElbowInsteadOfHangingInTheAir() {
+            // The model drops a wrist for a few frames when the hand crosses the body. The wrist used to stay where it was in
+            // the picture while the elbow moved on, stretching the forearm; it now keeps its last offset from the elbow.
+            Rig rig = new Rig();
+            rig.Run(2.2f);
+            Vector2 forearm = rig.Body.Position[Joint.LeftWrist] - rig.Body.Position[Joint.LeftElbow];
+            Vector2 elbowStart = rig.Body.Position[Joint.LeftElbow];
+            float elbowTravel = 0f;
+            float stretch = 0f;
+            for (int i = 0; i < 30; i++) {
+                rig.Sim.Tick(Dt);
+                rig.Sim.Frame.SetLandmark(Joint.LeftWrist, new PoseLandmark(Vector3.zero, 0f));
+                Vector3 origin = new Vector3(rig.Sim.OffsetX, SimulatedPoseSource.HipHeight, 0f);
+                rig.Pose.Fill(rig.Sim.Frame, origin, 1f, Dt);
+                rig.Left.Fill(rig.Sim.Hands, true, origin, 1f);
+                rig.Right.Fill(rig.Sim.Hands, false, origin, 1f);
+                rig.Adapter.Update(rig.Body, rig.Pose, rig.Left, rig.Right, null, true, Dt, rig.Settings, rig.Mapper);
+                elbowTravel = Mathf.Max(elbowTravel, (rig.Body.Position[Joint.LeftElbow] - elbowStart).magnitude);
+                Vector2 now = rig.Body.Position[Joint.LeftWrist] - rig.Body.Position[Joint.LeftElbow];
+                stretch = Mathf.Max(stretch, (now - forearm).magnitude);
+            }
+            Assert.Greater(elbowTravel, 0.04f, "the elbow moved while the wrist was lost, so the test says something: " + elbowTravel);
+            Assert.Less(stretch, 0.02f, "the forearm keeps its length and direction: " + stretch);
+        }
+
+        [Test]
+        public void CutOff_AnAnswerForTheLowerBodyOfAnEstimatedRootIsNeverDrawn() {
+            // The sidecar sends those joints absent below tier 0. A sender that does not (the model answers for the desk, at
+            // full confidence, on frames the picture cuts off) must not put hips and feet under an estimated root.
+            Rig rig = new Rig();
+            for (int i = 0; i < 75; i++) {
+                rig.Sim.Tick(Dt);
+                rig.Sim.Frame.SetAnchor(PoseAnchor.Shoulders);
+                Vector3 origin = new Vector3(rig.Sim.OffsetX, SimulatedPoseSource.HipHeight, 0f);
+                rig.Pose.Fill(rig.Sim.Frame, origin, 1f, Dt);
+                rig.Left.Fill(rig.Sim.Hands, true, origin, 1f);
+                rig.Right.Fill(rig.Sim.Hands, false, origin, 1f);
+                rig.Adapter.Update(rig.Body, rig.Pose, rig.Left, rig.Right, null, true, Dt, rig.Settings, rig.Mapper);
+            }
+            Assert.IsTrue(rig.Pose.Present[(int)JointId.LeftHip], "the simulated frame does carry hips");
+            Assert.IsTrue(rig.Body.RootEstimated);
+            Assert.IsTrue(rig.Body.CoreFresh);
+            for (int i = 0; i < BelowTheFrame.Length; i++) {
+                Assert.Less(rig.Body.Weight[BelowTheFrame[i]], 0.05f, "joint slot " + BelowTheFrame[i]);
+            }
+        }
+
+        [Test]
         public void CutOff_ABodyThatIsCutOffFromTheFirstFrameIsDrawn() {
             Rig rig = new Rig();
             RunCutOff(rig, PoseAnchor.Shoulders, false, 0.6f);
@@ -1084,19 +1136,31 @@ namespace ChromaticRain.Tests {
             SilhouetteSkin s = SilhouetteSkin.Anatomical();
             Assert.IsTrue(s.extendCutOffBody, "on by default: a person at a desk does not end at the waist");
             SilhouetteBuilder b = BuildFigure(CutOffFigure(true), s);
-            Assert.IsTrue(Inside(b, s, 0f, -0.8f), "below the pelvis, where there is no leg");
-            Assert.IsTrue(Inside(b, s, 0f, -1.6f), "and on down past the bottom of the view");
-            Assert.IsFalse(Inside(b, s, 0.5f, -1.2f), "but only as wide as the hips");
-            // No notch where the column meets the pelvis: the width through the junction is the width below it.
-            float below = RunWidth(b, s, 0f, -0.6f);
-            Assert.Greater(below, 0.28f, "a pelvis-wide column: " + below);
-            for (float y = 0f; y >= -0.30f; y -= 0.025f) {
-                Assert.GreaterOrEqual(RunWidth(b, s, 0f, y), below * 0.93f, "no pinch at y=" + y + " (the crotch is near -0.10)");
+            Assert.IsTrue(Inside(b, s, 0f, -0.30f), "below the pelvis, where there is no leg: the upper thighs");
+            Assert.IsFalse(Inside(b, s, 0f, -0.80f), "but only a body's length: not a pole through the screen");
+            Assert.IsFalse(Inside(b, s, 0f, -1.6f));
+            Assert.IsFalse(Inside(b, s, 0.5f, -0.2f), "and only as wide as the hips");
+            // No notch where the stub meets the pelvis: the width never grows going down, and does not dip at the junction.
+            float tip = RunWidth(b, s, 0f, -0.30f);
+            Assert.Greater(tip, 0.18f, "a hip-wide stub that narrows: " + tip);
+            for (float y = 0f; y >= -0.20f; y -= 0.025f) {
+                Assert.GreaterOrEqual(RunWidth(b, s, 0f, y), tip * 0.93f, "no pinch at y=" + y + " (the crotch is near -0.10)");
             }
+            Assert.Less(RunWidth(b, s, 0f, -0.36f), RunWidth(b, s, 0f, -0.05f), "it narrows toward its end");
             s.extendCutOffBody = false;
             SilhouetteBuilder bare = BuildFigure(CutOffFigure(true), s);
-            Assert.IsFalse(Inside(bare, s, 0f, -1.2f), "off: the torso ends at the pelvis");
+            Assert.IsFalse(Inside(bare, s, 0f, -0.30f), "off: the torso ends at the pelvis");
             Assert.IsTrue(Inside(bare, s, 0f, 0.25f), "...and is still there");
+        }
+
+        [Test]
+        public void CutOff_TheStubFollowsTheSkinsLengthAndTaper() {
+            SilhouetteSkin s = SilhouetteSkin.Anatomical();
+            s.cutOffExtensionMetres = 0.9f;
+            s.cutOffTaper = 1f;
+            SilhouetteBuilder b = BuildFigure(CutOffFigure(true), s);
+            Assert.IsTrue(Inside(b, s, 0f, -0.70f), "a longer stub");
+            Assert.AreEqual(RunWidth(b, s, 0f, -0.05f), RunWidth(b, s, 0f, -0.6f), 0.03f, "taper 1: a straight column");
         }
 
         [Test]
@@ -1113,11 +1177,11 @@ namespace ChromaticRain.Tests {
             body.RootEstimated = false;
             SilhouetteBuilder b = BuildFigure(body, s);
             Assert.IsTrue(Inside(b, s, 0f, 0.25f), "the torso is built from the hip joints that are there");
-            Assert.IsTrue(Inside(b, s, 0f, -1.6f), "and continues, because no leg is in the picture");
+            Assert.IsTrue(Inside(b, s, 0f, -0.35f), "and continues, because no leg is in the picture");
             body.Weight[Joint.LeftKnee] = 1f;
             body.Weight[Joint.LeftAnkle] = 1f;
             SilhouetteBuilder oneLeg = BuildFigure(body, s);
-            Assert.IsFalse(Inside(oneLeg, s, 0f, -1.6f), "one leg is back: not cut off");
+            Assert.IsFalse(Inside(oneLeg, s, 0.07f, -0.38f), "one leg is back: not cut off, so no stub on the other side");
         }
 
         [Test]

@@ -1,3 +1,7 @@
+using ShowcaseShared;
+
+using Joint = ShowcaseShared.Joint;
+
 using UnityEngine;
 
 namespace ChromaticRain {
@@ -45,10 +49,6 @@ namespace ChromaticRain {
 
         /// <summary>A leg joint below this weight is not in the picture.</summary>
         private const float LegAbsentWeight = 0.05f;
-
-        /// <summary>How far below the hips a cut-off body is continued, view metres: past the bottom of any view
-        /// (the default one is 2.8 m tall and the hips sit near its middle).</summary>
-        private const float CutOffExtensionMetres = 3.0f;
 
         /// <summary>Capsules per limb segment: more is smoother, and the budget is <see cref="MaxCaps"/>.</summary>
         private const int StrokeSteps = 4;
@@ -170,10 +170,14 @@ namespace ChromaticRain {
             AddTrapezoid(chestBase, chestTop, chestBaseHalf, chestHalf, rounding, weight);
             AddTrapezoid(crotch, pelvisTop, pelvisHalf, pelvisTopHalf, rounding, weight);
             if (extendBelow) {
-                // A straight column, as wide as the hips, from below the screen up into the pelvis. It OVERLAPS the pelvis by
-                // more than the corner rounding, so the rounded corners of the two shapes do not meet in a notch.
+                // The upper thighs, a body-length stub as wide as the hips at the top, narrowing toward its end: the person
+                // reads as sitting out of shot, not as a pole through the screen (a 3 m column was reported as "a long
+                // waist", 2026-10-12). It OVERLAPS the pelvis by more than the corner rounding, so the rounded corners of the
+                // two shapes do not meet in a notch.
                 Vector2 columnTop = crotch + up * Mathf.Min(0.12f * ws, 0.5f * pelvisLength);
-                AddTrapezoid(hipMid - up * CutOffExtensionMetres, columnTop, pelvisHalf, pelvisHalf, rounding, weight);
+                float stubLength = Mathf.Max(0.05f, s.cutOffExtensionMetres) * ws;
+                float stubHalf = pelvisHalf * Mathf.Clamp(s.cutOffTaper, 0.2f, 1f);
+                AddTrapezoid(hipMid - up * stubLength, columnTop, stubHalf, pelvisHalf, rounding, weight);
             }
         }
 

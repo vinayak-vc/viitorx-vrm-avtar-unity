@@ -1,6 +1,6 @@
 using System;
 
-using ChromaticRain;
+using ShowcaseShared;
 
 using UnityEngine;
 

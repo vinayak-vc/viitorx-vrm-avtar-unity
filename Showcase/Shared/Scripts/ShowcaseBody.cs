@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace ChromaticRain {
+namespace ShowcaseShared {
     /// <summary>
     /// The tracked body in VIEW space: metres from the centre of the screen, X right, Y up.
     /// Smoothed, with a per-joint weight that already includes the grace period and fade-out for

@@ -5,7 +5,7 @@
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
         "FluidDisruption",
-        "ChromaticRain",
+        "Showcase.Shared",
         "VirtualMirror.Core",
         "VirtualMirror.SkeletonShow"
     ],

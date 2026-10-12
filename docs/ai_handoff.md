@@ -1,7 +1,93 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-10-12 (F-60 / ADR-096: a body the camera cuts off, hips then shoulders then nose; F-59 / ADR-095: Chromatic Rain silhouette rebuilt, skins; F-58 / ADR-094: Chromatic Rain shows several people; F-57 / ADR-093: auto portrait / landscape / sideways for a LAN camera, webcam or video; F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
+Last updated: 2026-10-12 (F-62 / ADR-098: several people in Fluid Disruption, one shared people module; F-61 / ADR-097: seated person, no vertical drift, no pole; F-60 / ADR-096: a body the camera cuts off, hips then shoulders then nose; F-59 / ADR-095: Chromatic Rain silhouette rebuilt, skins; F-58 / ADR-094: Chromatic Rain shows several people; F-57 / ADR-093: auto portrait / landscape / sideways for a LAN camera, webcam or video; F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## F-62 - SEVERAL PEOPLE IN FLUID DISRUPTION; ONE SHARED PEOPLE MODULE (2026-10-12)
+
+Full record: [`decisions.md`](decisions.md) **ADR-098**, [`tasks.md`](tasks.md) F-62, `Showcase/Shared/README.md`.
+
+**The report.** Multi tracking worked in Chromatic Rain and not in Fluid Disruption; make the logic modular and generic so a new feature in tracking
+shows up in every experience.
+
+**Was it shared?** Half. `ShowcaseTrackingSource` was shared and already published the whole crowd (`LiveBody(i)`), but what turns a crowd into people
+(a slot per sidecar track id, each person placed by their own sideways root, a person who leaves kept until the experience fades them) was written inside
+`ChromaticRainShowcase`. `FluidDisruptionController` read only `tracking.Tick(... out pose ...)`, i.e. the first person, with ONE adapter, ONE state
+controller, ONE set of movement tracks and three FluXY targets. That was a known open follow-up of F-58.
+
+**What changed.** (1) New assembly `Showcase.Shared` (namespace `ShowcaseShared`, `Showcase/Shared/`): the pose path moved out of the `ChromaticRain`
+assembly, and `ShowcaseCrowd<T>` (+ `TrackedPerson`, `PersonSlots`, `ICrowdStepper<T>`, `ICrowdSource`) was extracted from the Chromatic controller.
+`ShowcaseTrackingSource` implements `ICrowdSource`, so the crowd is tested with a fake source. (2) Chromatic Rain uses `ShowcaseCrowd<ShowcasePerson>`;
+behaviour is unchanged (its 63 tests pass untouched except the generic `PersonSlots.Acquire<T>`). (3) Fluid Disruption: `DisruptionPerson`,
+`DisruptionPersonStepper`, `ShowcaseCrowd<DisruptionPerson>`, a pooled `FluidDisruptionTargetDriver` (slot 0 uses the scene's three targets, the others are
+created at start and appended to `container.targets` by `RegisterPersonTargets`), `maxPeople` (default 4) in `FluidDisruptionSettings`, debug view and
+status line (`N PEOPLE DETECTED`). Fluid Disruption no longer references the `ChromaticRain` assembly at runtime.
+
+**Measured.** Live in the Editor on `Assets/Games/video/147_1080p.mp4` (two dancers): Fluid Disruption `tracked=2`, six targets injecting, two colour
+families in the screenshots; Chromatic Rain `tracked=2`. Tests: shared 15, Fluid Disruption 39, Chromatic Rain 63, project 393; 9 mutants of the crowd,
+the stepper, the person and the colour rule were each caught by a named test; a 10th (a redundant `LateralShift = 0` in the single-person branch) survived
+because nothing can make it matter, so it was deleted.
+
+**Know before changing it.** (a) `Joint` is now `ShowcaseShared.Joint` and `UnityEngine.Joint` makes it ambiguous in any file with `using UnityEngine;`: add
+`using Joint = ShowcaseShared.Joint;`. (b) A new showcase's per-person step belongs in a plain class implementing `ICrowdStepper<T>` (testable), not in the
+MonoBehaviour. (c) Slot 0 may be empty while slots 1 and 2 are in use (the single-person slot fades out first): use `crowd.Primary` / `PrimaryIndex`, never
+`At(0)`, for single-person displays. (d) A person is finished when the experience says so, not when the sidecar stops sending them: Fluid Disruption frees a slot
+when the state controller is back to Calm (`lostTimeout` + `lostHold`, about 3 s). (e) Only the first person has hands and the trust channel (the sidecar sends
+them for one person); everyone else is drawn from the body.
+
+**NOT TESTED / open:** a physical camera; three or more people in Fluid Disruption (two were measured; slots and targets for 3-6 exist and are unit-tested only
+through the crowd); Fluid Disruption's FluXY cost with 12 targets (not measured); the Launcher row is still the user's decision. **Seen, not investigated:** in the
+open Fluid Disruption scene (settings `FluidDisruptionSettings_Rainbow.asset`) the calm baseline fades to black in ~14 s, also with `maxPeople` 1 - so not caused
+by this change. Separately, the `ChromaticRain_Showcase.unity` diff on disk contains an embedded `FluidContainer` mesh (an Editor save; the known stale-mesh trap, handled in code); not checked in the Fluid Disruption scene.
+
+**Files:** new `Showcase/Shared/` (`Scripts/` the 6 moved files + `ShowcaseSharedTypes.cs`, `ShowcaseCrowd.cs`, `Showcase.Shared.asmdef`; `Tests/`; `README.md`), Fluid
+Disruption `Scripts/{DisruptionPerson,DisruptionPersonStepper}.cs` (new), `FluidDisruptionController/TargetDriver/Settings/DebugView/UI`, tests; Chromatic Rain
+`ChromaticRainShowcase.cs`, `ShowcasePerson.cs`, `ShowcaseTypes.cs`, usings in 6 files, the three asmdefs of each showcase. New files need their `.meta`; Unity will
+create the `Showcase.Shared*` asmdef metas on first import. Nothing is committed.
+
+---
+
+## F-61 - SEATED PERSON: NO VERTICAL DRIFT, NO POLE, A LOST LIMB KEEPS ITS SHAPE (2026-10-12)
+
+Full record: [`decisions.md`](decisions.md) **ADR-097**, [`tasks.md`](tasks.md) F-61. Follows F-60 below.
+
+**The report.** Two screen recordings (`Build/SR1.webm` portrait phone, `SR2.webm` landscape) of a seated user, `Video Partial Body` on: the figure went up and down
+the screen, the torso was "a long long waist", and a lost tracker should be predicted so the silhouette stays human.
+
+**Root cause, measured not guessed.** (1) The sidecar only zeroed joints OUTSIDE the image, so below tier 0 the model's hips, knees and feet (it answers for the
+desk, at confidence 0.3-1.0, on 3-100% of frames, ABOVE the hips) went on the wire: the README said they were absent, the code did not do it. (2) `SkeletonPose`
+took any foot as a floor and the floor falls in 50 ms, so one invented foot was adopted at once. (3) `TrackedStage.UpdateGrounding` chases `FloorY`, which is in WORLD
+coordinates, while it moves the world: with no foot to re-measure it the target falls by the offset's own step every frame and never arrives. Live (SR2 on the real
+scene): floor 1.50 m above the hips at 7.9 s, the ground offset -8 m by 15 s and +8 m by 20 s; after the fix it stays 0.00 for 40 s. (4) The cut-off torso was a
+3 m column below the hips (view height 2.8 m): from a hip at the middle of the screen it is a pole. NOTE: my first simulation of (3) had the y sign wrong (wire Y is
+DOWN; Unity's is up after flipY) and showed the same drift for the wrong reason; the live Editor measurement is what proved it.
+
+**The fix.** Sidecar `FramingTracker.mask_outside(..., tier)` zeroes hips, knees, ankles and feet (COCO-WholeBody 11-22) below tier 0. `SkeletonPose` floor: measured root
+only (`!RootEstimated`), the ankle on that side present, the foot >= `FloorMinFootBelowRootMetres` (0.30) below the root, held `FloorMinStreakFrames` (10) frames in a
+row; `FloorFresh` is true only on frames that re-measured it. `TrackedStage` grounds only while `FloorFresh`, target clamped to +-0.75 m. Chromatic Rain: the
+adapter drops the lower-body joints of an estimated root; a joint that drops out keeps its last offset from its parent (`FollowParents`: elbow<-shoulder, wrist<-elbow,
+hand end<-wrist, knee<-hip, ankle<-knee, heel and toe<-ankle) so a lost wrist travels with its elbow instead of hanging in the air; the cut-off continuation is a stub
+(skin `cutOffExtensionMetres` 0.45, `cutOffTaper` 0.6).
+
+**Measured after.** SR2 through the real sidecar: the hip joints were not present in Unity's pose on any sample (before: 10-100% of frames). Unity, real scene, SR2 for ~40 s: `HasFloor` never true, ground offset
+0.00, shoulder height within 0.48-0.63 (the arms), six screenshots over 20 s show the head at the same height and the torso ending in a stub. SR1: ground offset 0.00 on every
+sample. Full-body regression (147 dancers, 1934 wire frames): the floor is still found and moves by 0.18 m (was 0.14 m); the gated rules accept 1925 of 1934 frames.
+Tests: sidecar 78, project 393, Chromatic Rain 63, Fluid Disruption 33; 8 Unity mutants caught (one survivor found and fixed: the first stage test let the floor converge
+before the feet vanished, so the runaway never showed).
+
+**Know before changing it.** (a) Do not let a foot move the floor without the root being measured, the ankle present and the streak; the floor falls 12x faster than it
+rises. (b) Do not chase `FloorY` without `FloorFresh`: it is a world-space number. (c) Chromatic Rain's view maps the hip to the screen centre, so a long column below the
+hips is always a pole; keep the stub short. (d) Weights scale the shape's RADIUS in the mask shader (a weight of 0.45 is a limb 45% as thick), not its opacity, so a
+'prediction' that lowers weights thins limbs; on SR2 the arm weights were >= 0.9 on 98% of 438 frames so this was not the cause.
+
+**NOT TESTED / not done:** extrapolating the whole body when EVERY joint is lost (it holds the last pose and fades, as before); a physical webcam; a person who stands up
+from the seat while the legs stay out of the picture; a desk that hides the hips at tier 0 (the hips are still the model's guess; only the floor ignores them now).
+
+**Files:** sidecar `tools/video/framing.py`, `video_udp_sender.py`, `host_multiperson.py`, `tests/test_framing.py`, `README.md`; Unity `Runtime/SkeletonShow/SkeletonPose.cs`,
+`TrackedStage.cs`, `Showcase/ChromaticRain/Scripts/{ShowcasePoseAdapter,SilhouetteBuilder,SilhouetteSkin}.cs`, tests `PartialBodyF60Tests.cs`, `SkeletonShowF29Tests.cs`,
+`CrowdExperiencesF34Tests.cs` (two existing tests now wait for the floor streak), `ChromaticRainTests.cs`; `Showcase/ChromaticRain/README.md`. Nothing is committed.
 
 ---
 

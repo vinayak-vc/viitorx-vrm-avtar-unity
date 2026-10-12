@@ -4,6 +4,40 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## F-62 - Several people in Fluid Disruption, and the people logic moved into one shared module (2026-10-12)
+
+- [x] Why Fluid Disruption followed one person: the TRACKING SOURCE was shared (it already published the whole crowd) but the crowd
+  handling (a slot per track id, a placement per person, release) lived inside `ChromaticRainShowcase`, and Fluid Disruption read only
+  `stage.Pose`. Recorded as an open follow-up under F-58.
+- [x] New assembly `Showcase.Shared` (namespace `ShowcaseShared`): the pose path moved out of Chromatic Rain's assembly (`ShowcaseTrackingSource`,
+  `ShowcasePoseAdapter`, `ShowcaseBody`, `ScreenSpaceMapper`, `ITrackingTuning`, `SimulatedPoseSource`, `Joint`, `ShowcaseSource`, `SignalStatus`) and the crowd
+  logic extracted from the Chromatic controller into `ShowcaseCrowd<T>` + `TrackedPerson` + `PersonSlots` + `ICrowdStepper<T>` + `ICrowdSource`.
+  Fluid Disruption no longer references Chromatic Rain at runtime. `Showcase/Shared/README.md` says how to build a showcase on it.
+- [x] Fluid Disruption: `DisruptionPerson` (state controller + movement tracks), `DisruptionPersonStepper`, a pooled `FluidDisruptionTargetDriver`
+  (three targets per slot, created at start and added to the container), `maxPeople` in the settings, debug view and status text for several people.
+- [x] Tests: `ShowcaseCrowdTests` 15 (new assembly + runner), Fluid Disruption 39 (+6), Chromatic Rain 63 (unchanged), project 393; 9 mutants caught,
+  one redundant line found by a surviving mutant and removed. Live: two dancers -> two people, six targets (Fluid Disruption); two people (Chromatic Rain).
+- [ ] The Chromatic Rain controller still has its own `StepPerson` (it needs the skin and the silhouette builder); a third showcase should copy the
+  Fluid Disruption pattern (`DisruptionPersonStepper`), not that one.
+- [ ] Observation, NOT investigated: in the open Fluid Disruption scene with `FluidDisruptionSettings_Rainbow.asset` the calm baseline fades to black
+  within ~14 s, also with `maxPeople` 1 (so not caused by this change). Check before the venue.
+
+---
+
+## F-61 - Seated person: the figure no longer drifts up and down, the cut-off torso is not a pole, a lost limb keeps its shape (2026-10-12)
+
+- [x] Measured on two screen recordings of a seated user (`Build/SR1.webm`, `SR2.webm`) replayed through the sidecar and the real scene: the floor
+  estimate took invented feet and the grounding loop ran away (live: -8 m then +8 m). Fixed at three levels (ADR-097): sidecar masks the whole lower body
+  below tier 0; `SkeletonPose` takes a floor only from a measured root + ankle + 0.3 m below the root + 10 frames; `TrackedStage` grounds only while the
+  floor is re-measured, clamped to 0.75 m.
+- [x] Chromatic Rain: the cut-off torso is a tapered upper-thigh stub (skin `cutOffExtensionMetres` 0.45, `cutOffTaper` 0.6), not a 3 m column; the adapter
+  ignores the lower body of an estimated root and a joint that drops out keeps its last offset from its parent (a lost wrist travels with its elbow).
+- [x] Tests: sidecar `test_framing.py` 78; Unity `PartialBodyF60Tests` 23, Chromatic Rain 63; project 393 / Fluid Disruption 33; 8 Unity mutants caught.
+- [ ] Whole-body loss (every joint gone) still holds the last pose and fades; no extrapolation of the root. Not changed.
+- [ ] A desk painted inside the picture with the model's hips at tier 0 is still not detected; the floor gate removes its effect, not the hips.
+
+---
+
 ## F-60 - A body the camera cuts off: hips, then shoulders, then the nose (2026-10-12)
 
 - [x] Sidecar `framing.py`: per-person anchor tier (hips / shoulders / nose) decided every frame with hysteresis, learned shoulder-frame hip offset and body widths, depth cascade (height -> shoulders -> face -> 2.0 m), joints outside the image sent as absent. `--partial-body` (default on) / `--no-partial-body` in `video_udp_sender.py`, `host_multiperson.py` (per person), `sidecar_supervisor.py --video-partial-body`. Wire: additive `fr`.

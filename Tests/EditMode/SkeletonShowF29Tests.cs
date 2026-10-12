@@ -382,7 +382,9 @@ namespace VirtualMirror.Tests {
                 pose.Fill(attract.Tick(1f / 60f), Origin, 1f, 1f / 60f);
                 float head = pose.World[(int)JointId.Nose].y;
                 Assert.That(head, Is.InRange(1.4f, 1.9f), "head height must stay human");
-                Assert.IsTrue(pose.HasFloor);
+                if (i >= SkeletonPose.FloorMinStreakFrames) {
+                    Assert.IsTrue(pose.HasFloor, "a contact must hold for FloorMinStreakFrames frames before the floor exists");
+                }
             }
         }
 

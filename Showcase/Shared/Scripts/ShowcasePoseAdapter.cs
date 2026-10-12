@@ -3,7 +3,7 @@ using UnityEngine;
 using VirtualMirror.Core;
 using VirtualMirror.SkeletonShow;
 
-namespace ChromaticRain {
+namespace ShowcaseShared {
     /// <summary>
     /// Thin adapter between the EXISTING tracking data (a world-space <see cref="SkeletonPose"/>,
     /// the two <see cref="HandPose"/>s and the optional trust channel) and the showcase's view-space
@@ -23,6 +23,22 @@ namespace ChromaticRain {
             Joint.LeftHeel, Joint.RightHeel, Joint.LeftToe, Joint.RightToe
         };
 
+        // Each of these joints hangs off the one at the same index of FollowParent. A joint that drops out for a moment is
+        // kept at its LAST offset from its parent (so the bone keeps its length and direction) and travels with it, instead
+        // of being left where it was in the picture while the rest of the body moves away: a wrist frozen in the air with
+        // the elbow gone elsewhere is a stretched, inhuman arm.
+        private static readonly int[] FollowChild = {
+            Joint.LeftElbow, Joint.RightElbow, Joint.LeftWrist, Joint.RightWrist, Joint.LeftHandEnd, Joint.RightHandEnd,
+            Joint.LeftKnee, Joint.RightKnee, Joint.LeftAnkle, Joint.RightAnkle,
+            Joint.LeftHeel, Joint.RightHeel, Joint.LeftToe, Joint.RightToe
+        };
+
+        private static readonly int[] FollowParent = {
+            Joint.LeftShoulder, Joint.RightShoulder, Joint.LeftElbow, Joint.RightElbow, Joint.LeftWrist, Joint.RightWrist,
+            Joint.LeftHip, Joint.RightHip, Joint.LeftKnee, Joint.RightKnee,
+            Joint.LeftAnkle, Joint.RightAnkle, Joint.LeftAnkle, Joint.RightAnkle
+        };
+
         /// <summary>A target further than this from the smoothed joint in one frame is a jump, not
         /// a step, so the joint snaps instead of smearing across the screen.</summary>
         private const float JumpMetres = 1.5f;
@@ -34,6 +50,9 @@ namespace ChromaticRain {
         private readonly bool[] seen = new bool[Joint.SlotCount];
         private readonly Vector2[] rawTarget = new Vector2[Joint.SlotCount];
         private readonly float[] rawWeight = new float[Joint.SlotCount];
+        private readonly Vector2[] boneOffset = new Vector2[Joint.SlotCount];
+        private readonly bool[] hasBoneOffset = new bool[Joint.SlotCount];
+        private readonly bool[] followed = new bool[Joint.SlotCount];
         private bool snapPending = true;
         private Vector3 lastCentreWorld = new Vector3(0f, 0.95f, 0f);
         private bool hasCentre;
@@ -59,6 +78,8 @@ namespace ChromaticRain {
             for (int i = 0; i < Joint.SlotCount; i++) {
                 lostFor[i] = 0f;
                 seen[i] = false;
+                hasBoneOffset[i] = false;
+                followed[i] = false;
             }
             snapPending = true;
             hasCentre = false;
@@ -96,6 +117,12 @@ namespace ChromaticRain {
                     int j = BodyJoints[k];
                     Vector3 world = pose.World[j];
                     if (!pose.Present[j] || !IsFinite(world)) {
+                        continue;
+                    }
+                    // The root is an estimate, so the hips are not in the picture and neither is anything below them: an
+                    // answer for those joints is the model describing a desk or a wall. The sidecar sends them absent; a
+                    // sender that does not must not move the torso, the centre or the floor with them (measured 2026-10-12).
+                    if (estimated && IsLowerBody(j)) {
                         continue;
                     }
                     world.x += LateralShift;
@@ -160,6 +187,8 @@ namespace ChromaticRain {
                 }
             }
 
+            FollowParents(body);
+
             if (snapping) {
                 snapPending = false;
                 hasPreviousHip = false;
@@ -171,6 +200,23 @@ namespace ChromaticRain {
             body.RootEstimated = estimated;
 
             UpdateDerived(body, pose, dt, canMap && estimated, mapper.Map(centre, centre));
+        }
+
+        // Parents come before their children in FollowChild, so a lost elbow carries a lost wrist and hand with it.
+        private void FollowParents(ShowcaseBody body) {
+            for (int k = 0; k < FollowChild.Length; k++) {
+                int j = FollowChild[k];
+                int p = FollowParent[k];
+                bool parentMoves = body.Fresh[p] || followed[p];
+                followed[j] = false;
+                if (body.Fresh[j] && parentMoves) {
+                    boneOffset[j] = body.Position[j] - body.Position[p];
+                    hasBoneOffset[j] = true;
+                } else if (!body.Fresh[j] && seen[j] && hasBoneOffset[j] && parentMoves && body.Weight[j] > 0f) {
+                    body.Position[j] = body.Position[p] + boneOffset[j];
+                    followed[j] = true;
+                }
+            }
         }
 
         private void SetHand(int slot, HandPose hand, SkeletonPose pose, Vector3 centre,
@@ -240,6 +286,14 @@ namespace ChromaticRain {
                 default:
                     return 1f;
             }
+        }
+
+        private static bool IsLowerBody(int joint) {
+            return joint == Joint.LeftHip || joint == Joint.RightHip
+                   || joint == Joint.LeftKnee || joint == Joint.RightKnee
+                   || joint == Joint.LeftAnkle || joint == Joint.RightAnkle
+                   || joint == Joint.LeftHeel || joint == Joint.RightHeel
+                   || joint == Joint.LeftToe || joint == Joint.RightToe;
         }
 
         private static bool IsFinite(Vector3 v) {

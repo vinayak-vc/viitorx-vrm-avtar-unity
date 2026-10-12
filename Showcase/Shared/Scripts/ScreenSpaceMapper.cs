@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace ChromaticRain {
+namespace ShowcaseShared {
     /// <summary>
     /// World (scene metres, already mirrored, levelled and grounded by the existing tracking
     /// pipeline) to VIEW space (metres from the screen centre).

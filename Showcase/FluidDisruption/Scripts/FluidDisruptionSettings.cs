@@ -1,6 +1,6 @@
 using System;
 
-using ChromaticRain;
+using ShowcaseShared;
 
 using UnityEngine;
 
@@ -87,6 +87,12 @@ namespace FluidDisruption {
         public float edgeDrain = 0.9f;
         [Tooltip("Slow curl noise stirred in by the flow sources (0 = none).")]
         [Range(0f, 3f)] public float baselineSwirl = 0.3f;
+
+        [Header("People")]
+        [Tooltip("How many people can disturb the fluid at once (1 to 6). Each person gets their own state, movement tracks and "
+                 + "three targets, so this many people at most are followed. Set the bootstrap's Video Max People to match; "
+                 + "a single-person sender still shows one.")]
+        [Range(1, 6)] public int maxPeople = 4;
 
         [Header("Interaction: hands and torso")]
         public MovementTuning handMovement = new MovementTuning(0.12f, 1.6f, 5f, 14f, 0.08f);

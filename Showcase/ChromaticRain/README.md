@@ -55,9 +55,15 @@ A laptop webcam shows the head and shoulders, not the hips. With **Video Partial
 under Video Test Source) the sidecar decides every frame what anchors the skeleton - the hips while they are in the picture, then the
 shoulders, then the nose - so the showcase keeps working when the hips are not in the picture, and carries on if they are lost in the
 middle of a session. What you see: the silhouette has the head, neck, shoulders, chest and arms as measured, and the torso continues
-below the pelvis, as wide as the hips, past the bottom of the screen (the person does not end at the waist, the camera does). No leg is
-drawn: nothing measured is invented. The skin switch **Extend Cut Off Body** (in every skin of `ChromaticRainSkins.asset`) turns the
-continuation off, and then the torso ends at the pelvis. The debug view (key `D`) says "hips not in the picture: root estimated".
+a little below the pelvis (about an upper thigh, narrowing toward its end) so the person reads as sitting out of shot. No leg is
+drawn: nothing measured is invented. In every skin of `ChromaticRainSkins.asset`: **Extend Cut Off Body** turns the continuation off
+(the torso then ends at the pelvis), **Cut Off Extension Metres** (0.45) sets its length and **Cut Off Taper** (0.6) how much it
+narrows. It used to be a 3 m column and read as "a long waist" (ADR-097). The debug view (key `D`) says "hips not in the picture:
+root estimated".
+
+A seated person with a desk in the picture used to be carried up and down the screen: the model answers for feet that are not there,
+and the floor estimate followed them. A foot now counts as the floor only with a measured root, its ankle, 0.3 m below the root,
+for 10 frames in a row, and the figure holds still when no foot is being measured (ADR-097).
 
 The hip is then the sender's ESTIMATE (6-10 cm off in the measurements), so the operating volume judges it against **Volume Partial Near
 Metres** (0.35 m) instead of the stereo camera's 1.35 m; a measured hip is still held to 1.35 m. Set **Video Horizontal Fov Degrees** to the

@@ -7,7 +7,7 @@ using VirtualMirror.Core;
 using VirtualMirror.SkeletonShow;
 using VirtualMirror.Tracking.OakD;
 
-namespace ChromaticRain {
+namespace ShowcaseShared {
     /// <summary>One person of the live crowd, as a showcase needs them. Reused every frame.</summary>
     public sealed class ShowcaseLiveBody {
         /// <summary>The sidecar's track id: stable while the person is held, never reused.</summary>
@@ -37,7 +37,7 @@ namespace ChromaticRain {
     /// AppBootstrap owns the sidecar. It also decides what the status chip may truthfully say
     /// (<see cref="Signal"/>): LIVE only while fresh, accepted data arrives.
     /// </summary>
-    public sealed class ShowcaseTrackingSource {
+    public sealed class ShowcaseTrackingSource : ICrowdSource {
         private readonly string logTag;
         private readonly int udpPort;
         private readonly float poseInterpolationDelayMs;

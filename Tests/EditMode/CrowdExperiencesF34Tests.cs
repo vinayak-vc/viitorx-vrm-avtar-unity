@@ -101,7 +101,9 @@ namespace VirtualMirror.Tests {
         [Test]
         public void ResetHistory_ClearsSpeedButKeepsTheFloor() {
             SkeletonPose pose = new SkeletonPose();
-            pose.Fill(StandingFrame(-0.88f, -1.0f, 0f), Origin, 1f, 1f / 30f);
+            for (int i = 0; i < SkeletonPose.FloorMinStreakFrames; i++) {
+                pose.Fill(StandingFrame(-0.88f, -1.0f, 0f), Origin, 1f, 1f / 30f);
+            }
             pose.Fill(StandingFrame(-0.88f, -1.0f, 0.3f), Origin, 1f, 1f / 30f);
             Assert.Greater(pose.Speed[(int)JointId.LeftHip], 0f, "the body did move");
             Assert.IsTrue(pose.HasFloor);

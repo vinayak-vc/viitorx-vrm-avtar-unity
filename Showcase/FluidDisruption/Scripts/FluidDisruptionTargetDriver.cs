@@ -1,11 +1,14 @@
+using System.Collections.Generic;
+
 using Fluxy;
 
 using UnityEngine;
 
 namespace FluidDisruption {
     /// <summary>
-    /// Drives three pooled <see cref="FluxyTarget"/>s (left hand, right hand, torso) from the movement
-    /// estimators. Nothing is created per frame.
+    /// Drives the pooled <see cref="FluxyTarget"/>s of every person slot (left hand, right hand, torso, three per person) from
+    /// their movement estimators. Nothing is created per frame: slot 0 uses the three targets of the scene, the others are
+    /// created once, when the scene starts with room for more than one person.
     ///
     /// Why a still target injects nothing: every target splats only by distance travelled
     /// (<c>rateOverDistance</c>), and its velocity weight, velocity scale, density weight and turbulence
@@ -14,9 +17,13 @@ namespace FluidDisruption {
     ///
     /// Why a lost point cannot misbehave: a point without a valid sample has its target DISABLED where it
     /// is (never moved, never sent to the origin), and a re-enabled target re-seeds its old position in
-    /// <c>FluxyTarget.OnEnable</c>, so it starts again from the new position with no velocity jump.
+    /// <c>FluxyTarget.OnEnable</c>, so it starts again from the new position with no velocity jump. A slot nobody uses
+    /// is released the same way.
     /// </summary>
     public sealed class FluidDisruptionTargetDriver : MonoBehaviour {
+        /// <summary>Targets per person: left hand, right hand, torso.</summary>
+        public const int PointsPerPerson = 3;
+
         private sealed class PointState {
             public FluxyTarget Target;
             public Material Splat;
@@ -31,32 +38,80 @@ namespace FluidDisruption {
         [SerializeField] private Material splatMaterial;
         [SerializeField] private Texture noiseTexture;
 
-        private readonly PointState left = new PointState();
-        private readonly PointState right = new PointState();
-        private readonly PointState torso = new PointState();
+        private PointState[] points = new PointState[0];
+        private readonly List<FluxyTarget> created = new List<FluxyTarget>();
+        private int slotCount = 1;
 
         public bool IsReady { get; private set; }
 
-        /// <summary>Position and strength of a target for the debug view; false while it is not injecting.</summary>
+        /// <summary>How many person slots have targets.</summary>
+        public int SlotCount {
+            get {
+                return slotCount;
+            }
+        }
+
+        /// <summary>The targets this driver created for slots 1 and up. The container must be told about them: the ones in
+        /// the scene are already in its list.</summary>
+        public IReadOnlyList<FluxyTarget> CreatedTargets {
+            get {
+                return created;
+            }
+        }
+
+        /// <summary>Position and strength of a target for the debug view; false while it is not injecting. Index 0-2 are the
+        /// first slot's left hand, right hand and torso, 3-5 the second slot's, and so on.</summary>
         public bool TryGetTarget(int index, out Vector2 position, out float strength) {
-            PointState state = index == 0 ? left : (index == 1 ? right : torso);
+            if (index < 0 || index >= points.Length) {
+                position = Vector2.zero;
+                strength = 0f;
+                return false;
+            }
+            PointState state = points[index];
             position = state.Last;
             strength = state.Strength;
             return state.Active && state.Target != null && state.Target.enabled;
         }
 
-        public bool Initialize(FluidDisruptionSettings s, Texture splatTexture) {
+        public bool Initialize(FluidDisruptionSettings s, Texture splatTexture, int people) {
             if (leftHandTarget == null || rightHandTarget == null || torsoTarget == null || splatMaterial == null) {
                 Debug.LogError("[FluidDisruption] The target driver is missing a FluxyTarget or the splat "
                                + "material. Run Showcase > Fluid Disruption > Build Showcase Scene.", this);
                 return false;
             }
-            Bind(left, leftHandTarget, splatTexture, "FluidDisruption_LeftHandSplat (runtime)");
-            Bind(right, rightHandTarget, splatTexture, "FluidDisruption_RightHandSplat (runtime)");
-            Bind(torso, torsoTarget, splatTexture, "FluidDisruption_TorsoSplat (runtime)");
-            torso.Target.scale = new Vector2(s.torsoSize, s.torsoSize);
+            slotCount = Mathf.Clamp(people, 1, 6);
+            points = new PointState[slotCount * PointsPerPerson];
+            for (int slot = 0; slot < slotCount; slot++) {
+                for (int kind = 0; kind < PointsPerPerson; kind++) {
+                    PointState state = new PointState();
+                    FluxyTarget target = slot == 0 ? SceneTarget(kind) : CreateTarget(slot, kind);
+                    Bind(state, target, splatTexture, "FluidDisruption_" + PartName(kind) + "Splat" + slot + " (runtime)");
+                    if (kind == 2) {
+                        state.Target.scale = new Vector2(s.torsoSize, s.torsoSize);
+                    }
+                    points[slot * PointsPerPerson + kind] = state;
+                }
+            }
             IsReady = true;
             return true;
+        }
+
+        private FluxyTarget SceneTarget(int kind) {
+            return kind == 0 ? leftHandTarget : (kind == 1 ? rightHandTarget : torsoTarget);
+        }
+
+        private static string PartName(int kind) {
+            return kind == 0 ? "LeftHand" : (kind == 1 ? "RightHand" : "Torso");
+        }
+
+        // A target of another person: its own GameObject, because FluXY splats at the target's transform.
+        private FluxyTarget CreateTarget(int slot, int kind) {
+            GameObject host = new GameObject("FluidTarget_person" + slot + "_" + PartName(kind));
+            host.transform.SetParent(transform, false);
+            FluxyTarget target = host.AddComponent<FluxyTarget>();
+            target.enabled = false;
+            created.Add(target);
+            return target;
         }
 
         private void Bind(PointState state, FluxyTarget target, Texture splatTexture, string materialName) {
@@ -66,27 +121,47 @@ namespace FluidDisruption {
             state.Strength = 0f;
         }
 
-        /// <summary>Switch every target off (the fluid itself is untouched).</summary>
+        /// <summary>Switch every target of every slot off (the fluid itself is untouched).</summary>
         public void Release() {
-            Disable(left);
-            Disable(right);
-            Disable(torso);
+            for (int i = 0; i < points.Length; i++) {
+                Disable(points[i]);
+            }
         }
 
-        /// <summary>One frame, before FluXY's own LateUpdate.</summary>
-        public void Tick(FluidDisruptionStateController state, MovementImpulseEstimator leftHand,
+        /// <summary>Switch one slot's three targets off: nobody stands there.</summary>
+        public void ReleaseSlot(int slot) {
+            if (slot < 0 || slot >= slotCount) {
+                return;
+            }
+            for (int kind = 0; kind < PointsPerPerson; kind++) {
+                Disable(points[slot * PointsPerPerson + kind]);
+            }
+        }
+
+        /// <summary>One frame of one person's slot, before FluXY's own LateUpdate.</summary>
+        public void Tick(int slot, FluidDisruptionStateController state, MovementImpulseEstimator leftHand,
                          MovementImpulseEstimator rightHand, MovementImpulseEstimator torsoPoint,
                          FluidDisruptionSettings s) {
-            if (!IsReady) {
+            if (!IsReady || slot < 0 || slot >= slotCount) {
                 return;
             }
             float gate = state.Gate;
             float pulse = state.Pulse;
             bool open = gate > 0.01f;
+            int baseIndex = slot * PointsPerPerson;
 
-            DriveHand(left, leftHand, open, gate, s, s.leftHandColour);
-            DriveHand(right, rightHand, open, gate, s, s.rightHandColour);
-            DriveTorso(torso, torsoPoint, open || pulse > 0.001f, gate, pulse, s);
+            DriveHand(points[baseIndex], leftHand, open, gate, s, PersonColour(s.leftHandColour, slot));
+            DriveHand(points[baseIndex + 1], rightHand, open, gate, s, PersonColour(s.rightHandColour, slot));
+            DriveTorso(points[baseIndex + 2], torsoPoint, open || pulse > 0.001f, gate, pulse, s);
+        }
+
+        /// <summary>Each person's hands drift to the next colour of the palette, so two people do not paint the same colour.
+        /// Slot 0 is unchanged. Index 0 of the palette is the midnight background tone and is never used for dye.</summary>
+        public static int PersonColour(int colourIndex, int slot) {
+            if (slot <= 0) {
+                return colourIndex;
+            }
+            return 1 + (((colourIndex - 1 + slot) % 6) + 6) % 6;
         }
 
         private void DriveHand(PointState p, MovementImpulseEstimator est, bool open, float gate,
@@ -166,9 +241,9 @@ namespace FluidDisruption {
         }
 
         private void OnDestroy() {
-            FluidTargets.Destroy(left.Splat);
-            FluidTargets.Destroy(right.Splat);
-            FluidTargets.Destroy(torso.Splat);
+            for (int i = 0; i < points.Length; i++) {
+                FluidTargets.Destroy(points[i].Splat);
+            }
         }
     }
 }

@@ -3,6 +3,10 @@ using System;
 using UnityEngine;
 using UnityEngine.Rendering.Universal;
 
+using ShowcaseShared;
+
+using Joint = ShowcaseShared.Joint;
+
 using VirtualMirror.Core;
 using VirtualMirror.SkeletonShow;
 using VirtualMirror.Tracking.OakD;
@@ -21,7 +25,7 @@ namespace ChromaticRain {
     /// fluid targets. FluXY's solver runs afterwards in its own LateUpdate.
     /// </summary>
     [DefaultExecutionOrder(-50)]
-    public sealed class ChromaticRainShowcase : MonoBehaviour {
+    public sealed class ChromaticRainShowcase : MonoBehaviour, ICrowdStepper<ShowcasePerson> {
         [Header("Assets")]
         [SerializeField] private ChromaticRainSettings settings;
         [Tooltip("The silhouette skins: body proportions and look. Edit them live, or add new ones. B cycles while it runs.")]
@@ -58,6 +62,7 @@ namespace ChromaticRain {
 
         // One slot per person. Slot 0 is also what the single-person code (debug text, tests, the simulation) reads.
         private ShowcasePerson[] people = new ShowcasePerson[] { new ShowcasePerson() };
+        private ShowcaseCrowd<ShowcasePerson> crowd;
         private readonly ScreenSpaceMapper mapper = new ScreenSpaceMapper();
         private ShowcaseTrackingSource tracking;
         private int skinIndex;
@@ -304,6 +309,7 @@ namespace ChromaticRain {
             for (int i = 0; i < slots; i++) {
                 people[i] = new ShowcasePerson();
             }
+            crowd = new ShowcaseCrowd<ShowcasePerson>(people);
 
             tracking = new ShowcaseTrackingSource("ChromaticRain", udpPort, poseInterpolationDelayMs,
                                                   useHumanizedSkeleton, mirrorX, simulated);
@@ -383,7 +389,7 @@ namespace ChromaticRain {
             }
 
             // 2. Each person: adapter -> view-space body, state machine, silhouette shapes.
-            UpdatePeople(sourceFresh, pose, left, right, telemetry, dt);
+            crowd.Update(tracking, sourceFresh, pose, left, right, telemetry, dt, this);
 
             // 3. Mask (one texture for everybody), rain.
             silhouette.EnsureTexture(mapper.Aspect, settings.maskHeight);
@@ -407,69 +413,16 @@ namespace ChromaticRain {
             }
         }
 
-        /// <summary>
-        /// Who is on screen this frame, and one pipeline step for each of them. With a crowd upstream every tracked
-        /// person gets a slot keyed on the sidecar's track id (stable, never reused). With a single-person sender, or
-        /// the simulation, there is one person in the slot keyed <see cref="PersonSlots.SingleId"/>, exactly as before.
-        /// A person who disappears keeps their slot while their silhouette fades out, then the slot is freed.
-        /// </summary>
-        private void UpdatePeople(bool sourceFresh, SkeletonPose pose, HandPose left, HandPose right,
-                                  TrackingTelemetry telemetry, float dt) {
-            for (int i = 0; i < people.Length; i++) {
-                people[i].Present = false;
-            }
-
-            if (tracking.CrowdActive) {
-                for (int b = 0; b < tracking.LiveBodyCount; b++) {
-                    ShowcaseLiveBody live = tracking.LiveBody(b);
-                    int slot = PersonSlots.Acquire(people, live.Id);
-                    if (slot == PersonSlots.NoSlot) {
-                        continue;
-                    }
-                    ShowcasePerson person = people[slot];
-                    person.Present = true;
-                    // Hands and the trust channel exist for the first person only; the rest are drawn from the body.
-                    UpdateLateralShift(person, live);
-                    StepPerson(person, live.Pose, live.Primary ? left : null, live.Primary ? right : null,
-                               live.Primary ? telemetry : null, true, dt);
-                }
-            } else {
-                int slot = PersonSlots.Acquire(people, PersonSlots.SingleId);
-                if (slot != PersonSlots.NoSlot) {
-                    ShowcasePerson person = people[slot];
-                    person.Present = true;
-                    person.Adapter.LateralShift = 0f;
-                    StepPerson(person, pose, left, right, telemetry, sourceFresh, dt);
-                }
-            }
-
-            for (int i = 0; i < people.Length; i++) {
-                ShowcasePerson person = people[i];
-                if (!person.InUse) {
-                    continue;
-                }
-                if (!person.Present) {
-                    StepPerson(person, null, null, null, null, false, dt);
-                    if (person.Machine.Phase == ShowcasePhase.NoPerson) {
-                        person.Release();
-                    }
-                }
-            }
+        // Who is on screen, and one pipeline step for each of them, is the shared ShowcaseCrowd's job (a slot per sidecar track
+        // id, each person placed by their own sideways position, a person who disappears kept while they fade out). This class
+        // only says what ONE person's step is for Chromatic Rain.
+        void ICrowdStepper<ShowcasePerson>.StepPerson(ShowcasePerson person, SkeletonPose pose, HandPose left, HandPose right,
+                                                      TrackingTelemetry telemetry, bool fresh, float dt) {
+            StepPerson(person, pose, left, right, telemetry, fresh, dt);
         }
 
-        // Where the camera sees this person, sideways, against where the stage staged them. Updated only while both hips
-        // are measured (the centre is the mid-hip) or the sender says it anchored the root itself (F-60); otherwise the
-        // last good value stays, so a person whose hips are briefly lost does not slide across the screen.
-        private static void UpdateLateralShift(ShowcasePerson person, ShowcaseLiveBody live) {
-            if (!live.HasRoot
-                || (!live.Pose.RootEstimated && (!live.Pose.Present[Joint.LeftHip] || !live.Pose.Present[Joint.RightHip]))) {
-                return;
-            }
-            float shift = live.RootX - live.Pose.Centre.x;
-            if (float.IsNaN(shift) || float.IsInfinity(shift)) {
-                return;
-            }
-            person.Adapter.LateralShift = shift;
+        bool ICrowdStepper<ShowcasePerson>.IsFinished(ShowcasePerson person) {
+            return person.Machine.Phase == ShowcasePhase.NoPerson;
         }
 
         private void StepPerson(ShowcasePerson person, SkeletonPose pose, HandPose left, HandPose right,

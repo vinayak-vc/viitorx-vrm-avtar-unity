@@ -4,7 +4,7 @@ using UnityEngine;
 
 using VirtualMirror.Core;
 
-namespace ChromaticRain {
+namespace ShowcaseShared {
     public enum SimulatedArmPattern {
         /// <summary>Slow automatic mix of raised, alternating and resting arms.</summary>
         Auto,

@@ -1,8 +1,8 @@
 using System.Text;
 
-using ChromaticRain;
+using ShowcaseShared;
 
-using Joint = ChromaticRain.Joint;
+using Joint = ShowcaseShared.Joint;
 
 using UnityEngine;
 
@@ -49,19 +49,26 @@ namespace FluidDisruption {
             Color previous = GUI.color;
             GUI.color = new Color(0f, 0f, 0f, 0.55f);
             // Below the bootstrap's own status lights, which occupy the top-right corner.
-            GUI.Box(new Rect(Screen.width - 468f, PanelTop, 458f, 250f), GUIContent.none, boxStyle);
+            GUI.Box(new Rect(Screen.width - 468f, PanelTop, 458f, 266f), GUIContent.none, boxStyle);
             GUI.color = previous;
-            GUI.Label(new Rect(Screen.width - 460f, PanelTop + 4f, 446f, 244f), cached, style);
+            GUI.Label(new Rect(Screen.width - 460f, PanelTop + 4f, 446f, 260f), cached, style);
         }
 
         private void DrawPoints() {
             ScreenSpaceMapper mapper = controller.Mapper;
-            DrawPoint(controller.LeftHand, new Color(0.2f, 0.9f, 1f, 1f), mapper);
-            DrawPoint(controller.RightHand, new Color(0.7f, 0.5f, 1f, 1f), mapper);
-            DrawPoint(controller.Torso, new Color(1f, 0.85f, 0.3f, 1f), mapper);
+            for (int slot = 0; slot < controller.PersonSlotCount; slot++) {
+                DisruptionPerson person = controller.PersonAt(slot);
+                if (!person.InUse) {
+                    continue;
+                }
+                DrawPoint(person.Points.Left, new Color(0.2f, 0.9f, 1f, 1f), mapper);
+                DrawPoint(person.Points.Right, new Color(0.7f, 0.5f, 1f, 1f), mapper);
+                DrawPoint(person.Points.Torso, new Color(1f, 0.85f, 0.3f, 1f), mapper);
+            }
 
             // Where the FluXY targets really are (a ring), so a mapping error shows up as a gap.
-            for (int i = 0; i < 3; i++) {
+            int targetCount = controller.Targets != null ? controller.Targets.SlotCount * FluidDisruptionTargetDriver.PointsPerPerson : 0;
+            for (int i = 0; i < targetCount; i++) {
                 Vector2 p;
                 float strength;
                 if (controller.Targets != null && controller.Targets.TryGetTarget(i, out p, out strength)) {
@@ -131,6 +138,8 @@ namespace FluidDisruption {
                     .Append(string.IsNullOrEmpty(c.LiveSourceLabel) ? string.Empty : "  " + c.LiveSourceLabel)
                     .Append('\n');
             }
+            text.Append("PEOPLE  ").Append(c.TrackedPeopleCount).Append(" tracked of ").Append(c.PersonSlotCount)
+                .Append(" slots (first one in use is listed below)").Append('\n');
             text.Append("STATE   ").Append(c.Machine.State).Append("   gate ").Append(c.Machine.Gate.ToString("0.00"))
                 .Append("   pulse ").Append(c.Machine.Pulse.ToString("0.00")).Append('\n');
             AppendPoint("LEFT    ", c.LeftHand, Joint.LeftWrist, 0);
@@ -166,7 +175,9 @@ namespace FluidDisruption {
             }
             Vector2 target;
             float strength;
-            bool injecting = controller.Targets != null && controller.Targets.TryGetTarget(index, out target, out strength);
+            bool injecting = controller.Targets != null
+                             && controller.Targets.TryGetTarget(controller.PrimarySlot * FluidDisruptionTargetDriver.PointsPerPerson + index,
+                                                                out target, out strength);
             text.Append(label).Append(landmark);
             if (est.HasSample) {
                 text.Append("  pos ").Append(est.Position.x.ToString("0.00")).Append(',').Append(est.Position.y.ToString("0.00"))

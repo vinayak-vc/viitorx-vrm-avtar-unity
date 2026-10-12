@@ -1,8 +1,8 @@
-using ChromaticRain;
+using ShowcaseShared;
 
 using UnityEngine;
 
-using Joint = ChromaticRain.Joint;
+using Joint = ShowcaseShared.Joint;
 
 namespace FluidDisruption {
     /// <summary>

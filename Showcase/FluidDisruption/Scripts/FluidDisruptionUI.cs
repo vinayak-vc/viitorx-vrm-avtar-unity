@@ -1,4 +1,4 @@
-using ChromaticRain;
+using ShowcaseShared;
 
 using UnityEngine;
 
@@ -30,6 +30,7 @@ namespace FluidDisruption {
         private Color personColor = Color.gray;
         private SignalStatus lastSignal = (SignalStatus)(-1);
         private bool lastPerson;
+        private int lastPeople;
         private string lastLabel = string.Empty;
         private bool built;
 
@@ -69,14 +70,16 @@ namespace FluidDisruption {
         private void RefreshStatus() {
             SignalStatus signal = controller.Signal;
             bool person = controller.PersonTracked;
+            int people = controller.TrackedPeopleCount;
             string label = controller.LiveSourceLabel;
-            if (built && signal == lastSignal && person == lastPerson
+            if (built && signal == lastSignal && person == lastPerson && people == lastPeople
                 && string.Equals(label, lastLabel, System.StringComparison.Ordinal)) {
                 return;
             }
             built = true;
             lastSignal = signal;
             lastPerson = person;
+            lastPeople = people;
             lastLabel = label;
             string from = string.IsNullOrEmpty(label) ? string.Empty : " (" + label + ")";
             switch (signal) {
@@ -101,7 +104,7 @@ namespace FluidDisruption {
                     inputColor = new Color(0.62f, 0.68f, 0.8f, 1f);
                     break;
             }
-            personText = person ? PersonText : WaitingText;
+            personText = person ? (people > 1 ? people + " PEOPLE DETECTED" : PersonText) : WaitingText;
             personColor = person ? new Color(0.5f, 0.95f, 1f, 1f) : new Color(0.62f, 0.68f, 0.8f, 1f);
         }
 

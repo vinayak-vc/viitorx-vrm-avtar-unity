@@ -84,7 +84,9 @@ Scripts/  FluidDisruptionController      lifecycle, input choice, the order of a
           FluidDisruptionSettings        every tunable (ScriptableObject) - edit it live
           FluidDisruptionFluid           FluXY solver/container/material, quality, baseline pattern
           FluidBaselineSources           the calm baseline (field + flow targets)
-          FluidDisruptionTargetDriver    hands + torso targets (+ detection swirl)
+          FluidDisruptionTargetDriver    hands + torso targets (+ detection swirl), three per person slot
+          DisruptionPerson               what is kept PER PERSON: state controller + movement tracks (a TrackedPerson)
+          DisruptionPersonStepper        one person's frame: adapter, state, tracks (called by the shared crowd)
           FluidTargets                   neutral FluxyTarget configuration, soft splat shape
           MovementImpulseEstimator       speed -> 0..1 disturbance strength
           InteractionPointTracker        body -> left hand / right hand / torso tracks
@@ -97,11 +99,12 @@ Editor/   FluidDisruptionSceneBuilder    Showcase > Fluid Disruption > Build Sho
 Tests/    FluidDisruptionTests           Showcase > Fluid Disruption > Run Self Tests (report: Temp/FluidDisruptionTestResults.txt)
 ```
 
-Shared with the Chromatic Rain showcase (assembly `ChromaticRain`, not duplicated): `ShowcaseTrackingSource` (live /
-simulated / auto selection and the truthful status), `ShowcasePoseAdapter`, `ScreenSpaceMapper`, `ShowcaseBody`,
-`SimulatedPoseSource`, `ShowcasePerformanceProbe`, `ShowcaseBuilderUtil`, and the `ITrackingTuning` interface each
-showcase's settings implement. This package therefore depends on `Showcase/ChromaticRain` and on FluXY 1.4.1
-(`Assets/FluXY`, outside this repo, unmodified).
+Shared with the Chromatic Rain showcase (assembly `Showcase.Shared`, see `Showcase/Shared/README.md`; not duplicated):
+`ShowcaseTrackingSource` (live / simulated / auto selection and the truthful status), `ShowcaseCrowd` (who is on screen:
+a slot per person, each placed by their own root), `ShowcasePoseAdapter`, `ScreenSpaceMapper`, `ShowcaseBody`,
+`SimulatedPoseSource` and the `ITrackingTuning` interface each showcase's settings implement. This package depends on
+`Showcase.Shared` and on FluXY 1.4.1 (`Assets/FluXY`, outside this repo, unmodified); the scene builder also uses
+`ShowcaseBuilderUtil` from the Chromatic Rain Editor assembly.
 
 ## Tuning
 
@@ -115,6 +118,9 @@ the controller's `Quality`. FluXY rounds its resolution DOWN to a power of two. 
 
 - Never run on a physical OAK-D / camera. The live path was exercised with the real sidecar on a recorded video (see
   `docs/ai_handoff.md`).
-- One person (the existing single-person tracking path); the hands and torso of that person drive the fluid.
+- SEVERAL people (settings `Max People`, 1 to 6, default 4; set the bootstrap's `Video Max People` to match): each person has their
+  own state controller, movement tracks and three FluXY targets, placed where the camera sees them, with a hand colour that drifts
+  to the next palette colour per slot. Hands and the trust channel exist for the first person only, as in Chromatic Rain. Measured
+  live with two dancers on `147_1080p.mp4`: two people tracked, six targets injecting. Before 2026-10-12 only the first person was followed.
 - The detection swirl, hand wakes and torso push are tuned on the demo programme and one clip; adjust on the venue's screen.
 - Measured numbers are Editor numbers, not a player build.

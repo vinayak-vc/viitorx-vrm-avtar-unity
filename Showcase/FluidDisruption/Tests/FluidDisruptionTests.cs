@@ -1,4 +1,4 @@
-using ChromaticRain;
+using ShowcaseShared;
 
 using NUnit.Framework;
 
@@ -7,7 +7,7 @@ using UnityEngine;
 using VirtualMirror.Core;
 using VirtualMirror.SkeletonShow;
 
-using Joint = ChromaticRain.Joint;
+using Joint = ShowcaseShared.Joint;
 
 namespace FluidDisruption.Tests {
     /// <summary>
@@ -617,6 +617,184 @@ namespace FluidDisruption.Tests {
             Assert.AreEqual(0.25f, full, 0.03f, "shoulders and hips: the middle of the torso");
             Assert.AreEqual(full, cutOff, 0.03f, "the sender's estimated hip centre carries the hips' weight: no jump");
             Assert.AreEqual(0.5f, unflagged, 0.03f, "with no estimated root the point is the shoulders, as before");
+        }
+
+        // ------------------------------------------------------------------ several people (the shared crowd, Fluid Disruption's step)
+
+        private sealed class FakeCrowd : ICrowdSource {
+            public readonly System.Collections.Generic.List<ShowcaseLiveBody> Bodies = new System.Collections.Generic.List<ShowcaseLiveBody>();
+
+            public bool CrowdActive {
+                get {
+                    return true;
+                }
+            }
+
+            public int LiveBodyCount {
+                get {
+                    return Bodies.Count;
+                }
+            }
+
+            public ShowcaseLiveBody LiveBody(int index) {
+                return Bodies[index];
+            }
+        }
+
+        private static SkeletonPose StandingPose() {
+            PoseFrame frame = new PoseFrame();
+            for (int i = 0; i < PoseFrame.LandmarkCount; i++) {
+                frame.SetLandmark(i, new PoseLandmark(Vector3.zero, 0f));
+            }
+            frame.SetLandmark((int)JointId.LeftShoulder, new PoseLandmark(new Vector3(-0.18f, 0.5f, 0f), 0.9f));
+            frame.SetLandmark((int)JointId.RightShoulder, new PoseLandmark(new Vector3(0.18f, 0.5f, 0f), 0.9f));
+            frame.SetLandmark((int)JointId.LeftHip, new PoseLandmark(new Vector3(-0.09f, 0f, 0f), 0.9f));
+            frame.SetLandmark((int)JointId.RightHip, new PoseLandmark(new Vector3(0.09f, 0f, 0f), 0.9f));
+            frame.SetMeta(0.0, true);
+            frame.SetRootPosition(new Vector3(0f, 0f, 2f));
+            SkeletonPose pose = new SkeletonPose();
+            pose.Fill(frame, new Vector3(0f, 0.95f, 0f), 1f, Dt);
+            return pose;
+        }
+
+        private static ShowcaseLiveBody LiveAt(int id, float rootX) {
+            ShowcaseLiveBody body = new ShowcaseLiveBody();
+            body.Id = id;
+            body.Primary = id == 1;
+            body.HasRoot = true;
+            body.RootX = rootX;
+            body.Pose = StandingPose();
+            return body;
+        }
+
+        private sealed class CrowdRig {
+            public readonly FluidDisruptionSettings Settings = NewSettings();
+            public readonly ScreenSpaceMapper Mapper = new ScreenSpaceMapper();
+            public readonly FakeCrowd Source = new FakeCrowd();
+            public readonly ShowcaseCrowd<DisruptionPerson> Crowd;
+            public readonly DisruptionPersonStepper Stepper;
+
+            public CrowdRig(int slots) {
+                Mapper.Configure(Settings, 16f / 9f);
+                DisruptionPerson[] people = new DisruptionPerson[slots];
+                for (int i = 0; i < slots; i++) {
+                    people[i] = new DisruptionPerson();
+                }
+                Crowd = new ShowcaseCrowd<DisruptionPerson>(people);
+                Stepper = new DisruptionPersonStepper(Settings, Mapper);
+            }
+
+            public void Run(float seconds) {
+                int steps = Mathf.RoundToInt(seconds / Dt);
+                for (int i = 0; i < steps; i++) {
+                    for (int b = 0; b < Source.Bodies.Count; b++) {
+                        Source.Bodies[b].Pose = StandingPose();
+                    }
+                    Crowd.Update(Source, true, null, null, null, null, Dt, Stepper);
+                }
+            }
+
+            public DisruptionPerson Slot(int id) {
+                for (int i = 0; i < Crowd.Count; i++) {
+                    if (Crowd.At(i).InUse && Crowd.At(i).Id == id) {
+                        return Crowd.At(i);
+                    }
+                }
+                return null;
+            }
+        }
+
+        [Test]
+        public void People_TwoPeopleAreFollowedAtOnceEachWithTheirOwnState() {
+            CrowdRig rig = new CrowdRig(3);
+            rig.Source.Bodies.Add(LiveAt(1, -0.5f));
+            rig.Source.Bodies.Add(LiveAt(2, 0.6f));
+            rig.Run(1.0f);
+            Assert.IsNotNull(rig.Slot(1));
+            Assert.IsNotNull(rig.Slot(2));
+            Assert.AreNotSame(rig.Slot(1), rig.Slot(2));
+            Assert.IsTrue(rig.Slot(1).Tracked, "the first person is followed");
+            Assert.IsTrue(rig.Slot(2).Tracked, "and so is the second: Fluid Disruption used to follow only the first");
+            Assert.IsTrue(rig.Slot(2).Points.Torso.HasSample, "and their torso is being tracked for movement, on its own estimator");
+            Assert.AreNotSame(rig.Slot(1).Points, rig.Slot(2).Points);
+            Assert.Greater(Mathf.Abs(rig.Slot(1).Body.HipCentre.x - rig.Slot(2).Body.HipCentre.x), 0.2f, "each stands where the camera sees them");
+        }
+
+        [Test]
+        public void People_ALateComerStartsOnTheirOwnClockWithoutDisturbingTheFirst() {
+            CrowdRig rig = new CrowdRig(3);
+            rig.Source.Bodies.Add(LiveAt(1, 0f));
+            rig.Run(3.0f);
+            DisruptionState firstBefore = rig.Slot(1).Machine.State;
+            Assert.AreNotEqual(DisruptionState.Detected, firstBefore, "the first person is past their detection swirl");
+            Assert.AreEqual(1f, rig.Slot(1).Machine.Gate, 1e-3f);
+
+            rig.Source.Bodies.Add(LiveAt(2, 0.7f));
+            rig.Run(0.05f);
+            Assert.AreEqual(DisruptionState.Calm, rig.Slot(2).Machine.State, "not confirmed yet: the debounce is theirs alone");
+            rig.Run(0.5f);
+            Assert.AreEqual(DisruptionState.Detected, rig.Slot(2).Machine.State, "their own detection swirl starts");
+            Assert.AreEqual(1f, rig.Slot(1).Machine.Gate, 1e-3f, "and the first person's gate is untouched");
+            Assert.AreNotEqual(DisruptionState.Detected, rig.Slot(1).Machine.State);
+        }
+
+        [Test]
+        public void People_OnePersonLeavingFadesOnlyTheirOwnGateAndFreesOnlyTheirOwnSlot() {
+            CrowdRig rig = new CrowdRig(3);
+            rig.Source.Bodies.Add(LiveAt(1, -0.5f));
+            rig.Source.Bodies.Add(LiveAt(2, 0.6f));
+            rig.Run(3.0f);
+            rig.Source.Bodies.RemoveAt(0);
+            rig.Run(1.0f);
+            Assert.AreEqual(DisruptionState.Lost, rig.Slot(1).Machine.State, "gone for longer than the lost timeout");
+            Assert.AreEqual(0f, rig.Slot(1).Machine.Gate, 1e-3f, "their targets close");
+            Assert.AreEqual(1f, rig.Slot(2).Machine.Gate, 1e-3f, "the other person keeps disturbing the fluid");
+            Assert.IsTrue(rig.Slot(2).Tracked);
+
+            rig.Run(SettingsHold(rig) + 0.5f);
+            Assert.IsNull(rig.Slot(1), "settled back to calm: the slot is free for the next visitor");
+            Assert.IsNotNull(rig.Slot(2));
+        }
+
+        private static float SettingsHold(CrowdRig rig) {
+            return rig.Settings.lostHoldSeconds;
+        }
+
+        [Test]
+        public void People_APersonResetsToNothingWhenReleased() {
+            CrowdRig rig = new CrowdRig(2);
+            rig.Source.Bodies.Add(LiveAt(1, 0f));
+            rig.Run(2.0f);
+            DisruptionPerson person = rig.Slot(1);
+            Assert.IsTrue(person.Machine.PersonPresent);
+            person.Release();
+            Assert.IsFalse(person.InUse);
+            Assert.AreEqual(DisruptionState.Calm, person.Machine.State);
+            Assert.AreEqual(0f, person.Machine.Gate);
+            Assert.IsFalse(person.Points.Torso.HasSample, "no movement track survives into the next person");
+            Assert.IsFalse(person.Body.CoreFresh);
+        }
+
+        [Test]
+        public void People_EveryPersonsHandsDriftToTheirOwnColourSoTwoPeopleDoNotPaintTheSame() {
+            Assert.AreEqual(1, FluidDisruptionTargetDriver.PersonColour(1, 0), "the first person is unchanged");
+            Assert.AreEqual(4, FluidDisruptionTargetDriver.PersonColour(4, 0));
+            for (int hand = 1; hand <= 6; hand++) {
+                System.Collections.Generic.HashSet<int> seen = new System.Collections.Generic.HashSet<int>();
+                for (int slot = 0; slot < 6; slot++) {
+                    int c = FluidDisruptionTargetDriver.PersonColour(hand, slot);
+                    Assert.GreaterOrEqual(c, 1, "never the midnight background tone");
+                    Assert.LessOrEqual(c, 6);
+                    Assert.IsTrue(seen.Add(c), "six slots, six different colours (hand colour " + hand + ", slot " + slot + ")");
+                }
+            }
+        }
+
+        [Test]
+        public void People_TheSettingsAllowOneToSixPeople() {
+            FluidDisruptionSettings s = NewSettings();
+            Assert.GreaterOrEqual(s.maxPeople, 1);
+            Assert.LessOrEqual(s.maxPeople, 6);
         }
 
         [Test]

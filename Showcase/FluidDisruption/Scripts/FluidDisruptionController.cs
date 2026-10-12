@@ -1,6 +1,10 @@
-using ChromaticRain;
+using System.Collections.Generic;
 
-using Joint = ChromaticRain.Joint;
+using Fluxy;
+
+using ShowcaseShared;
+
+using Joint = ShowcaseShared.Joint;
 
 using UnityEngine;
 using UnityEngine.Rendering.Universal;
@@ -15,9 +19,9 @@ namespace FluidDisruption {
     /// each step is a small class of its own.
     ///
     /// Frame order: demo programme -> tracking source (shared <see cref="ShowcaseTrackingSource"/>: the
-    /// existing TrackedStage, or the simulated pose) -> pose adapter (view-space body) -> state
-    /// controller -> movement estimators -> FluXY targets and baseline sources. FluXY's own solver runs
-    /// afterwards, in its LateUpdate.
+    /// existing TrackedStage, or the simulated pose) -> for EVERY tracked person (the shared <see cref="ShowcaseCrowd{T}"/>):
+    /// pose adapter (view-space body) -> state controller -> movement estimators -> FluXY targets, then the baseline sources.
+    /// FluXY's own solver runs afterwards, in its LateUpdate.
     ///
     /// Tracking itself belongs to the scene's AppBootstrap (it owns the sidecar and the video, webcam,
     /// phone or OAK-D source); this class only listens, and opens no socket of its own.
@@ -56,11 +60,12 @@ namespace FluidDisruption {
         [SerializeField] private bool uiVisible = true;
         [SerializeField] private bool debugVisible;
 
-        private readonly ShowcaseBody body = new ShowcaseBody();
-        private readonly ShowcasePoseAdapter adapter = new ShowcasePoseAdapter();
+        // One slot per person (the settings' Max People). The first person in use is what the single-person code (debug text,
+        // tests, the simulation) reads.
+        private DisruptionPerson[] people = new DisruptionPerson[] { new DisruptionPerson() };
+        private ShowcaseCrowd<DisruptionPerson> crowd;
+        private DisruptionPersonStepper stepper;
         private readonly ScreenSpaceMapper mapper = new ScreenSpaceMapper();
-        private readonly FluidDisruptionStateController machine = new FluidDisruptionStateController();
-        private readonly InteractionPointTracker points = new InteractionPointTracker();
 
         private ShowcaseTrackingSource tracking;
         private bool ready;
@@ -81,7 +86,45 @@ namespace FluidDisruption {
 
         public ShowcaseBody Body {
             get {
-                return body;
+                return Primary.Body;
+            }
+        }
+
+        /// <summary>How many person slots the scene has (from the settings' Max People).</summary>
+        public int PersonSlotCount {
+            get {
+                return people.Length;
+            }
+        }
+
+        public DisruptionPerson PersonAt(int slot) {
+            return people[slot];
+        }
+
+        /// <summary>How many people are followed and measured this frame.</summary>
+        public int TrackedPeopleCount {
+            get {
+                int count = 0;
+                for (int i = 0; i < people.Length; i++) {
+                    if (people[i].Tracked) {
+                        count = count + 1;
+                    }
+                }
+                return count;
+            }
+        }
+
+        private DisruptionPerson Primary {
+            get {
+                return crowd != null ? crowd.Primary : people[0];
+            }
+        }
+
+        /// <summary>The slot of the person the single-person accessors (<see cref="Body"/>, <see cref="Machine"/>, the three
+        /// movement estimators) describe.</summary>
+        public int PrimarySlot {
+            get {
+                return crowd != null ? crowd.PrimaryIndex : 0;
             }
         }
 
@@ -93,25 +136,25 @@ namespace FluidDisruption {
 
         public FluidDisruptionStateController Machine {
             get {
-                return machine;
+                return Primary.Machine;
             }
         }
 
         public MovementImpulseEstimator LeftHand {
             get {
-                return points.Left;
+                return Primary.Points.Left;
             }
         }
 
         public MovementImpulseEstimator RightHand {
             get {
-                return points.Right;
+                return Primary.Points.Right;
             }
         }
 
         public MovementImpulseEstimator Torso {
             get {
-                return points.Torso;
+                return Primary.Points.Torso;
             }
         }
 
@@ -242,10 +285,10 @@ namespace FluidDisruption {
             }
         }
 
-        /// <summary>A person is being followed right now: confirmed, and a torso is measured this frame.</summary>
+        /// <summary>Somebody is being followed right now: confirmed, and a torso is measured this frame.</summary>
         public bool PersonTracked {
             get {
-                return machine.PersonPresent && body.CoreFresh;
+                return TrackedPeopleCount > 0;
             }
         }
 
@@ -266,6 +309,14 @@ namespace FluidDisruption {
                 return;
             }
 
+            int slots = Mathf.Clamp(settings.maxPeople, 1, 6);
+            people = new DisruptionPerson[slots];
+            for (int i = 0; i < slots; i++) {
+                people[i] = new DisruptionPerson();
+            }
+            crowd = new ShowcaseCrowd<DisruptionPerson>(people);
+            stepper = new DisruptionPersonStepper(settings, mapper);
+
             tracking = new ShowcaseTrackingSource("FluidDisruption", udpPort, poseInterpolationDelayMs,
                                                   useHumanizedSkeleton, mirrorX, simulated);
             tracking.Mode = source;
@@ -280,7 +331,7 @@ namespace FluidDisruption {
             bool fluidOk = fluid != null && fluid.Initialize(settings, quality, shaderEnhancements,
                                                              mapper.ViewWidth, mapper.ViewHeight);
             bool baselineOk = fluidOk && baseline != null && baseline.Initialize(settings, mapper.ViewWidth, mapper.ViewHeight, softSplat, fluid.BaselineField);
-            bool driverOk = fluidOk && targetDriver != null && targetDriver.Initialize(settings, softSplat);
+            bool driverOk = fluidOk && targetDriver != null && targetDriver.Initialize(settings, softSplat, slots);
             if (!fluidOk || !baselineOk || !driverOk) {
                 Debug.LogError("[FluidDisruption] The FluXY fluid could not start; see the errors above. "
                                + "Nothing is drawn.", this);
@@ -293,13 +344,12 @@ namespace FluidDisruption {
                     Debug.LogWarning("[FluidDisruption] FluXY configuration: " + problems, this);
                 }
             }
+            RegisterPersonTargets();
             if (!simulationOn) {
                 fluid.SetSimulationOn(false);
             }
 
-            adapter.Reset(body);
-            machine.Reset();
-            points.Reset();
+            crowd.ReleaseAll();
             demo.Restart();
             ready = true;
         }
@@ -360,37 +410,47 @@ namespace FluidDisruption {
                 ResetPipeline();
             }
 
-            // 3. Adapter -> view-space body.
-            adapter.Update(body, pose, left, right, telemetry, sourceFresh, dt, settings, mapper);
+            // 3. Each person: adapter -> view-space body, state, movement tracks. Who is a person, which slot they take and
+            // where they stand is the shared crowd's job, the same one every showcase uses.
+            crowd.Update(tracking, sourceFresh, pose, left, right, telemetry, dt, stepper);
 
-            // 4. State, on the same frame's answer (the movement strengths are last frame's).
-            bool trackedNow = sourceFresh && body.CoreFresh;
-            machine.Tick(trackedNow, points.Left.Intensity, points.Right.Intensity, points.Torso.Intensity, dt, settings);
-            if (machine.PersonAppeared) {
-                // A new person: place every joint exactly and start every movement track afresh, so
-                // nothing of whoever stood here before can become a velocity.
-                adapter.RequestSnap();
-                adapter.Update(body, pose, left, right, telemetry, sourceFresh, dt, settings, mapper);
-                points.Reset();
-            }
-
-            // 5. Movement strength of each interaction point, from valid samples only.
-            points.Update(body, trackedNow && machine.PersonPresent, dt, settings);
-
-            // 6. FluXY targets and baseline sources, before FluXY's own LateUpdate.
+            // 4. FluXY targets and baseline sources, before FluXY's own LateUpdate. A slot nobody uses has its targets off.
             if (simulationOn) {
                 baseline.Tick(dt, settings);
-                targetDriver.Tick(machine, points.Left, points.Right, points.Torso, settings);
+                for (int i = 0; i < people.Length; i++) {
+                    DisruptionPerson person = people[i];
+                    if (person.InUse) {
+                        targetDriver.Tick(i, person.Machine, person.Points.Left, person.Points.Right, person.Points.Torso, settings);
+                    } else {
+                        targetDriver.ReleaseSlot(i);
+                    }
+                }
                 fluid.ApplyLive(settings, quality, shaderEnhancements);
             }
+        }
+
+        // The targets the driver created for the second person and on are not in the container's list (the scene's own are).
+        private void RegisterPersonTargets() {
+            FluxyContainer container = fluid.Container;
+            IReadOnlyList<FluxyTarget> extra = targetDriver.CreatedTargets;
+            if (container == null || extra.Count == 0) {
+                return;
+            }
+            int existing = container.targets != null ? container.targets.Length : 0;
+            FluxyTarget[] all = new FluxyTarget[existing + extra.Count];
+            for (int i = 0; i < existing; i++) {
+                all[i] = container.targets[i];
+            }
+            for (int i = 0; i < extra.Count; i++) {
+                all[existing + i] = extra[i];
+            }
+            container.targets = all;
         }
 
         // Forget the previous person. The FLUID is deliberately not touched: a person entering or
         // leaving, or the source changing, never clears the solver.
         private void ResetPipeline() {
-            adapter.Reset(body);
-            machine.Reset();
-            points.Reset();
+            crowd.ReleaseAll();
             if (targetDriver != null) {
                 targetDriver.Release();
             }

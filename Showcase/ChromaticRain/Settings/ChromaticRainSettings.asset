@@ -26,7 +26,7 @@ MonoBehaviour:
   - {r: 1, g: 0.1, b: 0.72, a: 1}
   - {r: 1, g: 0.62, b: 0.12, a: 1}
   backgroundColor: {r: 0.004, g: 0.005, b: 0.01, a: 1}
-  silhouetteMode: 0
+  silhouetteMode: 1
   maskHeight: 540
   maxPeople: 4
   enterSeconds: 0.25

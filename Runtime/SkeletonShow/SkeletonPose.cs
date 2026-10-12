@@ -130,6 +130,26 @@ namespace VirtualMirror.SkeletonShow {
         public const float PlantedMaxSpeed = 0.35f;
 
         /// <summary>
+        /// A foot only counts as a floor contact when it is at least this far below the root. A standing person's feet are
+        /// 0.9 m below the mid-hip and a seated person's about 0.45 m; the model's invented "feet" for a body the frame
+        /// cuts off were measured (SR1/SR2 recordings, 2026-10-12) ABOVE the hips and within 0.2 m of them.
+        /// </summary>
+        public const float FloorMinFootBelowRootMetres = 0.30f;
+
+        /// <summary>
+        /// A floor contact must hold for this many consecutive frames (0.33 s at 30 Hz) before it moves the floor. The
+        /// floor FALLS in 50 ms, so one invented foot in one frame used to be adopted at once; the grounding loop then moved
+        /// the whole body to meet it (measured live: a floor 1.5 m above the hips and the figure carried 8 m off screen).
+        /// </summary>
+        public const int FloorMinStreakFrames = 10;
+
+        /// <summary>The ankle on the same side as each entry of <see cref="FootContacts"/> (heel, heel, toe, toe).</summary>
+        private static readonly int[] FootContactAnkles = { 27, 28, 27, 28 };
+
+        private int floorStreak;
+        private float rootWorldY;
+
+        /// <summary>
         /// F-34 IDENTITY GUARD. Above this apparent mid-hip speed the history is thrown away rather
         /// than differenced, because no person moves this fast: a sprinter's hip travels at about
         /// 8 m/s, so 12 m/s cannot be a body and must be the FRAME of reference having changed
@@ -165,6 +185,11 @@ namespace VirtualMirror.SkeletonShow {
         /// <summary>True once at least one foot contact point has been seen.</summary>
         public bool HasFloor;
 
+        /// <summary>True only on a frame in which a trustworthy foot contact refreshed <see cref="FloorY"/>. The floor is in
+        /// WORLD coordinates and the grounding loop moves the world, so a consumer that chases the floor must do it only while
+        /// the floor is being re-measured; chasing a stale floor never converges and carries the body away.</summary>
+        public bool FloorFresh;
+
         /// <summary>Per-foot planted state, indexed as <see cref="FootContacts"/>. What "reliable
         /// floor contact" actually amounts to in practice, exposed so a mode can use it and an
         /// operator can watch it be right or wrong.</summary>
@@ -196,6 +221,8 @@ namespace VirtualMirror.SkeletonShow {
                     Planted[k] = false;
                     k = k + 1;
                 }
+                FloorFresh = false;
+                floorStreak = 0;
                 return;
             }
             float dt = deltaSeconds > 1e-4f ? deltaSeconds : 1f / 60f;
@@ -251,22 +278,30 @@ namespace VirtualMirror.SkeletonShow {
             Centre = RootEstimated ? origin : 0.5f * (World[23] + World[24]);
             float mean = counted > 0 ? total / counted : 0f;
             Energy = Mathf.Clamp01(mean / FastSpeed);
+            rootWorldY = origin.y;
             UpdateFloor(dt);
         }
 
         // Track the floor from the foot contacts, then decide which feet are on it. See the constants
         // above for why this is asymmetric and for what the measured error actually is.
         private void UpdateFloor(float dt) {
+            // A foot is a contact only for a body whose root was MEASURED (an estimated root means the hips are not in the
+            // picture, and so are not the feet), whose ankle on that side is present, and that sits well below the root. Then
+            // it must hold for FloorMinStreakFrames frames in a row. See the two constants for the measurements.
             float lowest = float.MaxValue;
             int i = 0;
             while (i < FootContacts.Length) {
                 int joint = FootContacts[i];
-                if (Present[joint] && World[joint].y < lowest) {
+                if (!RootEstimated && Present[joint] && Present[FootContactAnkles[i]]
+                    && World[joint].y <= rootWorldY - FloorMinFootBelowRootMetres && World[joint].y < lowest) {
                     lowest = World[joint].y;
                 }
                 i = i + 1;
             }
-            if (lowest < float.MaxValue) {
+            floorStreak = lowest < float.MaxValue ? floorStreak + 1 : 0;
+            FloorFresh = false;
+            if (lowest < float.MaxValue && floorStreak >= FloorMinStreakFrames) {
+                FloorFresh = true;
                 if (!HasFloor) {
                     FloorY = lowest;
                     HasFloor = true;

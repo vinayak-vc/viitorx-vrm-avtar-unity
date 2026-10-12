@@ -173,6 +173,11 @@ namespace VirtualMirror.SkeletonShow {
         // See SkeletonShowBootstrap's original note: 1.5 s is more than 2x slower than the slowest
         // part of SkeletonPose's floor estimator, so the two loops cannot interact.
         private const float GroundingTau = 1.5f;
+
+        /// <summary>The most the figure may be slid to meet the floor. The measured corrections are 0.15 m (F-29) and, for a
+        /// seated subject whose feet are in the picture, about 0.5 m; anything beyond is a wrong floor, not a body that stands
+        /// 1 m off the ground.</summary>
+        private const float MaxGroundOffsetMetres = 0.75f;
         private float groundOffset;
         private bool hasGroundOffset;
 
@@ -473,10 +478,14 @@ namespace VirtualMirror.SkeletonShow {
                 groundOffset = Mathf.Lerp(groundOffset, 0f, 1f - Mathf.Exp(-dt / GroundingTau));
                 return;
             }
-            if (!Pose.HasFloor) {
+            // Only while the floor is being RE-MEASURED. FloorY is in world coordinates and this loop moves the world, so
+            // with no foot to refresh it the target (offset - FloorY) falls by the offset's own step every frame and the
+            // loop never arrives: measured live on 2026-10-12 it carried a seated body 8 m off the screen after one frame
+            // of invented feet. Without a fresh contact the offset simply holds.
+            if (!Pose.HasFloor || !Pose.FloorFresh) {
                 return;
             }
-            float target = groundOffset - Pose.FloorY;
+            float target = Mathf.Clamp(groundOffset - Pose.FloorY, -MaxGroundOffsetMetres, MaxGroundOffsetMetres);
             if (!hasGroundOffset) {
                 hasGroundOffset = true;
                 // SNAP ONLY WHILE THE BODY IS STILL ARRIVING.

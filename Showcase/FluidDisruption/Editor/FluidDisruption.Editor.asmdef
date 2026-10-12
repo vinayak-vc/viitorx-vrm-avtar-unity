@@ -4,6 +4,7 @@
     "references": [
         "FluidDisruption",
         "ChromaticRain",
+        "Showcase.Shared",
         "ChromaticRain.Editor",
         "VirtualMirror.App",
         "fluxy",

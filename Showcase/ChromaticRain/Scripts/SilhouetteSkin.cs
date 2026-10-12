@@ -61,10 +61,16 @@ namespace ChromaticRain {
         public float shoulderDrop = 0.010f;
         [Tooltip("Corner radius of the chest and pelvis: larger gives rounder shoulders and hips.")]
         public float torsoRounding = 0.070f;
-        [Tooltip("A person the camera cuts off at the waist or chest (a laptop webcam) has no legs to draw. On, the body "
-                 + "continues below the pelvis, as wide as the hips, to past the bottom of the screen, so they read as a "
-                 + "person sitting or standing out of shot. Off draws the torso only and ends it at the pelvis.")]
+        [Tooltip("A person the camera cuts off at the waist or chest (a seated person, a laptop webcam) has no legs to draw. "
+                 + "On, the body continues a short way below the pelvis, as wide as the hips, so they read as a person "
+                 + "sitting or standing out of shot. Off draws the torso only and ends it at the pelvis.")]
         public bool extendCutOffBody = true;
+        [Tooltip("How far below the hip joints that continuation reaches, in metres at normal size (about the length of an "
+                 + "upper thigh). Too long reads as a pole through the screen.")]
+        public float cutOffExtensionMetres = 0.45f;
+        [Tooltip("Width at the far end of the continuation as a fraction of the hip width: 1 is a straight column, "
+                 + "smaller narrows it toward the end.")]
+        [Range(0.2f, 1f)] public float cutOffTaper = 0.6f;
         [Tooltip("Upper arm half-width at the shoulder (the deltoid) and at the elbow.")]
         public float upperArmShoulderRadius = 0.056f;
         public float upperArmElbowRadius = 0.043f;

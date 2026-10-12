@@ -1,3 +1,5 @@
+using ShowcaseShared;
+
 using UnityEngine;
 
 namespace ChromaticRain {

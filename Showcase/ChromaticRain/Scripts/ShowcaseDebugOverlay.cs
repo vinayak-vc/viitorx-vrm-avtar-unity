@@ -1,5 +1,9 @@
 using System.Text;
 
+using ShowcaseShared;
+
+using Joint = ShowcaseShared.Joint;
+
 using UnityEngine;
 
 using VirtualMirror.SkeletonShow;

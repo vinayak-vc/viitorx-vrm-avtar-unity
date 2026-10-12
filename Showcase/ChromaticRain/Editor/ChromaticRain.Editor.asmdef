@@ -3,6 +3,7 @@
     "rootNamespace": "ChromaticRain.EditorTools",
     "references": [
         "ChromaticRain",
+        "Showcase.Shared",
         "VirtualMirror.App",
         "fluxy",
         "Unity.RenderPipelines.Core.Runtime",

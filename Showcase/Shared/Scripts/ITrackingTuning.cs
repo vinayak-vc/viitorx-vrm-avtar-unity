@@ -1,4 +1,4 @@
-namespace ChromaticRain {
+namespace ShowcaseShared {
     /// <summary>
     /// The tracking-side tunables that the shared pose path (<see cref="ShowcasePoseAdapter"/>,
     /// <see cref="ScreenSpaceMapper"/>, <see cref="ShowcaseTrackingSource"/>) reads. Each showcase keeps

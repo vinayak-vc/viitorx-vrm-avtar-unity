@@ -5,6 +5,7 @@
         "VirtualMirror.Core",
         "VirtualMirror.Tracking",
         "VirtualMirror.SkeletonShow",
+        "Showcase.Shared",
         "fluxy",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime"

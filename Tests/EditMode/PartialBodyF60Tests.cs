@@ -349,6 +349,175 @@ namespace VirtualMirror.Tests {
             }
         }
 
+        // ================================================================ the floor must not be made up
+        //
+        // Measured live on 2026-10-12 (two recordings of a seated person at a desk, phone camera): the model answered for
+        // feet that are not in the picture, a few frames at a time and ABOVE the hips; the floor FALLS in 50 ms so each was
+        // adopted, and the grounding loop - which chases a floor held in world coordinates - then moved the whole figure
+        // until it was 8 m off the screen. These tests are the regression for both halves of that.
+
+        private static readonly Vector3 FloorOrigin = new Vector3(0f, 0.95f, 0f);
+
+        // Y is up here, as in the pose the provider hands the stage (flipY already applied).
+        private static PoseFrame FloorFrame(float footY, bool ankles, PoseAnchor anchor) {
+            PoseFrame f = new PoseFrame();
+            for (int i = 0; i < PoseFrame.LandmarkCount; i++) {
+                f.SetLandmark(i, new PoseLandmark(Vector3.zero, 0f));
+            }
+            f.SetLandmark((int)JointId.LeftShoulder, new PoseLandmark(new Vector3(-0.18f, 0.5f, 0f), 0.9f));
+            f.SetLandmark((int)JointId.RightShoulder, new PoseLandmark(new Vector3(0.18f, 0.5f, 0f), 0.9f));
+            f.SetLandmark((int)JointId.LeftHip, new PoseLandmark(new Vector3(-0.09f, 0f, 0f), 0.9f));
+            f.SetLandmark((int)JointId.RightHip, new PoseLandmark(new Vector3(0.09f, 0f, 0f), 0.9f));
+            if (ankles) {
+                f.SetLandmark((int)JointId.LeftAnkle, new PoseLandmark(new Vector3(-0.1f, footY + 0.12f, 0f), 0.9f));
+                f.SetLandmark((int)JointId.RightAnkle, new PoseLandmark(new Vector3(0.1f, footY + 0.12f, 0f), 0.9f));
+            }
+            f.SetLandmark((int)JointId.LeftHeel, new PoseLandmark(new Vector3(-0.1f, footY, 0f), 0.9f));
+            f.SetLandmark((int)JointId.RightHeel, new PoseLandmark(new Vector3(0.1f, footY, 0f), 0.9f));
+            f.SetLandmark((int)JointId.LeftFootIndex, new PoseLandmark(new Vector3(-0.1f, footY, 0f), 0.9f));
+            f.SetLandmark((int)JointId.RightFootIndex, new PoseLandmark(new Vector3(0.1f, footY, 0f), 0.9f));
+            f.SetMeta(0.0, true);
+            f.SetRootPosition(new Vector3(0f, 0f, 2.0f));
+            f.SetAnchor(anchor);
+            return f;
+        }
+
+        private static SkeletonPose Filled(PoseFrame frame, int frames) {
+            SkeletonPose pose = new SkeletonPose();
+            for (int i = 0; i < frames; i++) {
+                pose.Fill(frame, FloorOrigin, 1f, Dt);
+            }
+            return pose;
+        }
+
+        [Test]
+        public void Floor_AStandingBodyStillFindsItsFloor() {
+            SkeletonPose pose = Filled(FloorFrame(-0.9f, true, PoseAnchor.Hips), 30);
+            Assert.IsTrue(pose.HasFloor);
+            Assert.IsTrue(pose.FloorFresh);
+            Assert.AreEqual(FloorOrigin.y - 0.9f, pose.FloorY, 0.02f);
+        }
+
+        [Test]
+        public void Floor_FeetOfABodyWhoseRootIsEstimatedAreNotAFloor() {
+            Assert.IsFalse(Filled(FloorFrame(-0.9f, true, PoseAnchor.Shoulders), 60).HasFloor,
+                "hips not in the picture, so the model's feet are a guess");
+            Assert.IsFalse(Filled(FloorFrame(-0.9f, true, PoseAnchor.Head), 60).HasFloor);
+        }
+
+        [Test]
+        public void Floor_AFootAboveOrBesideTheHipsIsNotAFloor() {
+            Assert.IsFalse(Filled(FloorFrame(0.55f, true, PoseAnchor.Hips), 60).HasFloor, "measured: invented feet 0.5 m ABOVE the hips");
+            Assert.IsFalse(Filled(FloorFrame(-0.15f, true, PoseAnchor.Hips), 60).HasFloor, "or within 0.2 m of them");
+            Assert.IsTrue(Filled(FloorFrame(-0.45f, true, PoseAnchor.Hips), 60).HasFloor, "a seated person's feet are 0.45 m down and are real");
+        }
+
+        [Test]
+        public void Floor_AFootWithoutItsAnkleIsNotAContact() {
+            Assert.IsFalse(Filled(FloorFrame(-0.9f, false, PoseAnchor.Hips), 60).HasFloor);
+        }
+
+        [Test]
+        public void Floor_NeedsTheContactToHoldForAFewFramesBeforeItMovesTheFloor() {
+            SkeletonPose pose = Filled(FloorFrame(-0.9f, true, PoseAnchor.Hips), SkeletonPose.FloorMinStreakFrames - 1);
+            Assert.IsFalse(pose.HasFloor, "one frame short: still no floor");
+            pose.Fill(FloorFrame(-0.9f, true, PoseAnchor.Hips), FloorOrigin, 1f, Dt);
+            Assert.IsTrue(pose.HasFloor);
+            // A foot that comes and goes never accumulates the streak.
+            SkeletonPose flicker = new SkeletonPose();
+            for (int i = 0; i < 60; i++) {
+                flicker.Fill(FloorFrame(-0.9f, i % 3 != 0, PoseAnchor.Hips), FloorOrigin, 1f, Dt);
+            }
+            Assert.IsFalse(flicker.HasFloor, "a contact present two frames in three is a flicker");
+        }
+
+        [Test]
+        public void Floor_FreshOnlyWhileAContactIsBeingMeasured() {
+            SkeletonPose pose = Filled(FloorFrame(-0.9f, true, PoseAnchor.Hips), 30);
+            Assert.IsTrue(pose.FloorFresh);
+            pose.Fill(FloorFrame(-0.9f, false, PoseAnchor.Hips), FloorOrigin, 1f, Dt);
+            Assert.IsFalse(pose.FloorFresh, "the floor is kept, but not re-measured");
+            Assert.IsTrue(pose.HasFloor);
+        }
+
+        // A standing person as the sidecar sends it (Y down), with feet this far below the hips; none when feetBelow <= 0.
+        private static string StandingJson(long seq, float feetBelow) {
+            CultureInfo ci = CultureInfo.InvariantCulture;
+            StringBuilder sb = new StringBuilder(2400);
+            double epoch = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+            sb.Append("{\"seq\":").Append(seq).Append(",\"sid\":\"f60-ground\",\"t\":").Append(epoch.ToString("F4", ci)).Append(",\"lm\":[");
+            for (int i = 0; i < PoseFrame.LandmarkCount; i++) {
+                float x = 0f;
+                float y = 0f;
+                float c = 0f;
+                if (i == 0) {
+                    x = 0f; y = -0.72f; c = 0.9f;
+                } else if (i == 11 || i == 12) {
+                    x = i == 11 ? -0.18f : 0.18f; y = -0.5f; c = 0.9f;
+                } else if (i == 23 || i == 24) {
+                    x = i == 23 ? -0.09f : 0.09f; y = 0f; c = 0.9f;
+                } else if (feetBelow > 0f && (i == 27 || i == 28)) {
+                    x = i == 27 ? -0.1f : 0.1f; y = feetBelow - 0.12f; c = 0.9f;
+                } else if (feetBelow > 0f && i >= 29 && i <= 32) {
+                    x = (i & 1) == 1 ? -0.1f : 0.1f; y = feetBelow; c = 0.9f;
+                }
+                if (i > 0) {
+                    sb.Append(',');
+                }
+                sb.Append('[').Append(x.ToString("F4", ci)).Append(',').Append(y.ToString("F4", ci)).Append(",0,")
+                  .Append(c.ToString("F2", ci)).Append(']');
+            }
+            sb.Append("],\"xyz\":[0,0,2000],\"src\":[");
+            for (int i = 0; i < PoseFrame.LandmarkCount; i++) {
+                if (i > 0) {
+                    sb.Append(',');
+                }
+                sb.Append('0');
+            }
+            sb.Append("]}");
+            return sb.ToString();
+        }
+
+        [Test]
+        public void Stage_TheFigureStaysPutWhenTheFeetLeaveThePicture() {
+            TrackedStage stage = new TrackedStage(new SilentLog(), TestPort + 2, 40f);
+            stage.Start(true, true, false);
+            UdpClient sender = new UdpClient();
+            try {
+                IPEndPoint target = new IPEndPoint(IPAddress.Loopback, TestPort + 2);
+                long seq = 0;
+                // Feet 0.6 m below the hips (a floor 0.35 m above the standing origin) for just long enough to be believed, then
+                // none at all. The grounding loop snaps to the floor on that first belief, which moves the world; if the floor
+                // is then chased without being re-measured it is a stale number in a world that has moved, and never arrives.
+                for (int i = 0; i < SkeletonPose.FloorMinStreakFrames + 1; i++) {
+                    seq = seq + 1;
+                    byte[] payload = Encoding.UTF8.GetBytes(StandingJson(seq, 0.6f));
+                    sender.Send(payload, payload.Length, target);
+                    Thread.Sleep(33);
+                    stage.Tick(Dt);
+                }
+                float settledAt = 0f;
+                for (int i = 0; i < 90; i++) {
+                    seq = seq + 1;
+                    byte[] payload = Encoding.UTF8.GetBytes(StandingJson(seq, 0f));
+                    sender.Send(payload, payload.Length, target);
+                    Thread.Sleep(33);
+                    stage.Tick(Dt);
+                    if (i == 30) {
+                        settledAt = stage.StagingOrigin().y;
+                    }
+                }
+                float end = stage.StagingOrigin().y;
+                Assert.IsTrue(stage.Pose.HasFloor, "the test is about a floor that exists and then is not re-measured");
+                Assert.IsFalse(stage.Pose.FloorFresh);
+                Assert.AreEqual(settledAt, end, 0.02f, "with no foot to refresh the floor the figure holds still (it used to drift away)");
+                Assert.LessOrEqual(Mathf.Abs(end - 0.95f), 0.75f + 1e-3f, "and never leaves the grounding band");
+            } finally {
+                sender.Close();
+                stage.Stop();
+            }
+        }
+
         private sealed class SilentLog : ILogService {
             public void Log(LogLevel level, string message) {
             }
