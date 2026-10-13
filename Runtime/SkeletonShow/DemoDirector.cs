@@ -219,7 +219,8 @@ namespace VirtualMirror.SkeletonShow {
             }
             SceneLauncher.TrackingNeed now = SceneLauncher.TrackingNeedFor(sequence[index - 1].Scene);
             SceneLauncher.TrackingNeed next = SceneLauncher.TrackingNeedFor(nextScene);
-            if (now == next || now == SceneLauncher.TrackingNeed.Unspecified
+            if (now == next || now == SceneLauncher.TrackingNeed.Unspecified || now == SceneLauncher.TrackingNeed.VisionOnly
+                || next == SceneLauncher.TrackingNeed.VisionOnly
                 || next == SceneLauncher.TrackingNeed.Unspecified) {
                 return 0f;
             }

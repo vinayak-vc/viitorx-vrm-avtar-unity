@@ -4634,3 +4634,109 @@ were migrated by hand. A partial class and an editor-side grouping change nothin
 **Honest limits.** Chromatic Rain's controller keeps its own per-person step (it needs the skin and the silhouette builder), explicitly implemented against the same interface. Hands and the trust channel exist for the first person only (the sidecar's limit). `Joint` collides with `UnityEngine.Joint` and needs an alias wherever UnityEngine is imported.
 
 **Do not.** Put slot, placement or release logic back into an experience. Read `TrackedStage.Pose` for "the person" in a showcase. Add an experience type to `Showcase.Shared`. Reference one showcase's assembly from another. Add a showcase without a plain-class stepper and its own test of two people at once.
+
+
+## ADR-099 - Hands without a body are a separate sender with its own wire (port 8901); the networks are ONNX, the position is an estimate
+
+**Decision.** (1) A hands-only pipeline lives beside the body pipeline in `python-sidecar~/`: `hand_landmarker.py` (MediaPipe's palm detector + hand-landmark network as ONNX, run on the existing
+`onnxruntime-directml`), `hand_tracking.py` (ids, detect-then-track, assignment, smoothing, placement, fingers), `hand_geometry.py`, `hand_gestures.py`, `hand_wire.py`, `hand_overlay.py` at the sidecar
+root, the entry point `tools/hands/hands_udp_sender.py`, and `tools/model/fetch_hand_models.py`. (2) It speaks a NEW versioned message, `{ver:1, kind:"hands", ...}`, on UDP **8901**. The body sender's datagram
+(8899), `OakDUdpPoseProvider`, the VRM mirror and every scene are unchanged and unaware. (3) A frame with no hand is `n = 0`; a hand that is not there is not in the list; nothing is predicted past a HELD
+frame or two; `n` never exceeds `--max-hands`. (4) `pos` (a hand's position in metres) is an ESTIMATE from the hand's apparent size, the network's average-hand metric shape and an ASSUMED field of view, and is
+ABSENT with a `why` when the fit is refused. (5) No new pip package: the venv is unchanged.
+
+**Why.** The body pipeline cannot track a hand without a person: RTMW3D reads hands out of a crop cut around a detected body, and with no body there is no crop (`video_udp_sender` drops the frame; the OAK senders send
+nothing). A project that needs only hands (a desk camera, a kiosk, a gesture interface) could not use it. A separate sender with a separate wire leaves the measured body stack untouched and gives the next consumer a
+contract that is not shaped by the body's (hip-relative joints, `st`/`own`/`lat`). `pip install mediapipe` was rejected: it brings `opencv-contrib-python` next to the `opencv-python` every other sender uses, and the venv is
+deliberately small. The OpenCV Zoo ONNX conversions of the same Google models run on what is already installed.
+
+**Measured** (`docs/H01_HANDS_ONLY_2026-10-13.md` s.6; numbers from `tools/hands/hands_eval.py`, RTX 3060, a hard dancing clip cropped to the upper body): 431 of 435 frames had a hand; 6.7 ms a frame (palm detector
+5.0 ms, landmark network 2.5 ms); 30 msg/s with `bad=0` and `seq_gaps=0` through the sender and a receiver; 78 of 94 losses re-found with the same id; the 3D fit converged on 99 of 99 real detections. 207 assertions in
+five test files; 25 injected bugs, 25 caught (two survived the first round and got the tests that kill them). The depth fit recovers a known position exactly for a flat hand and within 3.1% (0.6 m) / 5.6% (0.25 m) for a
+hand tilted 60 degrees (weak perspective); a hand 20% bigger than the network's average reads 20% too near.
+
+**Honest limits.** NOT run on a live webcam, a phone or a LAN camera. `pos.Z` is NOT measured against a ruler: it scales with `--hfov` (assumed, default 60 degrees) and with the user's hand size (`--hand-scale`). The L/R
+label follows MediaPipe's mirrored-picture convention (`--sides auto` swaps it for an unmirrored picture); not checked against a known hand. Gesture and smoothing constants are unmeasured on real hands. When two hands
+cross, their crops can lock onto one hand: ids may swap or be re-issued (tested as an invariant, not as identity). A hand narrower than ~5% of a 1280 px frame is below the palm detector. The entry point is in `tools/`,
+which a Unity build does not ship; the six `hand_*.py` modules are at the root and do not import from `tools/`.
+
+**Do not.** Add hands to the body datagram (8899) or change its fields for them. Send a position when the fit was refused. Report a predicted hand beyond HELD. Quote `pos.Z` as metres without saying it is an estimate.
+Tune `--hfov` or `--hand-scale` to make a screenshot look right and then quote the depth. Install `mediapipe` into the sidecar venv without checking what it does to `opencv-python`. Move the hands sender to the sidecar
+root before the source handling it reuses is extracted there.
+
+
+## ADR-100 - A face without a body is a sibling sender with its own wire (port 8902); the networks are community ONNX conversions; head pose and position are estimates
+
+**Decision.** (1) A face-only pipeline joins the hands one in `python-sidecar~/`: `face_landmarker.py` (MediaPipe's face detector, 478-point mesh and 52-score blendshape network as ONNX on the existing
+`onnxruntime-directml`), `face_tracking.py`, `face_geometry.py`, `face_wire.py`, `face_overlay.py` at the root, the entry `tools/face/face_udp_sender.py`, `tools/model/fetch_face_models.py`. (2) A NEW versioned message
+`{ver:1, kind:"face"}` on UDP **8902**; the hands (8901) and body (8899) datagrams and everything that reads them are unchanged. (3) The 52 blendshapes are sent by NAME ORDER (`bsv: 1`, `BLENDSHAPE_NAMES`): index 0 is
+`_neutral`, 1-51 are ARKit-compatible, there is NO `tongueOut`; Left/Right are the subject's. (4) Blendshapes are read from the RAW landmarks and smoothed per channel; head pose and position come from the smoothed
+landmarks. (5) A frame with no face is `n = 0`; a face that is not there is not in the list; `pos` is absent with a `why` when refused; `n` never exceeds `--max-faces`. (6) The crop maths, anchors and NMS were extracted from
+the hand code into `roi_geometry.py`, the One-Euro bank into a vectorised `landmark_filters.py`, and the frame loop into `tools/video/vision_sender.py`, shared by both senders. (7) No new pip package.
+
+**Why.** The body pipeline cannot give a face without a person, and a project that needs only a face (an avatar's expression, a kiosk) should not run a whole-body model. The same separation as ADR-099 keeps the measured
+body stack untouched. Google publishes the three models as TFLite inside `face_landmarker.task`, not ONNX; the community ONNX conversions (Apache-2.0, with a NOTICE) were the route that needs no new dependency
+(`mediapipe` would pull `opencv-contrib-python` next to `opencv-python`). The extractions removed duplicated code before it could drift: the hands' and the face's crop maths are now one function, and the vectorised
+filter took the face's smoothing from ~3 ms to 0.3 ms a frame with arithmetic identical to `smoothing.OneEuro` (tested to 1e-12).
+
+**Measured** (`docs/H02_FACE_ONLY_2026-10-13.md` s.6; `tools/face/face_eval.py`, RTX 3060, a close frontal face clip): 435 of 435 frames with a face, one id, one detector run; 7.9 ms a frame on CPU (mesh 6.3, blendshapes
+1.1), 8.5 ms on DirectML which also pays a 252 ms first-frame warm-up; 29-30 msg/s through the sender and a receiver with `bad=0` and `seq_gaps=0`; smoothing cuts blendshape flicker 65% and landmark movement 18%.
+390 assertions in ten test files (hands 207 unchanged through the refactor); 42 injected bugs, 42 caught (three survived the first round and got the tests that kill them). Every head-pose angle is read back exactly over
++-60 degrees on synthetic faces; the position is within 3% over 0.3-2.0 m.
+
+**Honest limits.** NOT run on a live webcam, a phone or a LAN camera. The ONNX files are a third party's conversion; its reported parity with Python mediapipe (landmarks <= 0.6 px, blendshapes <= 0.015 on four images) was NOT
+reproduced here. The expressions were not checked channel by channel on a face that blinks, opens its mouth and raises its brows. Head pose is a geometric estimate from four landmarks, not MediaPipe's facial transformation
+matrix, with an uncalibrated neutral pitch offset of a few degrees. `pos` scales with the assumed `--hfov` and the assumed 0.09 m eye width (`--face-scale`). The detector is SHORT RANGE: a face ~10% of the letterbox is not
+found (a test asserts it), so `--crop` stands in for a closer camera. Several faces were not measured. The entry point is in `tools/`, which a Unity build does not ship.
+
+**Do not.** Add face fields to the hands or body datagrams. Send a position when the fit was refused. Read blendshapes from the smoothed landmarks (it adds their lag to every blink). Index the blendshapes as ARKit's 52 (there is
+no tongueOut: use `BLENDSHAPE_NAMES`). Quote `pos.Z` or the head angles as measurements. Describe the ONNX files as Google's releases. Install `mediapipe` into the sidecar venv without checking what it does to
+`opencv-python`. Move a sender to the sidecar root before the source handling it reuses is extracted there.
+
+## ADR-101 - The Unity side of the hands and face wires is its own assembly (`VirtualMirror.Vision`) with an allocation-free parser; the wire is pinned by golden datagrams from the Python encoders
+
+**Decision.** (1) A new assembly `Runtime/Vision` (`VirtualMirror.Vision`, references `VirtualMirror.Core` only) receives the hands wire (UDP 8901) and the face wire (UDP 8902); nothing in the body path (`MediaPipeBridge`, 8899) changes. (2) A UTF-8 pull scanner and two parsers read the bytes
+directly: no `string` per field, no `JsonUtility`, reusable mutable messages, one parse per datagram on the receiver thread, a lock + `CopyFrom` hand-over to the main thread. A datagram that does not parse is a `WireParseResult` and a counter, never an exception; an unknown version is refused, not guessed at; a refused
+datagram never reaches the sequence logic. (3) Wire space is converted once, in the parser: position, world landmarks and head rotation to Unity axes (y up); image landmarks stay in image space. (4) The 52 blendshapes are bound by NAME (`ArkitBlendshapes`), never by ARKit order. (5) The existing `IHandTrackingProvider` / `IFaceTrackingProvider` get UDP implementations
+(`UdpHandTrackingProvider`, `UdpFaceTrackingProvider`) so the humanoid retargeters work from a hands-only or face-only camera; a drop-in `VisionDemoRig` and an `ArkitBlendshapeDriver` serve any other character. (6) The contract is pinned in BOTH repos: `make_vision_fixtures.py` writes golden datagrams with the production
+encoders into `Tests/EditMode/VisionFixtures`, the C# tests assert their values, and `test_vision_fixtures.py` fails if the checked-in files drift from the encoders.
+
+**Why.** A game that wants a hand or a face should not need the body path, and a parse that allocates per datagram at 30 msg/s per stream (13-25 KB for a face) is garbage the Editor and a headset do not need. A separate assembly lets another project copy `Runtime/Vision` + `Runtime/Core` and nothing else. Golden datagrams
+from the real encoders make a wire change fail a test in the repo that did not make it, instead of failing silently on a live camera.
+
+**Measured** (`docs/H03_UNITY_RECEIVERS_2026-10-13.md` s.3; headless, Unity 6000.3.9f1 assemblies, net9 runner): 86 NUnit tests pass, including a real UDP socket on loopback; 36 injected bugs, 36 caught (28 first round, 8 survivors got killer tests); **0 bytes allocated per parse** over 2000 parses of each of four fixtures (2.4-25 KB); Python
+`test_vision_fixtures` 45/45 and the hands, face, filter and source suites unchanged.
+
+**Honest limits.** NOT compiled or run in the Unity Editor: the MonoBehaviours, gizmo views, HUD, `VisionDemoRig` and `ArkitBlendshapeDriver` were written to the documented API and never exercised. NOT run against a live camera or on a rigged character. The allocation figure is the parser on .NET 9, not Mono. Head pose and position are the
+sidecar's estimates and arrive as such.
+
+**Do not.** Add an allocation to the parse path (a `string`, a list, a LINQ call) without re-running the measurement. Change a wire field without regenerating the fixtures and writing the ADR in both repos. Use Unity's native `Quaternion.LookRotation` or `Matrix4x4` in `VisionMath` (it cannot be tested headless); keep the managed versions.
+Index blendshapes by ARKit order. Publish a datagram the parser refused. Run the C# tests through the Unity MCP `run_tests` (it closes the Editor).
+
+## ADR-102 - The hands and face streams are hosted by AppBootstrap (one settings object, one host, one control panel); sample scenes ask for a stream and never own a socket or a process
+
+**Decision.** (1) AppBootstrap gets one "Hands and Face (H-03)" section: a single `VisionSettings` (`Runtime/Vision/Host`) holding every setting of the two senders and receivers. (2) `VisionHost` (`Runtime/Bootstrap`) owns the two UDP receivers, the Python senders and the per-frame hand-over; consumers subscribe to `HandsUpdated` / `FaceUpdated` and
+ask for a stream with `AddDemand` (a scene) rather than starting anything themselves. (3) Each stream has a mode: Off (no socket), Auto (the receiver listens, the sender runs while some scene asks), Always. A sender somebody else already runs is left alone. (4) The senders are launched through the existing `SidecarProcessLauncher` in a new
+`DirectSenderOnly` mode (no supervisor, no lock port, no `--model`, no pose model needed), so the kill-on-close job object and the process-tree kill apply to them too. (5) The mapping from a setting to a sender flag is the pure `VisionSenderArguments`, pinned by command-line fixtures that both the C# tests and the Python senders' own argparse parsers consume.
+(6) The runtime control panel (`VisionControlPanel`, F6, IMGUI) edits the same settings live; changes apply after a second of quiet, are not saved. (7) The two sample scenes live in `Showcase/HandsFace` (assembly `HandsFaceShowcase`), each carrying an AppBootstrap with the body path off.
+
+**Why.** The body path's settings were already on AppBootstrap, so a second place to configure a camera would have meant two answers to "which camera"; a scene that opened its own socket and process would have broken as soon as two scenes, the bootstrap and the panel wanted the same port. Auto-by-demand is what lets one webcam serve both showcase scenes (a webcam
+cannot be read by two programs). Reusing the launcher kept the orphan-process protections that exist because stranded sidecars blocking a port were a real, repeated failure.
+
+**Measured** (`docs/H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md` s.2; headless): 105 C# tests pass (host tests with real loopback sockets); 24 of 24 injected bugs in the host and the argument builder caught (two survived the first round and got tests); Python command-line contract 20/20; `VirtualMirror.App` and `HandsFaceShowcase` compile against Unity's assemblies.
+
+**Honest limits.** NOT run in the Unity Editor's Play mode: the panel, the scenes, the scene files (written by hand) and the AppBootstrap Inspector section. The host starting and restarting the Python senders from Unity is not covered by any test. NOT run on a live camera. A built player has no senders (`tools/` is not shipped).
+
+**Do not.** Open a second socket on 8901 or 8902 (the host owns them; use its events). Start a vision sender from a scene. Add a flag to a command line without the fixture and both tests. Run both senders on one webcam. Put the body-path switches back on in a sample scene's AppBootstrap.
+
+## ADR-103 - The person cut out of a camera picture: Python finds the person and sends the picture with a soft mask (a NEW chunked binary wire on UDP 8903); Unity receives and renders, and runs no segmentation
+
+**Decision.** (1) The sidecar owns the camera and every CV step: a person detector (YOLOX-s) and the F-32 tracker find each person, a square crop per person goes to MediaPipe's selfie segmenter (256x256 ONNX, DirectML), the answers are max-merged into one canvas and a matte (guided filter, temporal smoothing, edge ramp 0.50-0.85, speck and pinhole cleanup) turns it into a uint8 mask. Before a person's crop reaches the network the OTHER tracked people's boxes are painted out of it with the background around them (`isolate`, default on). With nobody detected the whole picture goes through the landscape or the square network. (2) The picture and the mask travel together as one FRAME over a NEW wire on UDP **8903**: binary, a 72-byte header on every datagram (session, frame number, chunk index / count / offset, sizes, encodings, flags, model id, people, the sender's latency figures), colour raw RGBA32 / JPEG / none, mask raw A8 / raw deflate, top row first, chunks of 60 000 bytes (about 1 200 for a network). A newer frame abandons an unfinished older one, an older or repeated chunk is ignored, a new session id is a new producer, payload and dimensions are capped, a frame whose chunks do not add up to its payload is refused. (3) Unity receives it in `VirtualMirror.Vision`: `UdpDatagramReceiver` (the socket loop, now shared with the hands and face receivers) -> `CutoutReceiver` -> `CutoutAssembler` -> a frame handed to the main thread by SWAPPING buffers, never copying; `VisionHost` serves it as a third stream (Off / Auto / Always, `AddDemand`) and uploads each frame to `CutoutTextures` (picture and mask as two GPU textures, row 0 = top of the picture for both). (4) `CutoutView` draws those textures with the `VirtualMirror/Cutout` shader: Original, Person (on nothing, or a checkerboard / colour / gradient / image backdrop) and Silhouette (one colour, red first), an optional glow outline, a mirror, a fit. Switching is a shader parameter: no restart, no camera reopen, no message to the sender. (5) The cutout knows nothing of the VRM avatar or of skeleton tracking; `CutoutStreamBinder` puts it in any scene with an AppBootstrap, and the textures are public for other systems. (6) The wire is pinned in BOTH repos by 26 golden datagrams written by the production encoder (`Tests/EditMode/VisionFixtures/cutout_*.bin`); the sender's command line is pinned by `args_cutout_*.txt`, parsed by the sender's own argparse and asserted byte for byte by the C# tests.
+
+**Why.** The user asked for the AI work to stay in Python and for Unity to render what it is given: a mask is the one thing every effect they listed (silhouette, particles, echo, glow) needs, and a second segmentation in Unity would be the same work done twice. A picture and its mask must be the SAME frame (a mask from one frame over the picture of the next shows as an outline sliding off the person), so they are one message and not two streams. Binary, not JSON: a picture does not survive being text and a parse per 4 MB frame would be garbage. Chunked because a UDP datagram is at most 64 KB and a frame is megabytes; every chunk carries the whole header so the receiver keeps no state to read it. The crop per person is what made two people two silhouettes instead of one blob (S-01 measurement on the two-dancer clip); isolation is what removed the dark-curtain blob that two people standing apart were still joined by. Buffer swapping keeps a 4 MB frame from being copied between threads.
+
+**Measured** (`docs/S01_CUTOUT_2026-10-13.md` s.4; this machine, DirectML, Unity 6000.3.9f1 Editor): engine 17.3 ms a frame for one person, 20.2 ms for two, 21.8-22.4 ms for two with isolation; isolation on a lone person changes nothing, on the two-dancer clip it halves the foreground outside the people's boxes (0.69 % -> 0.30 %) and raises one-frame flicker from 1.75 % to 2.01 %; in Unity 17-27 frames/s from video files through the real sender, Unity's upload 0.4-0.6 ms, datagram transport 3-10 ms, 0 frames abandoned; a webcam run of 11 s (numbers only, no frame stored or viewed) gave 29.3 fps, 0 lost datagrams and the sender latency 12.5-19.7 ms, and found nobody. 100 new C# tests and the Python suites (100 + 66 + 35 + 93 + 36) pass; 16 of 16 Python and 15 of 15 C# injected bugs caught.
+
+**Honest limits.** A 0.5 MB selfie network, one 256-pixel look at each person: dark clothes on a dark background, thin gaps between an arm and the torso (filled), bright floor lights beside the feet, and two people who touch are wrong in ways no setting fixes; the outline is soft and flickers ~2 %. The only model weights downloaded are the two MediaPipe ONNX conversions (third-party, parity with Google's TFLite not reproduced). A person on a live webcam is NOT tested; neither is a network between two machines, a built player (no sender ships: `tools/` is not copied), or a long soak. The particle / echo / transition / disperse effects of the reference clips are designed (`CutoutTextures` is what they read), NOT built.
+
+**Do not.** Segment in Unity. Send the mask and the picture as two streams. Change a wire field without the encoder, the fixtures, both test suites and an ADR in both repos. Open a second socket on 8903 (the host owns it). Start the cutout sender from a scene (ask the host with `AddDemand`). Let a test of one rule be satisfiable by another rule (the byte-sum rule once hid a missing payload cap). Give the cutout sender and the hands or face sender the same webcam. Add a setting without the field, the property, the flag in `VisionSenderArguments`, the panel control and both fixtures. Treat `people` as groups: it is the larger of the people tracked and the groups. Run the C# tests through the Unity MCP `run_tests` (it closes the Editor).

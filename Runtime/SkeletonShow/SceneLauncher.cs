@@ -108,6 +108,22 @@ namespace VirtualMirror.SkeletonShow {
                       "Two of you. Hold the same shape. Nobody is right - you just have to agree."),
         };
 
+        /// <summary>
+        /// Showcase packages that live next to their own code (Showcase/Name/Scenes) and the vision-only samples. A fourth column because the
+        /// one-person column is at the ten-row cap that the number keys reach. HandsShowcase, FaceShowcase and CutoutShowcase track no body at all
+        /// (a hand, a face or just a person in front of a camera is enough); they ask the AppBootstrap vision host for their stream.
+        /// </summary>
+        private static readonly Entry[] Showcases = {
+            new Entry("FluidDisruption_Showcase", "FLUID DISRUPTION",
+                      "A luminous liquid sheet that flows by itself. Your hands and torso stir it."),
+            new Entry("HandsShowcase", "HANDS ONLY",
+                      "Just a hand in front of the camera: skeleton, gestures, pinch. Pinch the orbs to pick them up."),
+            new Entry("FaceShowcase", "FACE ONLY",
+                      "Just a face in front of the camera: head pose and 52 blendshapes drive a cartoon face."),
+            new Entry("CutoutShowcase", "HUMAN CUTOUT",
+                      "Just a camera: the person is cut out of the picture. Original, person alone, or one-colour silhouette."),
+        };
+
         /// <summary>The full VRM mirror application, which is not an experience and does not share
         /// their scaffold. Listed because "launch any scene" has to mean any scene, and separated
         /// because launching it starts the whole app rather than a demonstration.</summary>
@@ -145,6 +161,13 @@ namespace VirtualMirror.SkeletonShow {
             }
         }
 
+        /// <summary>Showcase packages and the hands-only / face-only samples.</summary>
+        public static IReadOnlyList<Entry> ShowcaseScenes {
+            get {
+                return Showcases;
+            }
+        }
+
         /// <summary>Scenes that are the product rather than a demonstration of it.</summary>
         public static IReadOnlyList<Entry> ProductionScenes {
             get {
@@ -163,7 +186,10 @@ namespace VirtualMirror.SkeletonShow {
             /// sender, not the multi-person one capped to one.</summary>
             SinglePerson,
             /// <summary>Two or more, which only the multi-person sender produces.</summary>
-            MultiPerson
+            MultiPerson,
+            /// <summary>No body tracking at all: the scene reads the hands, face or cutout stream the AppBootstrap vision host serves. The body
+            /// sidecar must be left exactly as it is, like Unspecified, but the scene IS in the catalogue.</summary>
+            VisionOnly
         }
 
         /// <summary>
@@ -186,7 +212,12 @@ namespace VirtualMirror.SkeletonShow {
             if (Contains(MultiPerson, sceneName)) {
                 return TrackingNeed.MultiPerson;
             }
-            if (Contains(SinglePerson, sceneName) || Contains(Production, sceneName)) {
+            if (string.Equals(sceneName, "HandsShowcase", System.StringComparison.Ordinal)
+                || string.Equals(sceneName, "FaceShowcase", System.StringComparison.Ordinal)
+                || string.Equals(sceneName, "CutoutShowcase", System.StringComparison.Ordinal)) {
+                return TrackingNeed.VisionOnly;
+            }
+            if (Contains(SinglePerson, sceneName) || Contains(Production, sceneName) || Contains(Showcases, sceneName)) {
                 return TrackingNeed.SinglePerson;
             }
             return TrackingNeed.Unspecified;
@@ -205,6 +236,9 @@ namespace VirtualMirror.SkeletonShow {
         /// it: 1-9 and then 0. A longer column is not a bug in itself, but it silently leaves rows
         /// that cannot be reached from the keyboard, so it is pinned.</summary>
         public const int MaxShortcutRows = 10;
+
+        /// <summary>One person, two or more, production, showcases.</summary>
+        private const int ColumnCount = 4;
 
         private TrackedStage stage;
         private SkeletonShowPalette palette;
@@ -283,7 +317,7 @@ namespace VirtualMirror.SkeletonShow {
         }
 
         private static int TotalEntries() {
-            return SinglePerson.Length + MultiPerson.Length + Production.Length;
+            return SinglePerson.Length + MultiPerson.Length + Production.Length + Showcases.Length;
         }
 
         private void Update() {
@@ -321,11 +355,11 @@ namespace VirtualMirror.SkeletonShow {
                 row = (row + current.Length - 1) % current.Length;
             }
             if (Input.GetKeyDown(KeyCode.RightArrow)) {
-                column = (column + 1) % 3;
+                column = (column + 1) % ColumnCount;
                 row = Mathf.Clamp(row, 0, Column(column).Length - 1);
             }
             if (Input.GetKeyDown(KeyCode.LeftArrow)) {
-                column = (column + 2) % 3;
+                column = (column + ColumnCount - 1) % ColumnCount;
                 row = Mathf.Clamp(row, 0, Column(column).Length - 1);
             }
             if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)
@@ -351,7 +385,10 @@ namespace VirtualMirror.SkeletonShow {
             if (index == 0) {
                 return SinglePerson;
             }
-            return index == 1 ? MultiPerson : Production;
+            if (index == 1) {
+                return MultiPerson;
+            }
+            return index == 2 ? Production : Showcases;
         }
 
         private void Launch(Entry entry) {
@@ -383,9 +420,9 @@ namespace VirtualMirror.SkeletonShow {
             float gap = 16f;
             // Three columns, but the production one only ever holds a row or two, so it gets a
             // narrower share rather than an equal third of the screen.
-            float usable = Screen.width - margin * 2f - gap * 2f;
-            float wide = Mathf.Max(260f, usable * 0.375f);
-            float narrow = Mathf.Max(220f, usable - wide * 2f);
+            float usable = Screen.width - margin * 2f - gap * 3f;
+            float wide = Mathf.Max(240f, usable * 0.3f);
+            float narrow = Mathf.Max(200f, (usable - wide * 2f) * 0.5f);
 
             GUI.Label(new Rect(margin, 18f, Screen.width - margin * 2f, 40f),
                       "VIRTUAL MIRROR", titleStyle);
@@ -400,6 +437,9 @@ namespace VirtualMirror.SkeletonShow {
             x = x + wide + gap;
             DrawColumn(2, new Rect(x, top, narrow, Screen.height - top - 64f),
                        "PRODUCTION", "Not a demonstration.");
+            x = x + narrow + gap;
+            DrawColumn(3, new Rect(x, top, narrow, Screen.height - top - 64f),
+                       "SHOWCASES", "Hands and face need no body.");
 
             // The sidecar line only appears when a boot scene actually started one. Claiming a
             // sidecar this scene knows nothing about would be worse than saying nothing.
@@ -493,6 +533,13 @@ namespace VirtualMirror.SkeletonShow {
             while (i < Production.Length) {
                 if (Production[i].Scene == entry.Scene) {
                     return 2;
+                }
+                i = i + 1;
+            }
+            i = 0;
+            while (i < Showcases.Length) {
+                if (Showcases[i].Scene == entry.Scene) {
+                    return 3;
                 }
                 i = i + 1;
             }

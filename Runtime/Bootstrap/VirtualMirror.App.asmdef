@@ -14,6 +14,7 @@
         "VirtualMirror.Rendering",
         "VirtualMirror.Diagnostics",
         "VirtualMirror.SkeletonShow",
+        "VirtualMirror.Vision",
         "VRM10",
         "Unity.InferenceEngine"
     ],

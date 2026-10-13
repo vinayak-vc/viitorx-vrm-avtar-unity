@@ -157,6 +157,30 @@ namespace VirtualMirror.Tracking.OakD {
             return problems;
         }
 
+        /// <summary>
+        /// What a vision sender (hands, face) needs: the sidecar folder and the virtualenv interpreter. Not the supervisor, the whole-body
+        /// sender or the pose model, none of which it uses. The interpreter rule is the same hard failure as <see cref="Validate"/>.
+        /// </summary>
+        public static List<string> ValidateSenderOnly(SidecarPathSet paths) {
+            List<string> problems = new List<string>();
+            if (paths == null || string.IsNullOrEmpty(paths.Root)) {
+                problems.Add("Sidecar root could not be resolved.");
+                return problems;
+            }
+            if (!Directory.Exists(paths.Root)) {
+                problems.Add("Sidecar folder is missing: " + paths.Root);
+                return problems;
+            }
+            if (!File.Exists(paths.PythonExe)) {
+                problems.Add("Virtualenv interpreter is missing: " + paths.PythonExe
+                             + "  -> run " + paths.SetupScript + " once on this machine."
+                             + "  (Refusing to fall back to 'python' on PATH: that resolves a"
+                             + " different environment which runs inference ~6x slower on CPU"
+                             + " without reporting an error.)");
+            }
+            return problems;
+        }
+
         private static string NormalizeSeparators(string path) {
             if (string.IsNullOrEmpty(path)) {
                 return path;

@@ -26,6 +26,12 @@ the debug skeleton is being built into the product. These are the current report
 
 | Doc | Covers |
 |-----|--------|
+| [S01_CUTOUT_2026-10-13.md](S01_CUTOUT_2026-10-13.md) | **Real-time human cutout**: the person in a camera picture isolated by the sidecar (MediaPipe selfie network, a crop per person) and drawn by Unity from the picture + a soft mask on a new wire (UDP 8903): Original / Person / Silhouette, glow, backdrops (`Showcase/Cutout`, `CutoutStreamBinder`). Tested; seen working on two video files; NOT tested on a person in front of a webcam |
+| [PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md](PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md) | **Plan only**: a compiled Viitorx Tracking Engine (exe folder + Inno Setup installer) and `com.viitorx.avtar.tracking.*` Unity packages; repo reuse analysis |
+| [H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md](H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md) | **Hands and Face in AppBootstrap**: one settings section, a host that runs the senders, an F6 control panel, two sample scenes (`Showcase/HandsFace`). Tested headless; not run in Play mode |
+| [H03_UNITY_RECEIVERS_2026-10-13.md](H03_UNITY_RECEIVERS_2026-10-13.md) | **Unity receivers for the hands and face wires** (`Runtime/Vision`): allocation-free parser, providers, demo rig, 52-blendshape driver. Tested headless; not run in the Editor or on a live camera |
+| [H02_FACE_ONLY_2026-10-13.md](H02_FACE_ONLY_2026-10-13.md) | **Face only, no body**: 52 blendshapes, head pose, position, a sibling sender and wire (port 8902). Not run on a live camera yet |
+| [H01_HANDS_ONLY_2026-10-13.md](H01_HANDS_ONLY_2026-10-13.md) | **Hands only, no body**: a separate sender and wire (port 8901), 3D position, finger poses, gestures. Not run on a live camera yet |
 | [F36_SIDECAR_BOOT_2026-09-17.md](F36_SIDECAR_BOOT_2026-09-17.md) | One boot scene that starts the multi-person sidecar and opens the launcher |
 | [F35_SCENE_LAUNCHER_2026-09-17.md](F35_SCENE_LAUNCHER_2026-09-17.md) | One launcher scene for all twenty scenes, split by how many people each one needs |
 | [F34_CROWD_EXPERIENCES_2026-09-17.md](F34_CROWD_EXPERIENCES_2026-09-17.md) | Nine crowd experience scenes, and the rule that decided which multi-person ideas are buildable |

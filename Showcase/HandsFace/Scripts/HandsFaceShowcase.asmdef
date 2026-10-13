@@ -1,0 +1,19 @@
+{
+    "name": "HandsFaceShowcase",
+    "rootNamespace": "HandsFaceShowcase",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.App",
+        "VirtualMirror.SkeletonShow",
+        "VirtualMirror.Vision"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

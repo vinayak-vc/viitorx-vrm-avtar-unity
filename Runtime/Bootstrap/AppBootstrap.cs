@@ -195,6 +195,7 @@ namespace VirtualMirror.App {
             OperatingVolume.Configure(volumeNearMetres, volumeFarMetres, volumeHoldSeconds,
                                       volumeSettlePoses, volumePartialNearMetres);
             InitializeServices();
+            InitializeVision();
         }
 
         private void OnEnable() {
@@ -227,6 +228,7 @@ namespace VirtualMirror.App {
         }
 
         private void Update() {
+            TickVision();
             WatchVideoSettings(Time.unscaledDeltaTime);
             // O = "I just turned the camera". AppBootstrap survives scene loads, so this works from
             // every scene rather than needing a binding in each one. Guarded on owning a sidecar:
@@ -819,6 +821,7 @@ namespace VirtualMirror.App {
             // ADR-064: stop the producer first, so it is not still streaming into a socket we are
             // about to close. Disposing is safe when the sidecar was never started, and it never
             // touches a supervisor that this launcher did not spawn.
+            ShutdownVision();
             StopSidecar();
             StopTracking();
             TeardownAvatarSession();
@@ -925,7 +928,7 @@ namespace VirtualMirror.App {
                 return;
             }
             SceneLauncher.TrackingNeed need = SceneLauncher.TrackingNeedFor(sceneName);
-            if (need == SceneLauncher.TrackingNeed.Unspecified) {
+            if (need == SceneLauncher.TrackingNeed.Unspecified || need == SceneLauncher.TrackingNeed.VisionOnly) {
                 return;
             }
             string wanted = need == SceneLauncher.TrackingNeed.MultiPerson

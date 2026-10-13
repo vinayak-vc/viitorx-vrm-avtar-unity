@@ -130,12 +130,13 @@ namespace VirtualMirror.Tests {
         // ---------------------------------------------------------------- the real thing
 
         [Test]
-        public void AppBootstrapShowsItsNineSectionsInTheIntendedOrder() {
+        public void AppBootstrapShowsItsTenSectionsInTheIntendedOrder() {
             List<InspectorFieldGroup> groups = InspectorGrouping.Build(typeof(AppBootstrap));
             Assert.AreEqual(new List<string> {
                 "General",
                 "Tracking Source",
                 "Video Test Source (F-49)",
+                "Hands and Face (H-03)",
                 "Kalidokit Body — active whole-body retarget (ADR-022/023)",
                 "Humanized Skeleton (F-27)",
                 "Operating Volume (F-48)",

@@ -415,6 +415,42 @@ MonoBehaviour:
   videoClampDepth: 1
   videoDepthRangeMetres: {x: 1.6, y: 4}
   videoMaxPeople: 3
+  vision:
+    autoStartSenders: 1
+    showPanelOnStart: 0
+    panelKey: 287
+    source: camera:0
+    lanCameraPin: 
+    flip: 1
+    rotateDegrees: 0
+    horizontalFovDegrees: 60
+    fovAcrossLongSide: 0
+    cameraSize: {x: 1280, y: 720}
+    cameraFps: 30
+    loopFile: 1
+    provider: 0
+    smoothing: 1
+    showPreviewWindow: 0
+    handsMode: 1
+    handsPort: 8901
+    maxHands: 2
+    palmConfidence: 0.5
+    handConfidence: 0.6
+    handKeepConfidence: 0.4
+    handScale: 1
+    handSides: 0
+    faceMode: 1
+    facePort: 8902
+    maxFaces: 1
+    faceDetectorConfidence: 0.5
+    faceConfidence: 0.6
+    faceKeepConfidence: 0.4
+    faceScale: 1
+    blendshapes: 1
+    faceLandmarks: 0
+    acceptFromNetwork: 0
+    staleSeconds: 0.5
+    swapHandSides: 0
 --- !u!4 &177103250
 Transform:
   m_ObjectHideFlags: 0
@@ -1517,7 +1553,7 @@ MeshFilter:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1262056905}
-  m_Mesh: {fileID: 2092428705}
+  m_Mesh: {fileID: 2010153183}
 --- !u!1 &1579974247
 GameObject:
   m_ObjectHideFlags: 0
@@ -1676,7 +1712,7 @@ MonoBehaviour:
   velocityNoise: 0
   velocityNoiseOffset: 0
   velocityNoiseTiling: 1
---- !u!43 &2092428705
+--- !u!43 &2010153183
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}

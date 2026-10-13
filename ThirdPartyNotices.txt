@@ -138,6 +138,46 @@ Copyright (c) 2005-2024, NumPy Developers
 Upstream: https://github.com/numpy/numpy
 
 -----------------------------------------------------
+13. MediaPipe palm detection and hand landmark models (Google LLC) -- MODEL WEIGHTS, NOT BUNDLED
+License: Apache License, Version 2.0
+Copyright (c) 2023 The MediaPipe Authors / Google LLC.
+Upstream: https://github.com/google-ai-edge/mediapipe
+Converted to ONNX and published by the OpenCV Zoo (Apache-2.0): https://github.com/opencv/opencv_zoo
+
+The hands-only pipeline (H-01) runs palm_detection_mediapipe_2023feb.onnx (3.9 MB) and
+handpose_estimation_mediapipe_2023feb.onnx (4.1 MB). They are NOT committed (*.onnx is ignored by version
+control); python-sidecar~/tools/model/fetch_hand_models.py downloads them from the OpenCV organisation's
+Hugging Face mirror and rejects any file whose size and SHA-256 do not match.
+
+-----------------------------------------------------
+14. MediaPipe face detector, face mesh and face blendshape models (Google LLC) -- MODEL WEIGHTS, NOT BUNDLED
+License: Apache License, Version 2.0
+Copyright (c) 2023 The MediaPipe Authors / Google LLC.
+Upstream: https://github.com/google-ai-edge/mediapipe (the TFLite models inside face_landmarker.task)
+ONNX conversions by a third party (fernandotonon, QtMeshEditor-models on Hugging Face, mocap/face/, whose NOTICE.txt
+states Apache-2.0): face_detector.onnx (0.4 MB), face_landmarks.onnx (4.9 MB), face_blendshapes.onnx (1.1 MB).
+
+The face-only pipeline (H-02) runs these. They are NOT committed (*.onnx is ignored by version control);
+python-sidecar~/tools/model/fetch_face_models.py downloads them and rejects any file whose size and SHA-256 do not
+match. They are a community conversion of Google's models, not an official Google release; the converter reports its
+own numerical parity against Python mediapipe, which was not reproduced here.
+
+-----------------------------------------------------
+15. MediaPipe selfie segmentation models (Google LLC) -- MODEL WEIGHTS, NOT BUNDLED
+License: Apache License, Version 2.0
+Copyright (c) 2023 The MediaPipe Authors / Google LLC.
+Upstream: https://github.com/google-ai-edge/mediapipe (the TFLite selfie segmenter models)
+ONNX conversions by a third party (the onnx-community organisation on Hugging Face, repositories
+mediapipe_selfie_segmentation and mediapipe_selfie_segmentation_landscape, licence tag Apache-2.0):
+selfie_segmenter_general.onnx (0.46 MB, 256x256) and selfie_segmenter_landscape.onnx (0.46 MB, 256x144).
+
+The cutout pipeline (S-01, the person cut out of a camera picture) runs these. They are NOT committed
+(*.onnx is ignored by version control); python-sidecar~/tools/model/fetch_cutout_models.py downloads exactly
+these two files and rejects any whose size and SHA-256 do not match. They are a community conversion of
+Google's models, not an official Google release; numerical parity with the TFLite originals was not
+reproduced here.
+
+-----------------------------------------------------
 Transitive dependencies of the above (coloredlogs, flatbuffers, humanfriendly, mpmath, packaging,
 protobuf, pyreadline3, sympy) are installed from PyPI under their own licences - MIT, BSD-3-Clause
 and Apache-2.0. See python-sidecar~/requirements.lock.txt for the exact pinned set.

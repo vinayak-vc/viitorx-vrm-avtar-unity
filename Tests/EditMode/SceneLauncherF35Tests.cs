@@ -26,6 +26,7 @@ namespace VirtualMirror.Tests {
             Assert.LessOrEqual(SceneLauncher.SinglePersonScenes.Count, SceneLauncher.MaxShortcutRows);
             Assert.LessOrEqual(SceneLauncher.MultiPersonScenes.Count, SceneLauncher.MaxShortcutRows);
             Assert.LessOrEqual(SceneLauncher.ProductionScenes.Count, SceneLauncher.MaxShortcutRows);
+            Assert.LessOrEqual(SceneLauncher.ShowcaseScenes.Count, SceneLauncher.MaxShortcutRows);
         }
 
         [Test]
@@ -138,6 +139,33 @@ namespace VirtualMirror.Tests {
         }
 
         [Test]
+        public void TheHandsAndFaceSamplesNeedNoBodyAndLeaveTheBodySidecarAlone() {
+            Assert.AreEqual(SceneLauncher.TrackingNeed.VisionOnly, SceneLauncher.TrackingNeedFor("HandsShowcase"));
+            Assert.AreEqual(SceneLauncher.TrackingNeed.VisionOnly, SceneLauncher.TrackingNeedFor("FaceShowcase"));
+            Assert.AreEqual(SceneLauncher.TrackingNeed.SinglePerson, SceneLauncher.TrackingNeedFor("FluidDisruption_Showcase"));
+            bool hands = false;
+            bool face = false;
+            bool fluid = false;
+            foreach (SceneLauncher.Entry entry in SceneLauncher.ShowcaseScenes) {
+                hands = hands || entry.Scene == "HandsShowcase";
+                face = face || entry.Scene == "FaceShowcase";
+                fluid = fluid || entry.Scene == "FluidDisruption_Showcase";
+            }
+            Assert.IsTrue(hands && face && fluid, "all three are listed in the showcase column");
+        }
+
+        [Test]
+        public void TheCutoutSampleNeedsNoBodyEitherAndIsListedWithTheShowcases() {
+            Assert.AreEqual(SceneLauncher.TrackingNeed.VisionOnly, SceneLauncher.TrackingNeedFor("CutoutShowcase"));
+            bool listed = false;
+            foreach (SceneLauncher.Entry entry in SceneLauncher.ShowcaseScenes) {
+                listed = listed || entry.Scene == "CutoutShowcase";
+            }
+            Assert.IsTrue(listed, "a launcher row exists for the cutout scene");
+            Assert.LessOrEqual(SceneLauncher.ShowcaseScenes.Count, SceneLauncher.MaxShortcutRows, "the number keys still reach every row");
+        }
+
+        [Test]
         public void EveryCrowdSceneAsksForTheMultiPersonSender() {
             foreach (SceneLauncher.Entry entry in SceneLauncher.MultiPersonScenes) {
                 Assert.AreEqual(SceneLauncher.TrackingNeed.MultiPerson,
@@ -191,6 +219,9 @@ namespace VirtualMirror.Tests {
                 yield return entry;
             }
             foreach (SceneLauncher.Entry entry in SceneLauncher.ProductionScenes) {
+                yield return entry;
+            }
+            foreach (SceneLauncher.Entry entry in SceneLauncher.ShowcaseScenes) {
                 yield return entry;
             }
         }

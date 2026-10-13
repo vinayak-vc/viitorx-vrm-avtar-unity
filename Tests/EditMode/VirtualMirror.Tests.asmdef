@@ -10,7 +10,8 @@
         "VirtualMirror.Retargeting",
         "VirtualMirror.Diagnostics",
         "VirtualMirror.SkeletonShow",
-        "VirtualMirror.Experiences"
+        "VirtualMirror.Experiences",
+        "VirtualMirror.Vision"
     ],
     "includePlatforms": [
         "Editor"

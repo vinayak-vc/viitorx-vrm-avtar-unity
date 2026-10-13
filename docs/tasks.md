@@ -4,6 +4,91 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## S-01 - Real-time human cutout: the person in a camera picture, isolated, shown in Unity (2026-10-13)
+
+Report: [`S01_CUTOUT_2026-10-13.md`](S01_CUTOUT_2026-10-13.md). Decision: **ADR-103**. Sidecar repo: `docs/tasks.md` S-01. Showcase: `Showcase/Cutout/README.md`. Follows H-04.
+
+- [x] **Built, tested, and seen working in Play mode with two video files:** Python finds each person (YOLOX-s + tracker), cuts a crop per person with the other people painted out, segments it (MediaPipe selfie segmenter, ONNX, DirectML), mattes it, and sends the picture + soft mask as one frame over a NEW chunked binary wire (UDP 8903). Unity (`Runtime/Vision`) reassembles it, uploads two textures (`CutoutTextures`) and draws them (`CutoutView`, `VirtualMirror/Cutout` shader): Original / Person (transparent or a checker / colour / gradient / image backdrop) / Silhouette (red first), glow outline, mirror, fit. No segmentation in Unity; independent of the VRM and of skeleton tracking.
+- [x] AppBootstrap hosts it as the third vision stream (Off / Auto / Always, 20 settings, a Cutout tab in the F6 panel); `CutoutStreamBinder` puts it in any scene; `Showcase/Cutout/Scenes/CutoutShowcase.unity` + a Launcher row (HUMAN CUTOUT, SHOWCASES column); `scripts/run_cutout_demo.bat` without Unity.
+- [x] Verified: 100 new C# tests; the whole `VirtualMirror.Tests` assembly passes (607 in 38 classes, 0 fail; `InspectorGroupingTests` fixed for H-04's tenth section) plus 11 in `CutoutShowcase.Tests`; Python 100 + 66 + 35 + 93 + 36 assertions; 16 of 16 Python and 15 of 15 C# injected bugs caught; the Python senders' argparse parses the command lines Unity builds (`args_cutout_*.txt`); the sender started by Unity and stopped on leaving Play.
+- [ ] **NOT TESTED: a person on a live webcam** (the one 11 s webcam run, numbers only, found nobody: 29.3 fps, 0 datagrams lost, sender latency 12.5-19.7 ms); a phone / LAN camera; a network between two machines (JPEG, deflate, 1 200-byte chunks); a built player (no sender ships); a long soak.
+- [ ] **Designed, not built:** particle / voxel silhouettes, camera-to-silhouette transition, disperse and reform, motion echo, edge trails (they read `VisionHost.CutoutTextures`; s.9 of the report).
+- [ ] Known limits (report s.6): dark clothes on a dark background, thin gaps filled, floor lights kept, two people who touch, ~2 % flicker, 18-30 fps depending on the clip and the GPU clock.
+- [ ] Next: stand in front of a webcam and look; register the scene on other machines (**Virtual Mirror > Register All Scenes in Build Settings**); build the transition.
+
+---
+
+## P-01 - Tracking Engine and Unity packages: PLAN ONLY (2026-10-13)
+
+Plan: [`PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md`](PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md). **Nothing implemented.** Sidecar repo: `docs/tasks.md` P-01.
+
+- [ ] Phase 0: revoke the GitHub token pasted into the chat; confirm repo reuse (rename the Python repo to `viitorx-tracking-engine`, this repo becomes the packages monorepo); tag `pre-packaging` in both.
+- [ ] Phase 1: Nuitka compile spike (go / no-go) for the hands and face senders.
+- [ ] Phases 2-7: wire spec, engine repo, compiled build + Inno Setup installer (admin, Program Files), Unity packages `com.viitorx.avtar.tracking.*`, dogfood, release.
+
+---
+
+## H-04 - Hands and Face in AppBootstrap, a control panel, two sample scenes (2026-10-13)
+
+Report: [`H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md`](H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md). Decision: **ADR-102**. Sidecar repo: `docs/tasks.md` H-04. Follows H-03.
+
+- [x] **Done and verified headless:** `VisionSettings` (35 settings) as the AppBootstrap "Hands and Face (H-03)" section; `VisionHost` (receivers, Python senders, demand, hand-over); `VisionControlPanel` (F6); `DirectSenderOnly` launch mode; `Showcase/HandsFace` (`HandsShowcase.unity`, `FaceShowcase.unity`). 105 C# tests pass; 24 of 24 injected bugs caught; Python command-line contract 20/20.
+- [ ] **NOT TESTED: Play mode** for the panel, both scenes and the Inspector section; the host launching the senders from Unity; a live camera. The scene files were written by hand. *(S-01 update: the host starting a sender through `DirectSenderOnly`, the demand rule, stopping it on leaving Play and the AppBootstrap Inspector section WERE exercised in Play mode, through the cutout stream. The F6 panel's drawing, the Hands and Face scenes and a live camera are still untested.)*
+- [x] Launcher: a fourth column SHOWCASES (Fluid Disruption, Hands Only, Face Only) and `TrackingNeed.VisionOnly`; 121 C# tests pass headless.
+- [ ] Next: open the project, let it compile, Play `HandsShowcase` then `FaceShowcase`; register the scenes in Build Settings (Virtual Mirror > Register All Scenes); a combined hands + face sender for one camera.
+
+---
+
+## H-03 - Unity receivers for the hands and face wires (2026-10-13)
+
+Report: [`H03_UNITY_RECEIVERS_2026-10-13.md`](H03_UNITY_RECEIVERS_2026-10-13.md). Decision: **ADR-101**. Sidecar repo: `docs/tasks.md` H-03. Usage: `Runtime/Vision/README.md`. Follows H-01 and H-02.
+
+- [x] **Done and verified headless:** assembly `VirtualMirror.Vision`; allocation-free scanner and parsers; reusable messages; `UdpVisionReceiver` (hands 8901, face 8902); `UdpHandTrackingProvider` / `UdpFaceTrackingProvider` onto the existing provider interfaces; `ArkitBlendshapeMap` + `ArkitBlendshapeDriver`; drop-in `VisionDemoRig`. 22 golden fixtures from the Python encoders. 86 C# tests pass; 36 of 36 injected bugs caught; 0 bytes allocated per parse (net9); Python `test_vision_fixtures` 45/45.
+- [ ] **NOT TESTED: the Unity Editor compile and Play mode** for every MonoBehaviour, the gizmo views, the HUD and the driver; a live camera; a rigged character. This is the first thing to do.
+- [ ] Next: Play-mode check with `run_hands_demo.bat` / `run_face_demo.bat`; drive a VRM from the face (`UdpFaceTrackingProvider` into `VrmExpressionRetargeter`, or `ArkitBlendshapeDriver`); extract the sidecar source handling to a root module.
+
+---
+
+## H-02 - Face only: a face, 52 blendshapes, head pose and position, with no body in the picture (2026-10-13)
+
+Report: [`H02_FACE_ONLY_2026-10-13.md`](H02_FACE_ONLY_2026-10-13.md). Decision: **ADR-100**. Sidecar repo: `docs/tasks.md` H-02. Follows H-01 (the user's order: hands first, then face).
+
+- [x] Requirements (from H-01): webcam and LAN camera sources; 52 blendshapes; a new sender in THIS repo; licensing "carry what is current". User approved the downloads (3 ONNX models, the converter's NOTICE and script) in chat.
+- [x] Model route: community ONNX conversions of the TFLite models in `face_landmarker.task` (fernandotonon / QtMeshEditor-models on Hugging Face, Apache-2.0 with a NOTICE), fetched by size + SHA-256 (`tools/model/fetch_face_models.py`). The exact contract (anchors, ROI rule, the 146 landmark indices, the 52 names, the pixel-coordinate blendshape input) was read from the converter's script itself, not from a summary. No new pip package.
+- [x] `face_landmarker.py`, `face_tracking.py`, `face_geometry.py`, `face_wire.py`, `face_overlay.py`, plus the shared `roi_geometry.py` and `landmark_filters.py` (sidecar root); `tools/face/{face_udp_sender,face_udp_receiver,face_eval}.py`; `tools/video/vision_sender.py` (the frame loop both senders share); `scripts/run_face_demo.bat`.
+- [x] Wire: `{ver:1, kind:"face"}` on UDP 8902, documented in `face_wire.py`'s docstring. 52 scores by `BLENDSHAPE_NAMES` (index 0 `_neutral`, 1-51 ARKit, no tongueOut).
+- [x] Tests 183 new (`test_face_landmarker` 68, `test_face_geometry` 22, `test_face_tracking` 46, `test_face_wire` 36, `test_landmark_filters` 11); hands' 207 pass unchanged through the extraction. 42 of 42 injected bugs caught (3 survivors each got the test that kills them).
+- [x] Run end to end on a real clip: sender (three real networks) -> UDP -> reference receiver, 29-30 msg/s, `bad=0 seq_gaps=0`; 435/435 frames, one id, 7.9 ms a frame on CPU.
+- [x] Bug found by running it, not by the tests: a file's slow first frame (DirectML warm-up, 250 ms) made the pacer drop frames and the face was lost 14 times in the first second. Fixed in `vision_sender` (pacer restarts after the first frame); a test-visible regression guard is the run's `det_runs=1`.
+- [x] The blendshape panel moved to a strip beside the picture (it covered the face on a narrow frame).
+- [x] `ThirdPartyNotices.txt` entry 14 (and it says these are a third party's conversion).
+- [ ] **NOT TESTED: a live webcam, a phone, a LAN camera; each expression channel on a face that blinks / opens its mouth / raises its brows; which of Left/Right moves when YOU close your left eye.**
+- [ ] **NOT TESTED: the head angles against a real head (uncalibrated neutral pitch), `pos` against a ruler (`--hfov`, `--face-scale` assumed), the conversion's parity with Google's models (needs a throwaway venv with `mediapipe`).**
+- [ ] Unity receivers for `kind:"hands"` and `kind:"face"` and an ARKit-names -> VRM-expressions mapping. Not started.
+- [ ] Extract the video sender's camera / stream / LAN readers to a root module so the senders can ship in a Unity build. One process for hands + face if two senders on one camera is too heavy.
+
+---
+
+## H-01 - Hands only: find, track and read hands with no body in the picture (2026-10-13)
+
+Report: [`H01_HANDS_ONLY_2026-10-13.md`](H01_HANDS_ONLY_2026-10-13.md). Decision: **ADR-099**. Sidecar repo: `docs/tasks.md` H-01. Priority order the user set: **hands first, then face only (H-02)**.
+
+- [x] Requirements settled with the user: sources = webcam and LAN camera (url); 3D position AND finger poses AND gestures; later 52 face blendshapes; a new sender in THIS repo; licensing "carry what is current".
+- [x] Model route: the OpenCV Zoo ONNX conversions of MediaPipe's palm detector + hand-landmark network, on the existing onnxruntime-directml. No new pip package (`mediapipe` would pull `opencv-contrib-python` next to `opencv-python`). User approved the download; GitHub's LFS host was reset by the network, so `tools/model/fetch_hand_models.py` uses the Hugging Face mirror, size + SHA-256 verified.
+- [x] `hand_landmarker.py`, `hand_geometry.py`, `hand_gestures.py`, `hand_tracking.py`, `hand_wire.py`, `hand_overlay.py` (sidecar root); `tools/hands/hands_udp_sender.py|hands_udp_receiver.py|hands_eval.py`; `scripts/run_hands_demo.bat`.
+- [x] Wire: `{ver:1, kind:"hands"}` on UDP 8901, documented in `hand_wire.py`'s docstring; the body datagram is untouched.
+- [x] Tests 207: `test_hand_landmarker` 61, `test_hand_geometry` 24, `test_hand_gestures` 36, `test_hand_tracking` 52, `test_hand_wire` 34. 25 of 25 injected bugs caught (2 survivors each got the test that kills them).
+- [x] Run end to end: sender (real networks, real clip) -> UDP -> reference receiver, 30 msg/s, `bad=0`, `seq_gaps=0`. 431 of 435 frames with a hand, 6.7 ms a frame.
+- [x] `ThirdPartyNotices.txt` entry 13 for the models.
+- [ ] **NOT TESTED: a live webcam, a phone, a LAN camera.** Nothing in H-01 has seen a camera frame. Run `scripts/run_hands_demo.bat` and `--video <LAN link> --show`.
+- [ ] **NOT TESTED: depth against a ruler** (0.3 / 0.5 / 0.8 m) and the right `--hfov` for the laptop and the phone. **NOT TESTED: the L/R letter** against a known hand (raise your right hand).
+- [ ] Unity receiver: a `kind:"hands"` UDP provider behind `IHandTrackingProvider` and a scene that draws it. Not started.
+- [x] **H-02: face only, 52 blendshapes (built, see above).** Same pattern: a face landmark + blendshape network on ONNX, `kind:"face"` on port 8902, the same source handling. Not started.
+- [ ] Extract the video sender's camera / stream / LAN readers to a sidecar root module so the hands sender can move to the root and ship in a Unity build.
+- [ ] Crossing hands can lock both crops onto one hand (ids may swap); a detection-driven mode while two hands are close would fix it. Known limit, measured as an invariant only.
+
+---
+
 ## F-62 - Several people in Fluid Disruption, and the people logic moved into one shared module (2026-10-12)
 
 - [x] Why Fluid Disruption followed one person: the TRACKING SOURCE was shared (it already published the whole crowd) but the crowd

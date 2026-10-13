@@ -1,0 +1,21 @@
+{
+    "name": "CutoutShowcase.Editor",
+    "rootNamespace": "CutoutShowcase.EditorTools",
+    "references": [
+        "CutoutShowcase",
+        "HandsFaceShowcase",
+        "VirtualMirror.App",
+        "VirtualMirror.Vision"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

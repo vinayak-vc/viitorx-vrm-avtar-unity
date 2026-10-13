@@ -585,7 +585,86 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 434193326}
   m_Mesh: {fileID: 10210, guid: 0000000000000000e000000000000000, type: 0}
---- !u!43 &437552001
+--- !u!1 &458378643
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 458378644}
+  - component: {fileID: 458378645}
+  m_Layer: 0
+  m_Name: Left Hand Target
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &458378644
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 458378643}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1581399821}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &458378645
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 458378643}
+  m_Enabled: 0
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b3027f475235a4f7ab39c90b4bbf8567, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: fluxy::Fluxy.FluxyTarget
+  splatMaterial: {fileID: 2100000, guid: 644c5fbe7e0624b239c5c09b7d1613ae, type: 2}
+  rateOverSteps: 1
+  rateOverTime: 0
+  rateOverDistance: 0
+  overridePosition: 0
+  position: {x: 0, y: 0}
+  positionRandomness: 0
+  overrideRotation: 1
+  rotation: 0
+  rotationRandomness: 0
+  scaleWithDistance: 1
+  scaleWithTransform: 0
+  scale: {x: 0.1, y: 0.1}
+  scaleRandomness: 0
+  velocityWeight: 1
+  velocityTexture: {fileID: 0}
+  maxRelativeVelocity: 8
+  velocityScale: {x: 1, y: 1, z: 1}
+  maxRelativeAngularVelocity: 12
+  angularVelocityScale: 1
+  force: {x: 0, y: 0, z: 0}
+  torque: 0
+  densityWeight: 1
+  densityTexture: {fileID: 0}
+  srcBlend: 5
+  dstBlend: 10
+  blendOp: 0
+  color: {r: 1, g: 1, b: 1, a: 1}
+  noiseTexture: {fileID: 2800000, guid: ff70acd9d6132428b8cbea06fbf16801, type: 3}
+  densityNoise: 0
+  densityNoiseOffset: 0
+  densityNoiseTiling: 1
+  velocityNoise: 0
+  velocityNoiseOffset: 0
+  velocityNoiseTiling: 1
+--- !u!43 &487070739
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -763,85 +842,6 @@ Mesh:
       - serializedVersion: 1
         m_IndexStart: 0
         m_IndexCount: 0
---- !u!1 &458378643
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 458378644}
-  - component: {fileID: 458378645}
-  m_Layer: 0
-  m_Name: Left Hand Target
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &458378644
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 458378643}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 1581399821}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &458378645
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 458378643}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: b3027f475235a4f7ab39c90b4bbf8567, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: fluxy::Fluxy.FluxyTarget
-  splatMaterial: {fileID: 2100000, guid: 644c5fbe7e0624b239c5c09b7d1613ae, type: 2}
-  rateOverSteps: 1
-  rateOverTime: 0
-  rateOverDistance: 0
-  overridePosition: 0
-  position: {x: 0, y: 0}
-  positionRandomness: 0
-  overrideRotation: 1
-  rotation: 0
-  rotationRandomness: 0
-  scaleWithDistance: 1
-  scaleWithTransform: 0
-  scale: {x: 0.1, y: 0.1}
-  scaleRandomness: 0
-  velocityWeight: 1
-  velocityTexture: {fileID: 0}
-  maxRelativeVelocity: 8
-  velocityScale: {x: 1, y: 1, z: 1}
-  maxRelativeAngularVelocity: 12
-  angularVelocityScale: 1
-  force: {x: 0, y: 0, z: 0}
-  torque: 0
-  densityWeight: 1
-  densityTexture: {fileID: 0}
-  srcBlend: 5
-  dstBlend: 10
-  blendOp: 0
-  color: {r: 1, g: 1, b: 1, a: 1}
-  noiseTexture: {fileID: 2800000, guid: ff70acd9d6132428b8cbea06fbf16801, type: 3}
-  densityNoise: 0
-  densityNoiseOffset: 0
-  densityNoiseTiling: 1
-  velocityNoise: 0
-  velocityNoiseOffset: 0
-  velocityNoiseTiling: 1
 --- !u!1 &599184389
 GameObject:
   m_ObjectHideFlags: 0
@@ -1299,7 +1299,7 @@ MeshFilter:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1581399819}
-  m_Mesh: {fileID: 437552001}
+  m_Mesh: {fileID: 487070739}
 --- !u!1 &1693346085
 GameObject:
   m_ObjectHideFlags: 0

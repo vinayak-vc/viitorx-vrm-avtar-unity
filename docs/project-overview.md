@@ -52,6 +52,11 @@ Multiplayer, VR/AR, cloth authoring, marketplace, lip-sync from mic, non-Windows
 | Trust channel / hands / feet / attract | `F29_TRUST_HANDS_FEET_ATTRACT_2026-09-16.md` |
 | Multi-person: detection, ids, the crowd wire | `F32_MULTIPERSON_2026-09-17.md` (ADR-070) |
 | Per-person filter chains | `F33_PER_PERSON_FILTERS_2026-09-17.md` (ADR-071) |
+| Hands only (no body), a separate wire | `H01_HANDS_ONLY_2026-10-13.md` (ADR-099) |
+| Face only (no body), 52 blendshapes, a separate wire | `H02_FACE_ONLY_2026-10-13.md` (ADR-100) |
+| Unity receivers for the hands and face wires (`Runtime/Vision`) | `H03_UNITY_RECEIVERS_2026-10-13.md` (ADR-101) |
+| Hands and Face settings, host, control panel and sample scenes | `H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md` (ADR-102) |
+| The person cut out of a camera picture (a mask the sidecar makes, Unity draws), a separate wire | `S01_CUTOUT_2026-10-13.md` (ADR-103) |
 | Coding law | `AGENTS.md` (parent), `23_CodingStandards.md` |
 
 Full index: `README.md` in this folder.

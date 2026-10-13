@@ -1,0 +1,94 @@
+using System;
+
+using UnityEngine;
+
+namespace VirtualMirror.Vision {
+    /// <summary>
+    /// Puts a <see cref="HandsReceiver"/> in a scene: add it to a GameObject and it listens on the hands port while enabled. Each frame it pulls the
+    /// newest datagram and raises <see cref="Updated"/> on the MAIN thread, so subscribers can touch the scene. <see cref="Message"/> is the latest
+    /// message, owned by this component; copy what you keep.
+    ///
+    /// The Python side is <c>python-sidecar~/tools/hands/hands_udp_sender.py</c> (or <c>scripts/run_hands_demo.bat</c>). Nothing runs in the player
+    /// but a socket and a parser.
+    /// </summary>
+    [AddComponentMenu("Vision/Hands Receiver")]
+    public sealed class HandsReceiverBehaviour : MonoBehaviour {
+        [Header("Socket")]
+        [Tooltip("UDP port the sidecar's hands sender writes to (hands_udp_sender.py --port).")]
+        [SerializeField] private int port = HandsReceiver.DefaultPort;
+        [Tooltip("Listen on 127.0.0.1 only. Untick to accept datagrams from another machine on the network.")]
+        [SerializeField] private bool loopbackOnly = true;
+        [Tooltip("Seconds without a datagram after which the stream counts as stale.")]
+        [SerializeField] private float staleSeconds = (float)HandsReceiver.DefaultStaleSeconds;
+        [Tooltip("The most hands one datagram can hold here. The sidecar's --max-hands should not exceed it; extra hands are counted and ignored.")]
+        [SerializeField] private int capacity = HandsMessage.DefaultCapacity;
+
+        private HandsReceiver receiver;
+        private HandsMessage message;
+        private bool hasMessage;
+        private long updateCount;
+
+        /// <summary>Raised on the main thread, once per frame in which a new datagram arrived.</summary>
+        public event Action<HandsMessage> Updated;
+
+        public HandsReceiver Receiver {
+            get {
+                return receiver;
+            }
+        }
+
+        /// <summary>The latest message. Valid only when <see cref="HasMessage"/>.</summary>
+        public HandsMessage Message {
+            get {
+                return message;
+            }
+        }
+
+        public bool HasMessage {
+            get {
+                return hasMessage;
+            }
+        }
+
+        /// <summary>Counts frames in which a new message arrived. A consumer compares it to what it last saw to know whether <see cref="Message"/> changed.</summary>
+        public long UpdateCount {
+            get {
+                return updateCount;
+            }
+        }
+
+        public StreamState State {
+            get {
+                return receiver == null ? StreamState.NoStream : receiver.State;
+            }
+        }
+
+        private void OnEnable() {
+            message = new HandsMessage(capacity);
+            hasMessage = false;
+            receiver = new HandsReceiver(port, loopbackOnly, staleSeconds, new VisionDebugLog(), null, capacity);
+            receiver.Start();
+        }
+
+        private void OnDisable() {
+            if (receiver != null) {
+                receiver.Dispose();
+                receiver = null;
+            }
+        }
+
+        private void Update() {
+            if (receiver == null) {
+                return;
+            }
+            if (receiver.TryGetNew(message)) {
+                hasMessage = true;
+                updateCount = updateCount + 1L;
+                Action<HandsMessage> handler = Updated;
+                if (handler != null) {
+                    handler(message);
+                }
+            }
+        }
+    }
+}

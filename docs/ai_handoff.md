@@ -1,7 +1,135 @@
 # Virtual Mirror — AI Handoff
 
-Last updated: 2026-10-12 (F-62 / ADR-098: several people in Fluid Disruption, one shared people module; F-61 / ADR-097: seated person, no vertical drift, no pole; F-60 / ADR-096: a body the camera cuts off, hips then shoulders then nose; F-59 / ADR-095: Chromatic Rain silhouette rebuilt, skins; F-58 / ADR-094: Chromatic Rain shows several people; F-57 / ADR-093: auto portrait / landscape / sideways for a LAN camera, webcam or video; F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
+Last updated: 2026-10-13 (S-01 / ADR-103: the person cut out of a camera picture, a NEW wire on UDP 8903, Python segments and Unity renders, `Showcase/Cutout`; P-01 packaging PLAN, nothing implemented; H-04 / ADR-102: hands and face hosted by AppBootstrap, control panel F6, two sample scenes; H-03 / ADR-101: Unity receivers for the hands and face wires, assembly VirtualMirror.Vision; H-02 / ADR-100: face only, 52 blendshapes, head pose, a sibling sender and wire on port 8902; H-01 / ADR-099: hands only, no body, a separate sender and wire on port 8901; F-62 / ADR-098: several people in Fluid Disruption, one shared people module; F-61 / ADR-097: seated person, no vertical drift, no pole; F-60 / ADR-096: a body the camera cuts off, hips then shoulders then nose; F-59 / ADR-095: Chromatic Rain silhouette rebuilt, skins; F-58 / ADR-094: Chromatic Rain shows several people; F-57 / ADR-093: auto portrait / landscape / sideways for a LAN camera, webcam or video; F-52 / ADR-088: several people from a phone / webcam / video; F-51 / ADR-087: status lights; F-50 / ADR-086: a phone over WebRTC — see the sections directly below)
 Purpose: next agent can continue without re-deriving context.
+
+---
+
+## S-01 - REAL-TIME HUMAN CUTOUT (2026-10-13)
+
+Full record: [`S01_CUTOUT_2026-10-13.md`](S01_CUTOUT_2026-10-13.md), [`decisions.md`](decisions.md) **ADR-103**, [`tasks.md`](tasks.md) S-01, `Showcase/Cutout/README.md`. Sidecar side: its `docs/tasks.md` S-01 and README "Cutout".
+
+**What exists.** The sidecar finds each person (YOLOX-s + tracker), cuts a square crop per person with the others painted out, segments it with MediaPipe's selfie network (ONNX, DirectML), mattes the answer, and sends the picture + a soft mask as one frame over a chunked binary wire on UDP **8903** (`cutout_wire.py`, `tools/cutout/cutout_udp_sender.py`). Unity (`Runtime/Vision`) reassembles it (`UdpDatagramReceiver` base, `CutoutReceiver`, `CutoutAssembler`; buffers are swapped, never copied), uploads two textures (`VisionHost.CutoutTextures`: picture + mask, row 0 = top) and draws them (`CutoutView`, shader `VirtualMirror/Cutout`: Original / Person / Silhouette, glow, mirror, backdrop). `AppBootstrap.Instance.Vision` serves it as the third stream (`VisionStream.Cutout`, 20 `VisionSettings`, a Cutout tab in the F6 panel). `CutoutStreamBinder` puts it in any scene. `Showcase/Cutout/Scenes/CutoutShowcase.unity` is the demo (keys 1 2 3 B C G M F , .), a Launcher row exists. Python and Unity do their own jobs: Unity runs NO model.
+
+**Verified.** 100 new C# tests; the whole `VirtualMirror.Tests` assembly passes, 607 tests in 38 classes (run by reflection in the open Editor; `InspectorGroupingTests` was stale since H-04 and is fixed), plus 11 in `CutoutShowcase.Tests`; Python 100 + 66 + 35 + 93 + 36 assertions; 16 of 16 Python and 15 of 15 C# injected bugs caught; the Editor compiles with 0 errors / 0 warnings; Play mode run with `video.webm` and `147_1080p.mp4` through the sender that `VisionHost` started (all three modes, backdrops, glow, mirror, fit, HUD seen). Numbers are in the report s.4.
+
+**NOT TESTED - the first thing to do.** A PERSON ON A LIVE WEBCAM: the only webcam run (11 s, numbers only) saw nobody. A phone / LAN camera, a network between machines (JPEG, deflate, 1 200-byte chunks), a built player (no sender ships), a long soak. The particle / echo / transition / disperse effects are designed, not built.
+
+**Know before changing it.** (a) Never segment in Unity; change the sidecar. (b) The picture and the mask are one frame: do not split them. (c) A wire field change needs the encoder, `make_vision_fixtures.py` + fixtures, both test suites and an ADR in BOTH repos. (d) Adding a setting means field + property + flag in `VisionSenderArguments` + panel control + both `args_cutout_*.txt` + both tests. (e) `people` is the larger of the people tracked and the foreground groups (the matte alone says 1 for two people standing close). (f) A JPEG picture is flipped on the GPU so both textures have row 0 at the top. (g) The cutout and the hands or face sender cannot share a webcam: each is `Auto` per scene. (h) Never run the C# tests through the Unity MCP `run_tests`; reflect over `VirtualMirror.Tests` from `execute_code`. (i) A test of one rule must not be satisfiable by another (mutation-check). (j) Isolation raises one-frame flicker 1.75 -> 2.01 % while halving the foreground outside the people's boxes; measured, kept, switchable (`--no-isolate`).
+
+**Next recommended task.** Stand in front of a webcam in `CutoutShowcase` and judge the head, hands and feet; then register the scene on the other machines and build the camera-to-silhouette transition.
+
+**Files:** new `Runtime/Vision/{Wire/Cutout*.cs, Receiving/{UdpDatagramReceiver,CutoutReceiver}.cs, Rendering/{CutoutTextures,CutoutLook}.cs, Behaviours/CutoutView.cs, Shaders/*.shader}`, `Runtime/Bootstrap/CutoutStreamBinder.cs`, `Showcase/Cutout/**`, `Tests/EditMode/Cutout*.cs`, `VisionFixtures/cutout_*.bin` + `args_cutout_*.txt`, `docs/S01_...md`, ADR-103; edited `UdpVisionReceiver.cs` (now on the base), `VisionSettings`, `VisionSenderArguments`, `VisionHost`, `VisionControlPanel`, `AppBootstrap.Vision.cs`, `SceneLauncher.cs`, the args / host / launcher tests, `ThirdPartyNotices.txt`. Sidecar: `cutout_{segmenter,matte,engine,wire,overlay}.py`, `tools/cutout/*`, `tools/model/fetch_cutout_models.py`, `scripts/run_cutout_demo.bat`, `tests/test_cutout_*.py`, `make_vision_fixtures.py`, `vision_sender.py` (a sender may return a LIST of datagrams).
+
+---
+
+## P-01 - PACKAGING PLAN: TRACKING ENGINE (COMPILED EXE) AND UNITY PACKAGES (2026-10-13)
+
+**A plan, not code.** Full text: [`PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md`](PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md). Summary: one compiled engine folder `viitorx-tracking.exe` (subcommands hands / face / body, no OAK-D, Nuitka standalone, models in `models/` beside it, startup file check with a clear error, Inno Setup installer needing admin once); Unity packages `com.viitorx.avtar.tracking.{core,sidecar,vision,body}` plus an umbrella, Unity 6000.3+; engine found by setting, env var, per-user install, StreamingAssets, or a prompt to download a pinned release (or use the Python project directly). Recommended: reuse both existing repos by restructuring them in place. Unreal later.
+
+**Do first.** The user pasted a GitHub token into the chat: it must be revoked and never written anywhere; use `gh auth login` for repository work. Then confirm the repo reuse and run the Nuitka compile spike (go / no-go) before anything else.
+
+**Next recommended task.** Phase 0, then Phase 1.
+
+---
+
+## H-04 - HANDS AND FACE IN APPBOOTSTRAP, CONTROL PANEL, TWO SAMPLE SCENES (2026-10-13)
+
+Full record: [`H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md`](H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md), [`decisions.md`](decisions.md) **ADR-102**, [`tasks.md`](tasks.md) H-04, `Showcase/HandsFace/README.md`. Follows H-03 below.
+
+**What exists.** AppBootstrap has a "Hands and Face (H-03)" section (`VisionSettings`, `Runtime/Vision/Host`). `AppBootstrap.Instance.Vision` is a `VisionHost` (`Runtime/Bootstrap/VisionHost.cs`): receivers on 8901/8902, the Python senders (launched through `SidecarProcessLauncher` with `DirectSenderOnly`), `HandsUpdated` / `FaceUpdated`, `AddDemand` / `RemoveDemand`. F6 opens `VisionControlPanel`. `Showcase/HandsFace` has `HandsShowcase.unity` and `FaceShowcase.unity` (assembly `HandsFaceShowcase`); each carries an AppBootstrap with the body path off.
+
+**Verified (headless).** 105 C# tests (host tests use real loopback sockets, sender auto-start off); 24 of 24 mutants caught; Python `test_vision_cli_contract.py` 20/20; `VirtualMirror.App` and the showcase compile against Unity 6000.3.9f1's assemblies.
+
+**NOT TESTED - the first thing to do.** Play mode for the panel, both scenes (hand-written YAML) and the Inspector section; the host launching the senders from Unity (the process, the grace window, stopping on scene exit); a live camera. The Editor was not in the foreground, so it has not compiled the H-04 files: open it, let it import, read the Console, then Play `HandsShowcase`.
+
+**Know before changing it.** (a) A scene never opens a socket or a process: it asks `Vision` for a stream. (b) One webcam / LAN viewer = one reader: the senders are Auto per scene, never Always for both on one camera. (c) Adding a setting means field + property + flag in `VisionSenderArguments` + panel control + `args_*.txt` fixtures + both tests. (d) The sample scenes' AppBootstrap has `useOakUdpTracking` off on purpose. (e) `tools/` is not shipped in a player build, so a player has no senders. (f) Mutation-check changes to `VisionHost` with the scratch harness (see the headless-verification memory).
+
+**Next recommended task.** Open the project and Play the two scenes; then register them in Build Settings and decide a Launcher row.
+
+**Files:** new `Runtime/Vision/Host/{VisionSettings,VisionSenderArguments}.cs`, `Runtime/Bootstrap/{AppBootstrap.Vision,VisionHost,VisionControlPanel}.cs`, `Showcase/HandsFace/**` (scripts, asmdef, two scenes, README), `Tests/EditMode/{VisionHostTests,VisionSenderArgumentsTests}.cs`, `VisionFixtures/args_*.txt`, `docs/H04_...md`, ADR-102; edited `Runtime/Bootstrap/AppBootstrap.cs` (three call sites), `VirtualMirror.App.asmdef`, `Runtime/Tracking/OakD/{SidecarProcessLauncher,SidecarPaths}.cs` (additive), `HandsGizmoView.cs`, `FaceGizmoView.cs`, `Runtime/Vision/README.md`. Sidecar: `tests/test_vision_cli_contract.py`.
+
+---
+
+## H-03 - UNITY RECEIVERS FOR THE HANDS AND FACE WIRES (2026-10-13)
+
+Full record: [`H03_UNITY_RECEIVERS_2026-10-13.md`](H03_UNITY_RECEIVERS_2026-10-13.md), [`decisions.md`](decisions.md) **ADR-101**, [`tasks.md`](tasks.md) H-03, usage [`Runtime/Vision/README.md`](../Runtime/Vision/README.md). Follows H-02 below.
+
+**What exists.** Assembly `VirtualMirror.Vision` (`Runtime/Vision`, depends on `VirtualMirror.Core` only): `Wire/` (allocation-free scanner, two parsers, reusable `HandsMessage` / `FaceMessage`, `ArkitBlendshapes`, `VisionMath`), `Receiving/` (`HandsReceiver` 8901, `FaceReceiver` 8902 on a background thread), `Providers/` (`UdpHandTrackingProvider`, `UdpFaceTrackingProvider` onto `IHandTrackingProvider` / `IFaceTrackingProvider`), `Behaviours/` and `Rigging/` (the scene components, the demo rig, the 52-blendshape driver).
+Tests in `Tests/EditMode/Vision*Tests.cs` against 22 golden datagrams in `Tests/EditMode/VisionFixtures`, written by the sidecar's PRODUCTION encoders (`python-sidecar~/tools/video/make_vision_fixtures.py`) and checked for drift by `test_vision_fixtures.py`.
+
+**Verified.** Headless (the Editor held the project lock): 86 C# tests pass; 36 of 36 injected bugs caught; 0 bytes allocated per parse (net9); Python 45/45 on the fixtures and the earlier suites unchanged.
+
+**NOT TESTED - the first thing to do.** The Editor has not compiled or run the MonoBehaviours, gizmo views, HUD, `VisionDemoRig` or `ArkitBlendshapeDriver`; no live camera; no rigged character. Open the project, let it compile, run `run_hands_demo.bat` / `run_face_demo.bat`, add Vision > Demo Rig and read the HUD.
+
+**Know before changing it.** (a) The parse path allocates nothing: keep it so and re-measure (ADR-101). (b) Wire y is DOWN, Unity y is UP; the parser converts position, world landmarks and head rotation, not image landmarks. (c) `VisionMath` uses managed rotation maths on purpose (Unity's native calls cannot run headless). (d) A refused datagram must never reach the sequence logic. (e) Bind blendshapes by name. (f) Never run the C# tests through the Unity MCP `run_tests`: it closes the Editor; use the scratch csproj approach in the headless-verification memory. (g) A wire change needs the encoder, the fixtures, both test suites and an ADR in both repos.
+
+**Next recommended task.** The Play-mode check above; then drive a VRM from the face (`UdpFaceTrackingProvider` into `VrmExpressionRetargeter`).
+
+**Files:** new `Runtime/Vision/**` (asmdef, `Wire/`, `Receiving/`, `Providers/`, `Behaviours/`, `Rigging/`, `README.md`), `Tests/EditMode/Vision{WireScanner,Parser,Receiver,Bridge}Tests.cs`, `VisionFixtures.cs`, `VisionFixtures/` (22 files), edited `Tests/EditMode/VirtualMirror.Tests.asmdef` (references `VirtualMirror.Vision`), `docs/H03_UNITY_RECEIVERS_2026-10-13.md`, ADR-101, `.meta` files for the new files and for the H-01/H-02 reports. Sidecar: `tools/video/make_vision_fixtures.py`, `tests/test_vision_fixtures.py`.
+
+---
+
+## H-02 - FACE ONLY: 52 BLENDSHAPES, HEAD POSE, POSITION; A SIBLING SENDER AND WIRE (2026-10-13)
+
+Full record: [`H02_FACE_ONLY_2026-10-13.md`](H02_FACE_ONLY_2026-10-13.md), [`decisions.md`](decisions.md) **ADR-100**, [`tasks.md`](tasks.md) H-02. Follows H-01 below.
+
+**The request.** "Start face only with 52 blendshapes" after the hands, same sources (webcam, LAN camera), a new sender in this repo.
+
+**What was built.** MediaPipe's face detector + 478-point mesh + blendshape network (community ONNX conversions of the TFLite models in `face_landmarker.task`, on the existing onnxruntime-directml; no new pip package) behind a
+tracker with stable ids, smoothing, 52 blendshapes, head pose and an estimated position, sent as `{ver:1, kind:"face"}` on UDP **8902** (hands 8901, body 8899 untouched). Face modules at the sidecar root, the entry
+`tools/face/face_udp_sender.py`, a reference receiver and a measuring tool, `tools/model/fetch_face_models.py`, `scripts/run_face_demo.bat`. The crop maths (`roi_geometry.py`) and a vectorised One-Euro bank
+(`landmark_filters.py`) were extracted from the hand code, and the frame loop is now `tools/video/vision_sender.py`, shared by the hands and face senders.
+
+**"52" is 1 + 51.** Index 0 is `_neutral` (MediaPipe's own channel); 1-51 are ARKit's names; there is NO `tongueOut`. Index by name (`BLENDSHAPE_NAMES`, `bsv: 1`), not by ARKit's order.
+
+**Measured.** 390 assertions in ten test files (hands' 207 unchanged through the refactor); 42 of 42 injected bugs caught. End to end on a real clip: 29-30 msg/s, no bad datagram, no sequence gap; 435/435 frames with a face,
+one id, 7.9 ms a frame on CPU (DirectML is the same speed after a 252 ms warm-up).
+
+**NOT TESTED - the first thing to do.** No live webcam, phone or LAN camera has been used (H-01 and H-02 together). No expression channel was checked on a face that blinks or opens its mouth. The ONNX files are a third party's
+conversion whose parity with Google's was not reproduced. Head angles are a geometric estimate with an uncalibrated neutral pitch; `pos` scales with the assumed `--hfov` and 0.09 m eye width. Run
+`python-sidecar~/scripts/run_face_demo.bat`, blink, open your mouth, raise your brows, close your left eye (which `...Left` channel moves?), and fill in section 7 of the report.
+
+**Know before changing it.** (a) Never put face fields into the 8899 or 8901 datagrams; never send a position when the fit is refused (ADR-100). (b) Read blendshapes from the RAW landmarks and smooth the output; the smoothed
+landmarks only feed pose and position. (c) The detector is SHORT RANGE: a face ~10% of the letterbox is not found, `--crop` stands in for a closer camera. (d) A file's first frame pays DirectML's warm-up; `vision_sender` restarts the
+pacer after it, or the picture jumps. (e) `FaceTracker` compares a detection with the tracked face's landmark box, not the crop. (f) Both senders are in `tools/` (not shipped by `SidecarBuildPostprocessor`); the modules they drive are
+at the root. (g) `TrackedFace` is reused between frames: read it before the next `update()`.
+
+**Next recommended task.** The live check above; then the Unity receivers (`IFaceTrackingProvider` and `FaceFrame` exist in `Runtime/Core`) with an ARKit-names -> VRM-expressions map.
+
+**Files:** new `face_landmarker.py face_tracking.py face_geometry.py face_wire.py face_overlay.py roi_geometry.py landmark_filters.py`, `tools/face/{face_udp_sender,face_udp_receiver,face_eval}.py`, `tools/video/vision_sender.py`,
+`tools/model/fetch_face_models.py`, `scripts/run_face_demo.bat`, `tests/test_face_{landmarker,geometry,tracking,wire}.py`, `tests/test_landmark_filters.py`, `tests/_synthetic_face.py` (all in `python-sidecar~/`); changed
+`hand_landmarker.py hand_tracking.py tools/hands/hands_udp_sender.py` (extractions, behaviour unchanged, 207 hand assertions pass), `docs/H02_FACE_ONLY_2026-10-13.md`, ADR-100, `ThirdPartyNotices.txt` entry 14. Nothing is committed.
+
+---
+
+## H-01 - HANDS ONLY, NO BODY: A SEPARATE SENDER AND WIRE (2026-10-13)
+
+Full record: [`H01_HANDS_ONLY_2026-10-13.md`](H01_HANDS_ONLY_2026-10-13.md), [`decisions.md`](decisions.md) **ADR-099**, [`tasks.md`](tasks.md) H-01.
+
+**The request.** A new project needs only hands (a hand in the frame, no body). The body sidecar cannot do that: RTMW3D reads hands out of a crop around a detected PERSON. Asked for as an
+extension of this repo, webcam + LAN camera, 3D position + finger poses + gestures, then (H-02) face only with 52 blendshapes. Hands first.
+
+**What was built.** MediaPipe's palm detector + hand-landmark network (OpenCV Zoo ONNX, on the existing onnxruntime-directml; no new pip package) behind a tracker with stable ids, smoothing, a monocular 3D
+position, finger curls and gestures, sent as `{ver:1, kind:"hands"}` on UDP **8901** (the body datagram on 8899 is untouched). Six `hand_*.py` modules at the sidecar root, the entry `tools/hands/hands_udp_sender.py`,
+a reference receiver and a measuring tool in `tools/hands/`, `tools/model/fetch_hand_models.py`, `scripts/run_hands_demo.bat`.
+
+**Measured.** 207 assertions in five test files; 25 of 25 injected bugs caught. End to end on a real clip: 30 msg/s, no bad datagram, no sequence gap; 431/435 frames with a hand; 6.7 ms a frame.
+
+**NOT TESTED - the first thing to do.** No live webcam, phone or LAN camera has been used. Depth (`pos.Z`) is an estimate from hand size and an ASSUMED `--hfov` and is not measured against a ruler. The L/R letter follows
+MediaPipe's mirrored-picture convention and is not checked against a known hand. Gesture and smoothing constants are unmeasured on real hands. Run `python-sidecar~/scripts/run_hands_demo.bat`, raise your right hand,
+hold a hand at 0.3 / 0.5 / 0.8 m, and fill in section 7 of the report.
+
+**Know before changing it.** (a) Never put hands into the 8899 datagram or send a position when the fit is refused (ADR-099). (b) The entry point is in `tools/` (not shipped by `SidecarBuildPostprocessor`, which copies
+`root/*.py`) because it reuses `video_udp_sender`'s source handling; the `hand_*.py` modules import nothing from `tools/`. (c) `fetch_hand_models.py` uses the Hugging Face mirror: GitHub's LFS host was reset by the
+network it was written on. (d) `hand_tracking` compares a new palm with the tracked PALM box, not with the crop: the crop is two hand-lengths wide and a second hand held beside the first lies inside it. (e) Two
+hands that cross can lock both crops onto one hand; ids may swap. (f) The tracker object `TrackedHand` is reused between frames: read it before the next `update()`.
+
+**Next recommended task.** H-02, face only with 52 blendshapes, same shape (a second wire kind on 8902, the same source handling); or first the Unity receiver (`IHandTrackingProvider` exists). Do the live check above before either.
+
+**Files:** new `hand_landmarker.py hand_geometry.py hand_gestures.py hand_tracking.py hand_wire.py hand_overlay.py`, `tools/hands/{hands_udp_sender,hands_udp_receiver,hands_eval}.py`, `tools/model/fetch_hand_models.py`,
+`scripts/run_hands_demo.bat`, `tests/test_hand_{landmarker,geometry,gestures,tracking,wire}.py` + `tests/_synthetic_hand.py` (all in `python-sidecar~/`), `docs/H01_HANDS_ONLY_2026-10-13.md`, ADR-099, `ThirdPartyNotices.txt` entry 13.
+Nothing is committed.
 
 ---
 

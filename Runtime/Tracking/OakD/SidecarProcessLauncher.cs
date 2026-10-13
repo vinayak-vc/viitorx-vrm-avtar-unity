@@ -123,14 +123,18 @@ namespace VirtualMirror.Tracking.OakD {
             // Someone already owns the supervisor's single-instance lock -> attach, do not spawn.
             // Two producers on one UDP port interleave poses from different sessions, which reads as
             // violent jitter rather than as a configuration error, so it is worth avoiding by design.
-            if (IsLockPortHeld()) {
+            // A DirectSenderOnly launch (the hands and face senders) has no supervisor and so no lock:
+            // the body sidecar legitimately runs beside it, and its lock port is not ours to read.
+            if (!options.DirectSenderOnly && IsLockPortHeld()) {
                 SetState(SidecarLaunchState.AttachedExternal, string.Empty);
                 Info("a sidecar supervisor already holds lock port " + options.LockPort
                      + "; attaching to it instead of starting a second one.");
                 return true;
             }
 
-            List<string> problems = SidecarPaths.Validate(paths);
+            List<string> problems = options.DirectSenderOnly
+                ? SidecarPaths.ValidateSenderOnly(paths)
+                : SidecarPaths.Validate(paths);
             if (!string.IsNullOrEmpty(options.DirectScript)) {
                 string direct = ResolveDirectScript(paths);
                 if (!System.IO.File.Exists(direct)) {
@@ -349,9 +353,11 @@ namespace VirtualMirror.Tracking.OakD {
         private string BuildDirectArguments(SidecarPathSet paths) {
             StringBuilder sb = new StringBuilder();
             sb.Append("-u ").Append(Quote(ResolveDirectScript(paths)));
-            sb.Append(" --host ").Append(options.Host);
-            sb.Append(" --port ").Append(options.UdpPort);
-            sb.Append(" --model ").Append(Quote(paths.ModelFile));
+            if (!options.DirectSenderOnly) {
+                sb.Append(" --host ").Append(options.Host);
+                sb.Append(" --port ").Append(options.UdpPort);
+                sb.Append(" --model ").Append(Quote(paths.ModelFile));
+            }
             if (!string.IsNullOrEmpty(options.DirectArguments)) {
                 sb.Append(" ").Append(options.DirectArguments);
             }
@@ -748,6 +754,13 @@ namespace VirtualMirror.Tracking.OakD {
         /// <summary>Extra arguments for <see cref="DirectScript"/>, appended after host/port/model.
         /// Ignored unless DirectScript is set.</summary>
         public string DirectArguments = string.Empty;
+
+        /// <summary>
+        /// The direct script is one of the vision senders (hands, face), not a body sender. It takes its own flags and no <c>--model</c>
+        /// (the body pose model is not needed), has no supervisor and so no single-instance lock, and the whole command line is
+        /// <see cref="DirectArguments"/>: host, port and source included. Ignored unless <see cref="DirectScript"/> is set.
+        /// </summary>
+        public bool DirectSenderOnly;
         /// <summary>Overrides the model location; empty means use the packaged path.</summary>
         public string ModelPathOverride = string.Empty;
 
