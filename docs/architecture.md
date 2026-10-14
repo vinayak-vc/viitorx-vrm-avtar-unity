@@ -172,6 +172,14 @@ chain (ADR-067, Consequences).
 
 ---
 
+## Showcases on the vision streams (H-04, S-01, HE-01)
+
+The hands, face and cutout streams (`Runtime/Vision`, hosted by `AppBootstrap.Instance.Vision`) need no body tracking: a scene that only reads them carries an AppBootstrap with the body path off and is listed by the Launcher as `TrackingNeed.VisionOnly`. `Showcase/HandsFace`, `Showcase/Cutout` and `Showcase/HumanEcho` are such scenes.
+
+`Showcase/HumanEcho` (assemblies `HumanEcho`, `HumanEcho.Editor`, `HumanEcho.Tests`) is the pattern for GPU effects on the cutout: ONE stage (`PersonField`) turns the stream's picture and mask into the textures every layer reads (`Field`, `Motion`); layers implement `IHumanEchoLayer`, each draws on its own quad at a fixed render queue, and all of them read the ACTIVE `HumanEchoSettings` look every frame. A layer never reads the camera, the socket or the cutout textures itself. FluXY is one layer (`SmokeLayer`, also an `IFluidFlow` for the particles), not the base; the particles are a compute-shader pool. See ADR-104 and `Showcase/HumanEcho/README.md`.
+
+---
+
 ## Extension
 
 New tracker = new provider. New IK = new `IIkSolver`. Do not couple UI to MediaPipe or UniVRM.

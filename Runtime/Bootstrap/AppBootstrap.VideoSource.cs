@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 using VirtualMirror.Core;
 
 namespace VirtualMirror.App {
@@ -9,10 +10,10 @@ namespace VirtualMirror.App {
     /// </summary>
     public sealed partial class AppBootstrap {
         [InspectorGroup("Video Test Source (F-49)", Order = 20, ExpandedByDefault = true)]
-        [Tooltip("RUN THE SAME TRACKING ON A VIDEO INSTEAD OF THE OAK-D. Tick this, paste a link or path " +
-                 "into 'Video Source', press Play. Nothing downstream changes: the sidecar sends the " +
+        [Tooltip("RUN THE SAME TRACKING ON A VIDEO INSTEAD OF THE OAK-D. Tick this, put a link, path or camera " +
+                 "in 'Source' (Hands and Face section: ONE input for every stream), press Play. Nothing downstream changes: the sidecar sends the " +
                  "same UDP datagrams, so every scene, the skeleton show and the VRM avatar run exactly " +
-                 "as they do live. Unrelated to 'Use Video Source' above, which feeds MediaPipe on a " +
+                 "as they do live. Unrelated to 'Use Video Source' in Tracking Source, which feeds MediaPipe on a " +
                  "webcam path and is ignored on the OAK-D path.\n\n" +
                  "Changing any field below while playing restarts the sidecar after a second (the model " +
                  "reloads, ~10 s). Needs 'Use Oak Udp Tracking' and 'Auto Start Sidecar' on.\n\n" +
@@ -20,33 +21,6 @@ namespace VirtualMirror.App {
                  "NO STEREO: depth is estimated, so the TRUST HUD reads 0/33 measured and the calibration " +
                  "never becomes ready unless 'Video Assume Measured Depth' is on.")]
         [SerializeField] private bool trackFromVideo = false;
-        [Tooltip("WHAT TO TRACK. One of:\n" +
-                 "  * a path - absolute, or relative to the project folder: Assets/Games/video/SR7.mp4\n" +
-                 "  * a direct http(s) link to a video file (.mp4 .webm .mov .mkv .avi .m4v) - downloaded once, cached\n" +
-                 "  * camera:0 (or just 0) - a WEBCAM. A phone appears here when an app such as DroidCam, " +
-                 "Iriun or Camo exposes it to Windows. Try camera:1, camera:2 if 0 is your laptop camera.\n" +
-                 "  * http://192.168.1.5:8080/video - a phone 'IP camera' app over Wi-Fi (MJPEG). An http link " +
-                 "to a private/LAN address is read as a live camera, not a web page.\n" +
-                 "  * rtsp://user:pass@host/stream - an IP camera. Credentials are never logged.\n" +
-                 "  * http://192.168.1.5:3000/viewer?room=room-abc123 - a phone streaming through the LAN CAMERA " +
-                 "STREAMING server (its sender page), received over WebRTC. Paste the VIEWER link; the access " +
-                 "PIN goes in 'Lan Camera Pin' below, never in the link. Close any browser viewer open in that " +
-                 "room first: the server allows one viewer.\n" +
-                 "  * a web page link (YouTube...) - needs yt-dlp in the sidecar venv, which is not installed.\n" +
-                 "Live sources (camera, stream, LAN camera) process only the NEWEST frame, so lag cannot build " +
-                 "up, and reconnect on their own if the phone drops off.")]
-        [SerializeField] private string videoSource = "Assets/Games/video/SR7.mp4";
-        [Tooltip("LAN CAMERA ONLY. The access PIN of the LAN Camera Streaming server (its ACCESS_PIN). Used " +
-                 "when 'Video Source' is a viewer link; ignored for everything else.\n\n" +
-                 "It reaches the sidecar through its ENVIRONMENT, so it is never on a command line or in a " +
-                 "log. The field is masked, but it is still saved into the scene as plain text: leave it " +
-                 "empty and set the CAMERA_PIN environment variable on this machine if the PIN should not " +
-                 "live in the project. The field wins when both are set.")]
-        [MaskedString]
-        [SerializeField] private string lanCameraPin = string.Empty;
-        [Tooltip("FILES ONLY. Replay the clip forever. Off: it plays once and then the sidecar idles, so " +
-                 "tracking goes stale rather than the clip restarting. A camera or stream has no end.")]
-        [SerializeField] private bool videoLoop = true;
         [Tooltip("PORTRAIT OR LANDSCAPE, UPRIGHT OR SIDEWAYS: FIND OUT BY ITSELF. A phone on the LAN camera, a " +
                  "webcam or a clip can arrive portrait or landscape, and a webcam app may hand over a sideways or " +
                  "upside-down picture. With this on the sidecar tries the four rotations on a few frames (a person " +
@@ -77,10 +51,6 @@ namespace VirtualMirror.App {
                  "mirrored, which swaps the person's left and right. Note this is separate from the scenes' " +
                  "own mirror setting, which is a display choice.")]
         [SerializeField] private bool videoFlipHorizontal = false;
-        [Tooltip("Requested webcam resolution. 1280x720 is plenty: the pose model resizes its crop of the " +
-                 "body to 288x384, so more pixels add nothing and cost bandwidth. 0 keeps the default. " +
-                 "Ignored for files and streams.")]
-        [SerializeField] private Vector2Int videoCameraSize = new Vector2Int(1280, 720);
         [Tooltip("Label every joint's depth as MEASURED on the wire. LABEL ONLY - no coordinate changes. " +
                  "Lets the F-48 calibration run on a source with no stereo. The TRUST HUD will then say " +
                  "33/33 MEASURED about a video, so do not quote a recording made with this on as evidence " +
@@ -108,6 +78,16 @@ namespace VirtualMirror.App {
                  "first person only.")]
         [Range(1, 8)]
         [SerializeField] private int videoMaxPeople = 1;
+
+        // ---- The input (source, PIN, loop, webcam size) is ONE copy now: Hands and Face -> Source and friends
+        // (VisionSettings), shared by every stream and by the body path. These are the body path's old private
+        // copies. They are not shown and not read: they only still LOAD from older scenes (the serialized names are
+        // kept) so InputSettingsMigration can carry a video the body path was tracking over to the shared copy.
+        [FormerlySerializedAs("videoSource")] [HideInInspector] [SerializeField] private string legacyVideoSource = string.Empty;
+        [FormerlySerializedAs("lanCameraPin")] [HideInInspector] [SerializeField] private string legacyLanCameraPin = string.Empty;
+        [FormerlySerializedAs("videoLoop")] [HideInInspector] [SerializeField] private bool legacyVideoLoop = true;
+        [FormerlySerializedAs("videoCameraSize")] [HideInInspector] [SerializeField] private Vector2Int legacyVideoCameraSize = new Vector2Int(1280, 720);
+        [HideInInspector] [SerializeField] private int inputSettingsVersion = 0;
 
         /// <summary>F-49: the video sender, relative to the sidecar root. It lives under tools/ because
         /// it is a harness-grade sender (ADR-065 keeps the root for the camera path); the supervisor

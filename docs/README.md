@@ -26,6 +26,7 @@ the debug skeleton is being built into the product. These are the current report
 
 | Doc | Covers |
 |-----|--------|
+| [HE01_HUMAN_ECHO_2026-10-14.md](HE01_HUMAN_ECHO_2026-10-14.md) | **Human Echo**: the S-01 cutout turned into FluXY smoke, echo copies, a neon outline and GPU particles with a floor pile, three switchable looks (`Showcase/HumanEcho`, ADR-104). 99 + 608 + 11 tests pass; seen working on two video files; NOT tested on a person in front of a webcam |
 | [S01_CUTOUT_2026-10-13.md](S01_CUTOUT_2026-10-13.md) | **Real-time human cutout**: the person in a camera picture isolated by the sidecar (MediaPipe selfie network, a crop per person) and drawn by Unity from the picture + a soft mask on a new wire (UDP 8903): Original / Person / Silhouette, glow, backdrops (`Showcase/Cutout`, `CutoutStreamBinder`). Tested; seen working on two video files; NOT tested on a person in front of a webcam |
 | [PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md](PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md) | **Plan only**: a compiled Viitorx Tracking Engine (exe folder + Inno Setup installer) and `com.viitorx.avtar.tracking.*` Unity packages; repo reuse analysis |
 | [H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md](H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md) | **Hands and Face in AppBootstrap**: one settings section, a host that runs the senders, an F6 control panel, two sample scenes (`Showcase/HandsFace`). Tested headless; not run in Play mode |

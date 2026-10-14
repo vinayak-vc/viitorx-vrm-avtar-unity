@@ -1,0 +1,125 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 295e6cfaa4e21df43bbc6e06576cedae, type: 3}
+  m_Name: HumanEchoLook_ParticleBody
+  m_EditorClassIdentifier: HumanEcho::HumanEcho.HumanEchoSettings
+  displayName: Particle Body
+  notes: 'Clip 11367: a dancer made of hue-cycling dots and spheres that fall and
+    pile up on a floor line, thin white outline.'
+  viewHeightMetres: 2.4
+  backgroundColor: {r: 0.005, g: 0.005, b: 0.012, a: 1}
+  person:
+    enabled: 1
+    colorMode: 1
+    tint: {r: 0.6, g: 0.7, b: 1, a: 1}
+    opacity: 0.08
+    brightness: 0.8
+    contrast: 1
+    flash: 0
+    edgeContrast: 1.5
+    rim: 0
+    rimColor: {r: 1, g: 0.25, b: 0.1, a: 1}
+    rimWidth: 2
+    rimStrength: 1.5
+  smoke:
+    enabled: 1
+    drawn: 0
+    resolution: 512
+    supersampling: 2
+    maxSteps: 3
+    viscosity: 0.05
+    turbulence: 8
+    pressure: 1
+    buoyancy: 0.6
+    dissipation: 0.35
+    drift: {x: 0, y: 0.05}
+    edgeWidth: 0.08
+    edgeDrain: 1.5
+    dyeWeight: 0.45
+    velocityWeight: 0.25
+    motionGain: 2.5
+    motionConfidence: 1.5
+    pictureMix: 0.35
+    hueSpeed: 0.07
+    saturation: 0.85
+    value: 1
+    look: 0
+    gain: 2.2
+    opacity: 1
+    dotsPerScreenHeight: 160
+    dotSoftness: 0.18
+    dotFlow: 0.6
+  echo:
+    enabled: 0
+    copies: 8
+    spacingSeconds: 0.14
+    colorMode: 0
+    solidColor: {r: 1, g: 0.05, b: 0.05, a: 1}
+    hueStart: 0
+    hueStep: 0.09
+    hueDrift: 0.05
+    saturation: 0.9
+    value: 1
+    opacityNewest: 0.85
+    opacityOldest: 0.12
+    offsetPerCopy: {x: 0, y: 0}
+    scaleStep: 0
+    look: 0
+    dotsPerScreenHeight: 140
+    dotSoftness: 0.2
+    waveAmount: 0
+    waveFrequency: 8
+    waveSpeed: 1.2
+    gain: 1.2
+    edgeContrast: 1.5
+  outline:
+    enabled: 1
+    colorMode: 0
+    color: {r: 1, g: 1, b: 1, a: 1}
+    hueSpeed: 0.1
+    widthThousandths: 1.2
+    softness: 0.3
+    intensity: 2.4
+    haloThousandths: 5
+    haloStrength: 0.3
+    jitterThousandths: 0
+    jitterFrequency: 24
+    jitterSpeed: 14
+    delayCopies: 0
+  particles:
+    enabled: 1
+    maxParticles: 200000
+    spawnPerSecond: 26000
+    motionBoost: 2.5
+    emitFrom: 2
+    edgeShare: 0.35
+    lifetimeMin: 1
+    lifetimeMax: 2.4
+    sizeMinThousandths: 2
+    sizeMaxThousandths: 5
+    sphereFraction: 0.05
+    colorMode: 0
+    hueSpeed: 0.12
+    saturation: 0.9
+    solidColor: {r: 1, g: 0.04, b: 0.04, a: 1}
+    gain: 1.1
+    gravity: -0.24
+    flowInfluence: 0.9
+    motionKick: 1
+    swirl: 0.05
+    swirlScale: 5
+    drag: 1.8
+    floorEnabled: 1
+    floorHeight: 0.06
+    pileSeconds: 6
+    pileGrowthThousandths: 0.4
+    pileMaxHeight: 0.06

@@ -456,6 +456,12 @@ namespace VirtualMirror.App {
             string source;
             string sourceError;
             if (!ResolveSource(out source, out sourceError)) {
+                // A path is typed a keystroke at a time and almost every prefix is "not found". Report it, and
+                // stop a running sender, only once the source has stayed wrong for the restart delay.
+                slot.ProblemSeconds = slot.ProblemSeconds + elapsedSeconds;
+                if (slot.ProblemSeconds < RestartDelaySeconds) {
+                    return;
+                }
                 if (slot.Problem != sourceError) {
                     log.Log(LogLevel.Error, "Vision: " + sourceError + " The " + slot.Stream + " sender was NOT started - fix Source in the Hands and Face settings.");
                 }
@@ -463,6 +469,7 @@ namespace VirtualMirror.App {
                 StopSender(slot);
                 return;
             }
+            slot.ProblemSeconds = 0f;
             slot.Problem = string.Empty;
 
             string desired = ArgumentsFor(slot.Stream, source);
@@ -540,9 +547,7 @@ namespace VirtualMirror.App {
                 error = "SOURCE ERROR: " + error;
                 return false;
             }
-            if (VideoSourceSpec.KindOf(resolved) == VideoSourceKind.LanCamera
-                && string.IsNullOrWhiteSpace(settings.LanCameraPin)
-                && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(SidecarProcessLauncher.LanCameraPinEnvironmentVariable))) {
+            if (SidecarGuards.LanCameraNeedsPin(resolved, settings.LanCameraPin)) {
                 error = "SOURCE ERROR: the LAN camera needs its access PIN (Lan Camera Pin, or the CAMERA_PIN environment variable).";
                 return false;
             }
@@ -622,6 +627,7 @@ namespace VirtualMirror.App {
             public string AppliedArguments;
             public string FailedArguments;
             public string Problem = string.Empty;
+            public float ProblemSeconds;
             public float GraceSeconds;
             public float ChangeSeconds;
             public bool Retry;

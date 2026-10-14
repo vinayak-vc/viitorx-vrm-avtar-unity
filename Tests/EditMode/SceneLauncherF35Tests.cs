@@ -166,6 +166,17 @@ namespace VirtualMirror.Tests {
         }
 
         [Test]
+        public void HumanEchoNeedsNoBodyEitherAndIsListedWithTheShowcases() {
+            Assert.AreEqual(SceneLauncher.TrackingNeed.VisionOnly, SceneLauncher.TrackingNeedFor("HumanEcho_Showcase"));
+            bool listed = false;
+            foreach (SceneLauncher.Entry entry in SceneLauncher.ShowcaseScenes) {
+                listed = listed || entry.Scene == "HumanEcho_Showcase";
+            }
+            Assert.IsTrue(listed, "a launcher row exists for the Human Echo scene");
+            Assert.LessOrEqual(SceneLauncher.ShowcaseScenes.Count, SceneLauncher.MaxShortcutRows, "the number keys still reach every row");
+        }
+
+        [Test]
         public void EveryCrowdSceneAsksForTheMultiPersonSender() {
             foreach (SceneLauncher.Entry entry in SceneLauncher.MultiPersonScenes) {
                 Assert.AreEqual(SceneLauncher.TrackingNeed.MultiPerson,

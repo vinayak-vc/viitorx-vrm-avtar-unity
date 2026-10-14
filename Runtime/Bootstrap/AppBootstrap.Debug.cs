@@ -17,6 +17,7 @@ namespace VirtualMirror.App {
         [SerializeField] private Vector3 debugSkeletonOffset = new Vector3(1.4f, 1.0f, 0f);
         [Tooltip("Pipeline logging: write recv_log.jsonl (received) + model_log.jsonl (applied) to compare against the sidecar's sender_log.jsonl. Run the sidecar with --log-dir <the same dir>, then diff with compare_logs.py.")]
         [SerializeField] private bool pipelineLogging = false;
-        [SerializeField] private string pipelineLogDir = "D:/Unity/viitorx-vrm-avtar-unity-base-project/Assets/Games/viitorx-vrm-avtar-unity/python-sidecar~/pipeline_logs";
+        [Tooltip("Folder for the pipeline logs. Empty (or a drive that does not exist on this machine) uses a pipeline_logs folder under the persistent data path. Pass the same folder to the sidecar with --log-dir.")]
+        [SerializeField] private string pipelineLogDir = string.Empty;
     }
 }

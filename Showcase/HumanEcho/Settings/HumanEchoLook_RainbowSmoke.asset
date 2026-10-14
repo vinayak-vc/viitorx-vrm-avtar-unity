@@ -1,0 +1,126 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 295e6cfaa4e21df43bbc6e06576cedae, type: 3}
+  m_Name: HumanEchoLook_RainbowSmoke
+  m_EditorClassIdentifier: HumanEcho::HumanEcho.HumanEchoSettings
+  displayName: Rainbow Smoke
+  notes: 'Clip 27845: true-colour cutouts, rainbow dotted smoke and stippled echo
+    ghosts, a jagged colour-cycling neon outline.'
+  viewHeightMetres: 2.4
+  backgroundColor: {r: 0.012, g: 0.012, b: 0.03, a: 1}
+  person:
+    enabled: 1
+    colorMode: 0
+    tint: {r: 1, g: 1, b: 1, a: 1}
+    opacity: 1
+    brightness: 1.05
+    contrast: 1.05
+    flash: 0.35
+    edgeContrast: 1.5
+    rim: 0
+    rimColor: {r: 1, g: 0.25, b: 0.1, a: 1}
+    rimWidth: 2
+    rimStrength: 1.5
+  smoke:
+    enabled: 1
+    drawn: 1
+    resolution: 512
+    supersampling: 2
+    maxSteps: 3
+    viscosity: 0.05
+    turbulence: 8
+    pressure: 1
+    buoyancy: 0.7
+    dissipation: 0.3
+    drift: {x: 0, y: 0.05}
+    edgeWidth: 0.08
+    edgeDrain: 1.5
+    dyeWeight: 0.45
+    velocityWeight: 0.25
+    motionGain: 2.5
+    motionConfidence: 1.5
+    pictureMix: 0.3
+    hueSpeed: 0.09
+    saturation: 0.9
+    value: 1
+    hueSpread: 0.55
+    look: 1
+    gain: 2.4
+    opacity: 1
+    dotsPerScreenHeight: 150
+    dotSoftness: 0.18
+    dotFlow: 0.6
+  echo:
+    enabled: 1
+    copies: 6
+    spacingSeconds: 0.12
+    colorMode: 0
+    solidColor: {r: 1, g: 0.05, b: 0.05, a: 1}
+    hueStart: 0
+    hueStep: 0.12
+    hueDrift: 0.06
+    saturation: 0.85
+    value: 1
+    opacityNewest: 0.7
+    opacityOldest: 0.12
+    offsetPerCopy: {x: 0, y: 0}
+    scaleStep: 0.012
+    look: 1
+    dotsPerScreenHeight: 150
+    dotSoftness: 0.2
+    waveAmount: 0
+    waveFrequency: 8
+    waveSpeed: 1.2
+    gain: 1.3
+    edgeContrast: 1.5
+  outline:
+    enabled: 1
+    colorMode: 1
+    color: {r: 0.85, g: 1, b: 1, a: 1}
+    hueSpeed: 0.2
+    widthThousandths: 1.8
+    softness: 0.3
+    intensity: 2.6
+    haloThousandths: 8
+    haloStrength: 0.4
+    jitterThousandths: 3
+    jitterFrequency: 28
+    jitterSpeed: 16
+    delayCopies: 0
+  particles:
+    enabled: 0
+    maxParticles: 200000
+    spawnPerSecond: 40000
+    motionBoost: 1
+    emitFrom: 2
+    edgeShare: 0.4
+    lifetimeMin: 2.5
+    lifetimeMax: 5
+    sizeMinThousandths: 3
+    sizeMaxThousandths: 14
+    sphereFraction: 0.25
+    colorMode: 0
+    hueSpeed: 0.08
+    saturation: 0.85
+    solidColor: {r: 1, g: 0.04, b: 0.04, a: 1}
+    gain: 1.4
+    gravity: -0.35
+    flowInfluence: 3
+    motionKick: 1.5
+    swirl: 0.12
+    swirlScale: 4
+    drag: 0.6
+    floorEnabled: 0
+    floorHeight: 0.08
+    pileSeconds: 8
+    pileGrowthThousandths: 0.6
+    pileMaxHeight: 0.1

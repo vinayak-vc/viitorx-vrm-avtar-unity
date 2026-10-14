@@ -1,0 +1,125 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 295e6cfaa4e21df43bbc6e06576cedae, type: 3}
+  m_Name: HumanEchoLook_RedEcho
+  m_EditorClassIdentifier: HumanEcho::HumanEcho.HumanEchoSettings
+  displayName: Red Echo
+  notes: 'Clip 14008: a white figure with a red rim on black, flat red echo copies
+    trailing sideways, red spheres and dots.'
+  viewHeightMetres: 2.4
+  backgroundColor: {r: 0, g: 0, b: 0, a: 1}
+  person:
+    enabled: 1
+    colorMode: 1
+    tint: {r: 1, g: 1, b: 1, a: 1}
+    opacity: 1
+    brightness: 1.1
+    contrast: 1.2
+    flash: 0
+    edgeContrast: 1.6
+    rim: 1
+    rimColor: {r: 1, g: 0.08, b: 0.05, a: 1}
+    rimWidth: 2.5
+    rimStrength: 2
+  smoke:
+    enabled: 1
+    drawn: 0
+    resolution: 512
+    supersampling: 2
+    maxSteps: 3
+    viscosity: 0.05
+    turbulence: 12
+    pressure: 1
+    buoyancy: 0.25
+    dissipation: 0.35
+    drift: {x: 0, y: 0.05}
+    edgeWidth: 0.08
+    edgeDrain: 1.5
+    dyeWeight: 0.45
+    velocityWeight: 0.3
+    motionGain: 2.5
+    motionConfidence: 1.5
+    pictureMix: 0.35
+    hueSpeed: 0.07
+    saturation: 0.85
+    value: 1
+    look: 0
+    gain: 2.2
+    opacity: 1
+    dotsPerScreenHeight: 160
+    dotSoftness: 0.18
+    dotFlow: 0.6
+  echo:
+    enabled: 1
+    copies: 8
+    spacingSeconds: 0.1
+    colorMode: 1
+    solidColor: {r: 1, g: 0.05, b: 0.05, a: 1}
+    hueStart: 0
+    hueStep: 0.09
+    hueDrift: 0.05
+    saturation: 0.9
+    value: 1
+    opacityNewest: 0.8
+    opacityOldest: 0.15
+    offsetPerCopy: {x: 0.03, y: 0}
+    scaleStep: 0
+    look: 0
+    dotsPerScreenHeight: 140
+    dotSoftness: 0.2
+    waveAmount: 0.012
+    waveFrequency: 9
+    waveSpeed: 1.2
+    gain: 1.5
+    edgeContrast: 1.5
+  outline:
+    enabled: 0
+    colorMode: 0
+    color: {r: 0.85, g: 1, b: 1, a: 1}
+    hueSpeed: 0.1
+    widthThousandths: 1.6
+    softness: 0.35
+    intensity: 2.2
+    haloThousandths: 6
+    haloStrength: 0.35
+    jitterThousandths: 0
+    jitterFrequency: 24
+    jitterSpeed: 14
+    delayCopies: 0
+  particles:
+    enabled: 1
+    maxParticles: 200000
+    spawnPerSecond: 5500
+    motionBoost: 3
+    emitFrom: 2
+    edgeShare: 0.5
+    lifetimeMin: 1.6
+    lifetimeMax: 3.2
+    sizeMinThousandths: 3
+    sizeMaxThousandths: 20
+    sphereFraction: 0.5
+    colorMode: 2
+    hueSpeed: 0.08
+    saturation: 0.85
+    solidColor: {r: 1, g: 0.04, b: 0.03, a: 1}
+    gain: 1
+    gravity: 0
+    flowInfluence: 3.5
+    motionKick: 2
+    swirl: 0.2
+    swirlScale: 3.5
+    drag: 0.6
+    floorEnabled: 0
+    floorHeight: 0.08
+    pileSeconds: 8
+    pileGrowthThousandths: 0.6
+    pileMaxHeight: 0.1

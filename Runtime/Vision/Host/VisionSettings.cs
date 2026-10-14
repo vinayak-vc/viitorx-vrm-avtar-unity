@@ -68,7 +68,7 @@ namespace VirtualMirror.Vision {
         [Tooltip("The key that shows or hides the Hands and Face control panel at runtime.")]
         [SerializeField] private KeyCode panelKey = KeyCode.F6;
 
-        [Header("Source: the camera both senders read")]
+        [Header("Input: ONE source for hands, face, cutout and (with Track From Video on) body tracking")]
         [Tooltip("WHAT TO TRACK. camera:0 (or just 0) is a webcam; a phone appears there when DroidCam, Iriun or Camo exposes it. A LAN camera streaming viewer link (http://192.168.1.5:3000/viewer?room=room-abc123) is received over WebRTC; the PIN goes in Lan Camera Pin. rtsp:// and http://192.168.x.x/video streams, and a video file path or direct link, also work. ONE reader per camera: a webcam or a LAN viewer cannot be opened by the hands sender and the face sender at the same time, which is why the two modes below default to Auto (only the sender the current scene needs runs).")]
         [SerializeField] private string source = "camera:0";
         [Tooltip("LAN CAMERA ONLY. The access PIN of the LAN Camera Streaming server. It reaches the sender through its environment, never a command line or a log. The field is masked but saved into the scene as plain text: leave it empty and set the CAMERA_PIN environment variable if the PIN should not live in the project.")]
@@ -88,7 +88,7 @@ namespace VirtualMirror.Vision {
         [Tooltip("Requested webcam frame rate.")]
         [Range(5, 60)]
         [SerializeField] private int cameraFps = 30;
-        [Tooltip("FILES ONLY. Replay the clip forever.")]
+        [Tooltip("FILES ONLY. Replay the clip forever. Also applies to body tracking from a video.")]
         [SerializeField] private bool loopFile = true;
         [Tooltip("ONNX Runtime provider for the networks. Auto = DirectML (GPU) then CPU. CPU is as fast for these small networks and has no 250 ms warm-up.")]
         [SerializeField] private VisionProvider provider = VisionProvider.Auto;

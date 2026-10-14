@@ -110,8 +110,8 @@ namespace VirtualMirror.SkeletonShow {
 
         /// <summary>
         /// Showcase packages that live next to their own code (Showcase/Name/Scenes) and the vision-only samples. A fourth column because the
-        /// one-person column is at the ten-row cap that the number keys reach. HandsShowcase, FaceShowcase and CutoutShowcase track no body at all
-        /// (a hand, a face or just a person in front of a camera is enough); they ask the AppBootstrap vision host for their stream.
+        /// one-person column is at the ten-row cap that the number keys reach. HandsShowcase, FaceShowcase, CutoutShowcase and HumanEcho_Showcase
+        /// track no body at all (a hand, a face or just a person in front of a camera is enough); they ask the AppBootstrap vision host for their stream.
         /// </summary>
         private static readonly Entry[] Showcases = {
             new Entry("FluidDisruption_Showcase", "FLUID DISRUPTION",
@@ -122,6 +122,8 @@ namespace VirtualMirror.SkeletonShow {
                       "Just a face in front of the camera: head pose and 52 blendshapes drive a cartoon face."),
             new Entry("CutoutShowcase", "HUMAN CUTOUT",
                       "Just a camera: the person is cut out of the picture. Original, person alone, or one-colour silhouette."),
+            new Entry("HumanEcho_Showcase", "HUMAN ECHO",
+                      "Just a camera: your silhouette becomes smoke, echo copies, a neon outline and particles. Number keys switch the look."),
         };
 
         /// <summary>The full VRM mirror application, which is not an experience and does not share
@@ -214,7 +216,8 @@ namespace VirtualMirror.SkeletonShow {
             }
             if (string.Equals(sceneName, "HandsShowcase", System.StringComparison.Ordinal)
                 || string.Equals(sceneName, "FaceShowcase", System.StringComparison.Ordinal)
-                || string.Equals(sceneName, "CutoutShowcase", System.StringComparison.Ordinal)) {
+                || string.Equals(sceneName, "CutoutShowcase", System.StringComparison.Ordinal)
+                || string.Equals(sceneName, "HumanEcho_Showcase", System.StringComparison.Ordinal)) {
                 return TrackingNeed.VisionOnly;
             }
             if (Contains(SinglePerson, sceneName) || Contains(Production, sceneName) || Contains(Showcases, sceneName)) {

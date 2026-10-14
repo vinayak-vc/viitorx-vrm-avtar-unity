@@ -57,6 +57,7 @@ Multiplayer, VR/AR, cloth authoring, marketplace, lip-sync from mic, non-Windows
 | Unity receivers for the hands and face wires (`Runtime/Vision`) | `H03_UNITY_RECEIVERS_2026-10-13.md` (ADR-101) |
 | Hands and Face settings, host, control panel and sample scenes | `H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md` (ADR-102) |
 | The person cut out of a camera picture (a mask the sidecar makes, Unity draws), a separate wire | `S01_CUTOUT_2026-10-13.md` (ADR-103) |
+| Human Echo: the cutout as FluXY smoke, echo copies, neon outline and GPU particles, three looks (`Showcase/HumanEcho`) | `HE01_HUMAN_ECHO_2026-10-14.md` (ADR-104) |
 | Coding law | `AGENTS.md` (parent), `23_CodingStandards.md` |
 
 Full index: `README.md` in this folder.

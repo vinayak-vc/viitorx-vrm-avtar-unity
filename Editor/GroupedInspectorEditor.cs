@@ -107,6 +107,10 @@ namespace VirtualMirror.Editor {
                 SessionState.SetBool(key, now);
             }
             if (now) {
+                string hint = GroupHint(title);
+                if (!string.IsNullOrEmpty(hint)) {
+                    EditorGUILayout.HelpBox(hint, MessageType.None);
+                }
                 EditorGUI.indentLevel++;
                 for (int i = 0; i < properties.Count; i++) {
                     EditorGUILayout.PropertyField(properties[i], true);
@@ -114,6 +118,11 @@ namespace VirtualMirror.Editor {
                 EditorGUI.indentLevel--;
             }
             EditorGUILayout.EndVertical();
+        }
+
+        /// <summary>A short note shown under a section's title when it is open; null for none.</summary>
+        protected virtual string GroupHint(string title) {
+            return null;
         }
 
         private string StateKey(string title) {

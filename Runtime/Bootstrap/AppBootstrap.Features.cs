@@ -9,7 +9,9 @@ namespace VirtualMirror.App {
     /// </summary>
     public sealed partial class AppBootstrap {
         [InspectorGroup("Features", Order = 70)]
+        [Tooltip("The AVATAR's face (blendshapes on the VRM). Not the Face stream of 'Hands and Face', which is separate and feeds the Face showcase. Unavailable on the sidecar path, which sends no face data.")]
         [SerializeField] private bool useFaceTracking = true;
+        [Tooltip("The AVATAR's fingers. Not the Hands stream of 'Hands and Face', which is separate and feeds the Hands showcase. On the sidecar path the fingers come from the body stream.")]
         [SerializeField] private bool useHandTracking = true;
         [Tooltip("Wrist rotation weight (0 disables wrist rotation; fingers still curl). Live-tunable.")]
         [SerializeField] private float wristRotationWeight = 0f;

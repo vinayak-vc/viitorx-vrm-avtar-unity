@@ -216,3 +216,13 @@ Tests/EditMode/VisionFixtures/real_face.json
 Tests/EditMode/VisionFixtures/real_face.json.meta
 Tests/EditMode/VisionFixtures/real_hands.json
 Tests/EditMode/VisionFixtures/real_hands.json.meta
+.ai-work/README.md
+.ai-work/echo/checkpoint.md
+.ai-work/f3-particles/checkpoint.md
+.ai-work/integration/checkpoint.md
+.ai-work/review/csharp.md
+.ai-work/review/gpu.md
+.ai-work/review/scenarios.md
+.ai-work/spec/INTERFACES.md
+.ai-work/spike/checkpoint.md
+.ai-work/ui/checkpoint.md

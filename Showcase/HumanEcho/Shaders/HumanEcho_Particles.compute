@@ -1,0 +1,262 @@
+// Human Echo - the GPU PARTICLES. One pool of particles in a structured buffer, used as a ring: Spawn overwrites the next slots, Update moves every live
+// one, DecayPile lowers the floor pile. Nothing is read back to the CPU.
+//
+// SPACE: "screen heights", origin at the centre of the screen, x right, y up. The screen is _ViewAspect wide and 1 high; the picture (the person
+// field) is the centred rectangle _PictureSize of it. A particle is born where the person mask says person (found by random probing of the field,
+// so the cost does not depend on how big the person is) and is then carried by FluXY's velocity field, by gravity, by a swirl and by drag.
+//
+// FLUXY'S VELOCITY lives in an atlas: velocityA holds (vx, vy) in ATLAS UV units per second, and the container occupies _FluidRect (x, y, w, h) of
+// it. For an isotropic screen, atlas velocity = screen-heights-per-second * rect.h, so the CPU passes _FluidScale = 1 / rect.h.
+#pragma kernel Clear
+#pragma kernel Spawn
+#pragma kernel Update
+#pragma kernel DecayPile
+
+struct Particle
+{
+    float2 pos;
+    float2 vel;
+    float life;     // seconds left; <= 0 is dead
+    float maxLife;
+    float size;     // diameter, screen heights
+    float kind;     // 0 flat dot, 1 lit sphere
+    float3 color;   // linear
+    float state;    // 0 flying, 1 settled in the pile
+};
+
+RWStructuredBuffer<Particle> _Particles;
+RWStructuredBuffer<uint> _Pile;
+
+Texture2D<float4> _FieldTex;    // rgb picture, a mask; upright
+Texture2D<float4> _MotionTex;   // rg screen heights per second, b confidence
+Texture2D<float4> _FluidTex;    // FluXY velocityA
+SamplerState sampler_LinearClamp;
+
+static const float PileOne = 100000.0;
+
+uint _Capacity;
+uint _SpawnHead;
+uint _SpawnCount;
+uint _Seed;
+uint _PileColumns;
+float _Time;
+float _DeltaTime;
+float _ViewAspect;
+float2 _PictureSize;
+float4 _FluidRect;
+float _FluidScale;
+
+float _FlowInfluence;
+float _FlowFollow;
+float _MotionKick;
+float _MotionScale;
+float _MotionBoost;
+float _Swirl;
+float _SwirlScale;
+float _Drag;
+float _Gravity;
+
+float _LifeMin;
+float _LifeMax;
+float _SizeMin;
+float _SizeMax;
+float _SphereFraction;
+float _EdgeShare;
+int _EmitFrom;
+int _ColorMode;
+float _Hue;
+float _Saturation;
+float3 _SolidColor;
+
+int _FloorEnabled;
+float _FloorY;
+float _PileSeconds;
+float _PileGrowth;
+float _PileMax;
+
+uint Hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float Rand(inout uint state)
+{
+    state = Hash(state + 0x9e3779b9u);
+    return (state & 0x00ffffffu) / 16777216.0;
+}
+
+float3 HueToRgb(float hue, float saturation)
+{
+    float3 k = float3(1.0, 2.0 / 3.0, 1.0 / 3.0);
+    float3 p = abs(frac(hue + k) * 6.0 - 3.0);
+    float3 rgb = lerp(float3(1, 1, 1), saturate(p - 1.0), saturation);
+    // The Hue is a display colour; convert the way Color.linear would so particles match the smoke.
+    return pow(rgb, 2.2);
+}
+
+[numthreads(64, 1, 1)]
+void Clear(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < _Capacity)
+    {
+        Particle p = (Particle)0;
+        _Particles[id.x] = p;
+    }
+    if (id.x < _PileColumns)
+    {
+        _Pile[id.x] = 0;
+    }
+}
+
+[numthreads(64, 1, 1)]
+void Spawn(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _SpawnCount)
+    {
+        return;
+    }
+    uint slot = (_SpawnHead + id.x) % _Capacity;
+    uint rng = Hash(id.x * 747796405u + _Seed);
+
+    Particle p = (Particle)0;
+    bool found = false;
+    [loop]
+    for (int attempt = 0; attempt < 32; attempt++)
+    {
+        float2 uv = float2(Rand(rng), Rand(rng));
+        float4 field = _FieldTex.SampleLevel(sampler_LinearClamp, uv, 0);
+        float m = field.a;
+        bool edge = _EmitFrom == 1 || (_EmitFrom == 2 && Rand(rng) < _EdgeShare);
+        // Interior: well inside the mask. Edge: the soft band around the 0.5 iso-line.
+        bool inside = edge ? (m > 0.2 && m < 0.7) : (m > 0.6);
+        if (!inside)
+        {
+            continue;
+        }
+        float4 motion = _MotionTex.SampleLevel(sampler_LinearClamp, uv, 0);
+        // Motion boost: still regions are accepted with probability 1 / (1 + boost), moving ones always.
+        float accept = (1.0 + _MotionBoost * motion.z) / (1.0 + _MotionBoost);
+        if (Rand(rng) > accept)
+        {
+            continue;
+        }
+
+        p.pos = (uv - 0.5) * _PictureSize;
+        // The motion is in heights of the picture per second; a screen height is _MotionScale of them.
+        p.vel = motion.xy * _MotionKick * _MotionScale;
+        p.maxLife = lerp(_LifeMin, _LifeMax, Rand(rng));
+        p.life = p.maxLife;
+        float r = Rand(rng);
+        p.size = lerp(_SizeMin, _SizeMax, r * r);
+        p.kind = Rand(rng) < _SphereFraction ? 1.0 : 0.0;
+        if (_ColorMode == 0)
+        {
+            p.color = HueToRgb(_Hue + (Rand(rng) - 0.5) * 0.05, _Saturation);
+        }
+        else if (_ColorMode == 1)
+        {
+            p.color = field.rgb;
+        }
+        else
+        {
+            p.color = _SolidColor;
+        }
+        p.state = 0.0;
+        found = true;
+        break;
+    }
+    // A probe that found no person leaves the slot alone: writing the empty particle would erase whatever lives there (a particle still
+    // flying, or one resting in the pile), and an empty mask would then wipe the whole pool at the spawn rate.
+    if (found)
+    {
+        _Particles[slot] = p;
+    }
+}
+
+[numthreads(64, 1, 1)]
+void Update(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _Capacity)
+    {
+        return;
+    }
+    Particle p = _Particles[id.x];
+    if (p.life <= 0.0)
+    {
+        return;
+    }
+    p.life -= _DeltaTime;
+    if (p.life <= 0.0)
+    {
+        p.life = 0.0;
+        _Particles[id.x] = p;
+        return;
+    }
+    if (p.state > 0.5)
+    {
+        // Settled in the floor pile: it stays until its life runs out.
+        _Particles[id.x] = p;
+        return;
+    }
+
+    float2 vel = p.vel;
+    if (_FluidRect.z > 0.0 && _FlowInfluence > 0.0)
+    {
+        float2 containerUv = float2(p.pos.x / _ViewAspect + 0.5, p.pos.y + 0.5);
+        float2 atlasUv = _FluidRect.xy + containerUv * _FluidRect.zw;
+        float2 fluid = _FluidTex.SampleLevel(sampler_LinearClamp, atlasUv, 0).rg * _FluidScale;
+        vel = lerp(vel, fluid * _FlowInfluence, saturate(_FlowFollow * _DeltaTime));
+    }
+    vel.y += _Gravity * _DeltaTime;
+    if (_Swirl > 0.0)
+    {
+        float2 q = p.pos * _SwirlScale + float2(_Time * 0.31, _Time * 0.23);
+        float2 curl = float2(cos(q.y * 1.7 + sin(q.x * 1.3)), -cos(q.x * 1.9 + sin(q.y * 1.1)));
+        vel += curl * _Swirl * _DeltaTime * 6.0;
+    }
+    vel *= exp(-_Drag * _DeltaTime);
+    p.vel = vel;
+    p.pos += vel * _DeltaTime;
+
+    if (_FloorEnabled != 0)
+    {
+        uint column = (uint)clamp((p.pos.x / _ViewAspect + 0.5) * _PileColumns, 0.0, _PileColumns - 1.0);
+        float pileHeight = min(_Pile[column] / PileOne, _PileMax);
+        float floorLine = _FloorY + pileHeight;
+        if (p.pos.y < floorLine && vel.y <= 0.05)
+        {
+            uint rng = Hash(id.x + _Seed);
+            // Anywhere inside the heap, not on its top sheet: the heap then has a body, and it does not float when the old ones expire.
+            p.pos.y = _FloorY + Rand(rng) * pileHeight + Rand(rng) * 0.003;
+            p.vel = float2(0, 0);
+            p.state = 1.0;
+            p.life = min(p.life, _PileSeconds * (0.6 + 0.4 * Rand(rng)));
+            // The counter stops a little above the visible cap: a counter that keeps winding up under steady rain would take as long to
+            // fall back (the decay is a few seconds) as it took to grow, leaving a ghost floor after the rain has stopped.
+            if (_Pile[column] < (uint)(_PileMax * 1.25 * PileOne)) {
+                InterlockedAdd(_Pile[column], (uint)(_PileGrowth * PileOne));
+            }
+        }
+    }
+    if (abs(p.pos.x) > _ViewAspect * 0.6 || abs(p.pos.y) > 0.75)
+    {
+        p.life = 0.0;
+    }
+    _Particles[id.x] = p;
+}
+
+[numthreads(64, 1, 1)]
+void DecayPile(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _PileColumns)
+    {
+        return;
+    }
+    float keep = saturate(1.0 - _DeltaTime / max(_PileSeconds, 0.5));
+    _Pile[id.x] = (uint)(_Pile[id.x] * keep);
+}

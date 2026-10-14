@@ -1,6 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
-
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -131,7 +128,7 @@ namespace VirtualMirror.SkeletonShow {
         }
 
         private void StartSidecar(ILogService log) {
-            if (ProducerAlreadyRunning(udpPort)) {
+            if (SidecarGuards.ProducerAlreadyRunning(udpPort, ProbeMilliseconds)) {
                 log.Log(LogLevel.Info, "something is already sending poses on UDP " + udpPort
                         + "; attaching to it instead of starting a second sidecar.");
                 return;
@@ -159,37 +156,6 @@ namespace VirtualMirror.SkeletonShow {
             launcher = new SidecarProcessLauncher(log, options);
             launcher.Start(SidecarLocator.Resolve(modelPathOverride));
             SidecarStatusLights.Attach(launcher);
-        }
-
-        /// <summary>
-        /// Listen briefly for an existing producer. Binding the port and waiting for a datagram tests
-        /// the thing that actually matters — is somebody already sending — rather than a proxy for it
-        /// like a lock file, which a hand-started sender does not create.
-        ///
-        /// Returns false on ANY failure, including the port being unavailable: the caller then tries
-        /// to spawn, and a real conflict surfaces as the sidecar's own error rather than as this
-        /// silently deciding not to start.
-        /// </summary>
-        private static bool ProducerAlreadyRunning(int port) {
-            UdpClient probe = null;
-            try {
-                probe = new UdpClient();
-                probe.Client.SetSocketOption(SocketOptionLevel.Socket,
-                                             SocketOptionName.ReuseAddress, true);
-                probe.Client.Bind(new IPEndPoint(IPAddress.Loopback, port));
-                probe.Client.ReceiveTimeout = ProbeMilliseconds;
-                IPEndPoint from = new IPEndPoint(IPAddress.Any, 0);
-                byte[] data = probe.Receive(ref from);
-                return data != null && data.Length > 0;
-            } catch (SocketException) {
-                return false;
-            } catch (System.Exception) {
-                return false;
-            } finally {
-                if (probe != null) {
-                    probe.Close();
-                }
-            }
         }
 
         private void OnDestroy() {

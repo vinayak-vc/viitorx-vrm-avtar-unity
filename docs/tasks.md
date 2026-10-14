@@ -4,6 +4,21 @@ Update this file whenever work starts or finishes. Prefer small checkboxes agent
 
 ---
 
+## HE-01 - Human Echo: the cutout becomes smoke, echo copies, a neon outline and GPU particles (2026-10-14)
+
+Report: [`HE01_HUMAN_ECHO_2026-10-14.md`](HE01_HUMAN_ECHO_2026-10-14.md). Decision: **ADR-104**. Showcase: `Showcase/HumanEcho/README.md`. Follows S-01.
+
+- [x] **Spike validated first:** the live mask drives FluXY dye + velocity; a compute shader samples FluXY's velocity atlas on the GPU; `Graphics.RenderPrimitives` draws 200 000 particles from a structured buffer in URP; cost measured (report s.2).
+- [x] **Built and seen working in Play mode on two video files (one person portrait, two people landscape):** `Showcase/HumanEcho` - `PersonField` (Field + Motion), five layers (FluXY smoke, echo copies from a shared ring, neon outline, the person itself with flash and rim, GPU particles with a floor pile), three looks (Rainbow Smoke, Red Echo, Particle Body) switched with the number keys, HUD + keys, scene builder and look builder, README. No Python and no wire change. Launcher row **HUMAN ECHO** (SHOWCASES, `VisionOnly`), Escape returns to the Launcher.
+- [x] Verified: `HumanEcho.Tests` 99/99 (GPU stages on synthetic textures, pure logic, HUD and keys; mutation-checked), `VirtualMirror.Tests` 608 passed / 0 failed (+1 Launcher test), `CutoutShowcase.Tests` 11/11, compile 0 errors, shaders 0 messages; cost 1.26-1.41 ms GPU per look in the Editor (floor 0.45 ms) with the mask rate unchanged; a killed sender clears the person and the HUD says WAITING FOR CAMERA; three-lens review, 26 findings, nearly all fixed.
+- [ ] **NOT TESTED: a person in front of a LIVE webcam**; a network / LAN camera; a built player (no sender ships); screens other than 1920 x 1080; the HUD beside the F6 panel; the Escape key by hand; the controller's Dispose lifecycle (no EditMode test).
+- [ ] Known limits: the S-01 mask limits (a floor light is a stray blob on the two-person clip); the motion is a silhouette estimate; no depth (the particle body's volume is faked); FluXY slow-motion below ~31 fps at `maxSteps` 4; no run-time quality switch; 92 code / attribute lines over 110 columns.
+- [x] AppBootstrap Inspector: **Simple / Advanced** view (`Editor/AppBootstrapEditor.cs`, editor-only, no serialization change). Simple = one input choice (webcam, video file, network/LAN link, OAK-D) written to both the body path's Video Source and the vision streams' Source, the three streams, people, two switches; Advanced = the old sections plus a note on which camera section is for what. Compiles, Inspector drew with no Console errors; NOT clicked through by hand.
+- [x] AppBootstrap audit and fixes (2026-10-14): split into partials (`TrackingFrame`, `Sidecar`, `ModelLog`) with `UpdateTracking` broken into stage methods; one shared `SidecarGuards` (producer probe + LAN PIN check) replaces two probes and two PIN checks; one `FindInScene<T>`; editing video fields no longer restarts the OAK-D sidecar; duplicate-instance and static status-provider leaks fixed; machine-specific paths removed; vision source errors debounced; misleading setting names explained in tooltips (renaming would lose saved scene values). 6 new tests, `VirtualMirror.Tests` 614 / 0. NOT done: the three duplicated camera/source setting sets still exist in serialized data (the Simple Inspector keeps them in step).
+- [ ] Next: stand in front of a webcam and tune the three looks against yourself (the clips are phones filming a projection wall); decide whether to ship a quality switch; run `Virtual Mirror > Register All Scenes in Build Settings` on other machines; the S-01 "designed, not built" transition effects can now reuse `PersonField`.
+
+---
+
 ## S-01 - Real-time human cutout: the person in a camera picture, isolated, shown in Unity (2026-10-13)
 
 Report: [`S01_CUTOUT_2026-10-13.md`](S01_CUTOUT_2026-10-13.md). Decision: **ADR-103**. Sidecar repo: `docs/tasks.md` S-01. Showcase: `Showcase/Cutout/README.md`. Follows H-04.

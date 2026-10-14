@@ -9,7 +9,7 @@ namespace VirtualMirror.App {
     /// </summary>
     public sealed partial class AppBootstrap {
         [InspectorGroup("Tracking Source", Order = 10, ExpandedByDefault = true)]
-        [Tooltip("OAK-D depth camera via the Python sidecar over UDP — the production path. Takes priority over the other providers when it starts.")]
+        [Tooltip("BODY TRACKING THROUGH THE PYTHON SIDECAR over UDP - the production path. The name is historical: it is also the switch for a webcam, video or LAN camera (with 'Track From Video' on), not only the OAK-D. OFF in the hands, face and cutout showcase scenes, which need no body. Takes priority over the other providers when it starts.")]
         [SerializeField] private bool useOakUdpTracking = true; // B2 (Python sidecar over UDP) — ADR-016
         [SerializeField] private int oakUdpPort = 8899;
         [Tooltip("Start the Python tracking sidecar automatically (ADR-064). Turn OFF to run sidecar_supervisor.py by hand. Either way, an already-running supervisor is detected via its lock port and never double-started.")]
@@ -45,7 +45,7 @@ namespace VirtualMirror.App {
                  "still sees the same detail. 1/2 is the pre-F-44 640x400. Costs no GPU time - " +
                  "RTMW3D always resizes its crop to 288x384.")]
         [SerializeField] private string sidecarRgbIspScale = "1/1";
-        [Tooltip("Use the sample video file instead of a live webcam (ignored on the OAK-D path).")]
+        [Tooltip("LEGACY, MediaPipe path only: play the hidden sample video instead of a webcam (ignored on the sidecar path). Not the F-49 'Track From Video' test source in the next section.")]
         [SerializeField] private bool useVideoSource = false;
         [Tooltip("MediaPipe pose on the webcam/video (CPU). Fallback when OAK/Sentis are off.")]
         [SerializeField] private bool useMediaPipeTracking = true;
