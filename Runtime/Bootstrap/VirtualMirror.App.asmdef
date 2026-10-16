@@ -16,7 +16,10 @@
         "VirtualMirror.SkeletonShow",
         "VirtualMirror.Vision",
         "VRM10",
-        "Unity.InferenceEngine"
+        "Unity.InferenceEngine",
+        "VirtualMirror.Sidecar",
+        "VirtualMirror.Cutout",
+        "VirtualMirror.Tracking.Inference"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

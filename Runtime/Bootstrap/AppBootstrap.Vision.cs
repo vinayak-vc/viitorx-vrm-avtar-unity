@@ -37,6 +37,7 @@ namespace VirtualMirror.App {
                 vision = new VisionSettings();
             }
             visionHost = new VisionHost(logService, vision);
+            VisionHostRegistry.Register(visionHost);
             visionPanel = gameObject.AddComponent<VisionControlPanel>();
             visionPanel.Bind(visionHost);
             logService.Log(LogLevel.Info, "Hands and face host ready (hands " + vision.HandsMode + " on UDP " + vision.HandsPort
@@ -52,6 +53,7 @@ namespace VirtualMirror.App {
 
         private void ShutdownVision() {
             if (visionHost != null) {
+                VisionHostRegistry.Unregister(visionHost);
                 visionHost.Dispose();
                 visionHost = null;
             }

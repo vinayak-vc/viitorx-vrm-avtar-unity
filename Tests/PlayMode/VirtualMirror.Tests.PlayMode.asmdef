@@ -1,0 +1,34 @@
+{
+    "name": "VirtualMirror.Tests.PlayMode",
+    "rootNamespace": "VirtualMirror.Tests",
+    "references": [
+        "UnityEngine.TestRunner",
+        "VirtualMirror.Core",
+        "VirtualMirror.IO",
+        "VirtualMirror.App",
+        "VirtualMirror.Tracking",
+        "VirtualMirror.Avatar",
+        "VirtualMirror.Body",
+        "VirtualMirror.Body.PlayTests"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS",
+        "VIITORX_UNIVRM"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.vrmc.vrm",
+            "expression": "0.0.1",
+            "define": "VIITORX_UNIVRM"
+        }
+    ],
+    "noEngineReferences": false
+}

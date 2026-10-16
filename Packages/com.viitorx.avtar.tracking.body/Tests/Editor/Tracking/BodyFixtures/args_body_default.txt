@@ -1,0 +1,1 @@
+--video "camera:0" --host 127.0.0.1 --port 8899 --loop 0 --hfov 60 --subject-height 1.7 --depth-range 1.6 4 --auto-orient --hfov-axis long --camera-size 1280 720

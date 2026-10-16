@@ -1,0 +1,1272 @@
+{
+ "about": "Expected result of every golden datagram in this folder, from the Python reference parsers. See docs/WIRE.md section 8.",
+ "blendshape_names_sha256": "d2600590ced10247195c9c14548de48dc176f132851200d66456347fcc75aaee",
+ "cutout_frames": {
+  "bad_inflate": {
+   "files": [
+    "cutout_bad_inflate_00.bin"
+   ],
+   "frame": {
+    "color_enc": 0,
+    "color_h": 0,
+    "color_len": 0,
+    "color_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "color_w": 0,
+    "fg_permille": 0,
+    "flags": 0,
+    "mask_enc": 2,
+    "mask_h": 24,
+    "mask_len": 16,
+    "mask_sha256": "754fbc1d73fc7d5492394a06f014193dbf24746303086ad25bf59a1ebf79f916",
+    "mask_w": 32,
+    "model_id": 1,
+    "people": 0,
+    "seq": 4000,
+    "session": 2712847316
+   },
+   "mask_decodes_to": null,
+   "mask_refused": "size"
+  },
+  "jpeg": {
+   "files": [
+    "cutout_jpeg_00.bin",
+    "cutout_jpeg_01.bin",
+    "cutout_jpeg_02.bin"
+   ],
+   "frame": {
+    "color_enc": 2,
+    "color_h": 8,
+    "color_len": 662,
+    "color_sha256": "9d60893da8776f868e191b8be6ec0fe97bfecaed0650069cf2b630f28171cabc",
+    "color_w": 8,
+    "fg_permille": 500,
+    "flags": 0,
+    "mask_enc": 1,
+    "mask_h": 8,
+    "mask_len": 64,
+    "mask_sha256": "533392fb74e734e4e25137c5987b53c7acaac0036beef2acb44b5f13663b90ec",
+    "mask_w": 8,
+    "model_id": 1,
+    "people": 1,
+    "seq": 3000,
+    "session": 2712847316
+   },
+   "mask_decodes_to": [
+    8,
+    8
+   ],
+   "mask_pixel_sum": 8064
+  },
+  "maskonly": {
+   "files": [
+    "cutout_maskonly_00.bin"
+   ],
+   "frame": {
+    "color_enc": 0,
+    "color_h": 0,
+    "color_len": 0,
+    "color_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "color_w": 0,
+    "fg_permille": 250,
+    "flags": 2,
+    "mask_enc": 2,
+    "mask_h": 24,
+    "mask_len": 26,
+    "mask_sha256": "94c9f3827836d32fda36ad5e83f8efee75d39a37f3666dc5deee44a26bcdb752",
+    "mask_w": 32,
+    "model_id": 2,
+    "people": 1,
+    "seq": 2000,
+    "session": 2712847316
+   },
+   "mask_decodes_to": [
+    32,
+    24
+   ],
+   "mask_pixel_sum": 48960
+  },
+  "next": {
+   "files": [
+    "cutout_next_00.bin",
+    "cutout_next_01.bin",
+    "cutout_next_02.bin",
+    "cutout_next_03.bin"
+   ],
+   "frame": {
+    "color_enc": 1,
+    "color_h": 12,
+    "color_len": 768,
+    "color_sha256": "dbda64b488f3bc755b41c8403e272795e27c114a31443cb9753e5542bd6b5eba",
+    "color_w": 16,
+    "fg_permille": 321,
+    "flags": 3,
+    "mask_enc": 1,
+    "mask_h": 6,
+    "mask_len": 48,
+    "mask_sha256": "6dcbe977c279609f29f7f45d5bbdcd2c6403c84285f1931ecc272a05e2a93182",
+    "mask_w": 8,
+    "model_id": 1,
+    "people": 2,
+    "seq": 1043,
+    "session": 2712847316
+   },
+   "mask_decodes_to": [
+    8,
+    6
+   ],
+   "mask_pixel_sum": 5640
+  },
+  "other": {
+   "files": [
+    "cutout_other_00.bin",
+    "cutout_other_01.bin",
+    "cutout_other_02.bin",
+    "cutout_other_03.bin"
+   ],
+   "frame": {
+    "color_enc": 1,
+    "color_h": 12,
+    "color_len": 768,
+    "color_sha256": "30ca4c7ec149de0b15939266e8a53e3dfa7f7a7fd23ab7313665109298a9d5f4",
+    "color_w": 16,
+    "fg_permille": 321,
+    "flags": 3,
+    "mask_enc": 1,
+    "mask_h": 6,
+    "mask_len": 48,
+    "mask_sha256": "6dcbe977c279609f29f7f45d5bbdcd2c6403c84285f1931ecc272a05e2a93182",
+    "mask_w": 8,
+    "model_id": 1,
+    "people": 2,
+    "seq": 5,
+    "session": 195948557
+   },
+   "mask_decodes_to": [
+    8,
+    6
+   ],
+   "mask_pixel_sum": 5640
+  },
+  "rgba": {
+   "files": [
+    "cutout_rgba_00.bin",
+    "cutout_rgba_01.bin",
+    "cutout_rgba_02.bin",
+    "cutout_rgba_03.bin"
+   ],
+   "frame": {
+    "color_enc": 1,
+    "color_h": 12,
+    "color_len": 768,
+    "color_sha256": "a4372f05c0974c2549069d41e739cc2dff53fc3ab66927ddf683f8533d0634bc",
+    "color_w": 16,
+    "fg_permille": 321,
+    "flags": 3,
+    "mask_enc": 1,
+    "mask_h": 6,
+    "mask_len": 48,
+    "mask_sha256": "6dcbe977c279609f29f7f45d5bbdcd2c6403c84285f1931ecc272a05e2a93182",
+    "mask_w": 8,
+    "model_id": 1,
+    "people": 2,
+    "seq": 1042,
+    "session": 2712847316
+   },
+   "mask_decodes_to": [
+    8,
+    6
+   ],
+   "mask_pixel_sum": 5640
+  }
+ },
+ "files": {
+  "bad_count.json": {
+   "accepted": false,
+   "reason": "count_mismatch",
+   "reason_is_advisory": true,
+   "stream": "hands"
+  },
+  "bad_kind.json": {
+   "accepted": false,
+   "reason": "wrong_kind",
+   "reason_is_advisory": true,
+   "stream": "hands"
+  },
+  "bad_landmarks.json": {
+   "accepted": false,
+   "reason": "bad_shape",
+   "reason_is_advisory": true,
+   "stream": "hands"
+  },
+  "bad_not_json.txt": {
+   "accepted": false,
+   "reason": "not_json",
+   "reason_is_advisory": true,
+   "stream": "hands"
+  },
+  "bad_side.json": {
+   "accepted": false,
+   "reason": "bad_shape",
+   "reason_is_advisory": true,
+   "stream": "hands"
+  },
+  "bad_truncated.json": {
+   "accepted": false,
+   "reason": "truncated",
+   "reason_is_advisory": true,
+   "stream": "hands"
+  },
+  "bad_version.json": {
+   "accepted": false,
+   "reason": "unknown_version",
+   "reason_is_advisory": true,
+   "stream": "hands"
+  },
+  "cutout_bad_chunk_index.bin": {
+   "accepted": false,
+   "reason": "chunk",
+   "stream": "cutout"
+  },
+  "cutout_bad_dimension.bin": {
+   "accepted": false,
+   "reason": "dimensions",
+   "stream": "cutout"
+  },
+  "cutout_bad_encoding.bin": {
+   "accepted": false,
+   "reason": "encoding",
+   "stream": "cutout"
+  },
+  "cutout_bad_header_len.bin": {
+   "accepted": false,
+   "reason": "header",
+   "stream": "cutout"
+  },
+  "cutout_bad_inflate_00.bin": {
+   "accepted": true,
+   "chunk_count": 1,
+   "chunk_index": 0,
+   "chunk_len": 16,
+   "chunk_offset": 0,
+   "color_enc": 0,
+   "color_h": 0,
+   "color_len": 0,
+   "color_w": 0,
+   "fg_permille": 0,
+   "flags": 0,
+   "header_len": 72,
+   "mask_enc": 2,
+   "mask_h": 24,
+   "mask_len": 16,
+   "mask_w": 32,
+   "model_id": 1,
+   "payload_len": 16,
+   "people": 0,
+   "seq": 4000,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_bad_kind.bin": {
+   "accepted": false,
+   "reason": "kind",
+   "stream": "cutout"
+  },
+  "cutout_bad_magic.bin": {
+   "accepted": false,
+   "reason": "magic",
+   "stream": "cutout"
+  },
+  "cutout_bad_sizes.bin": {
+   "accepted": false,
+   "reason": "size",
+   "stream": "cutout"
+  },
+  "cutout_bad_version.bin": {
+   "accepted": false,
+   "reason": "version",
+   "stream": "cutout"
+  },
+  "cutout_jpeg_00.bin": {
+   "accepted": true,
+   "chunk_count": 3,
+   "chunk_index": 0,
+   "chunk_len": 256,
+   "chunk_offset": 0,
+   "color_enc": 2,
+   "color_h": 8,
+   "color_len": 662,
+   "color_w": 8,
+   "fg_permille": 500,
+   "flags": 0,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 8,
+   "mask_len": 64,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 726,
+   "people": 1,
+   "seq": 3000,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_jpeg_01.bin": {
+   "accepted": true,
+   "chunk_count": 3,
+   "chunk_index": 1,
+   "chunk_len": 256,
+   "chunk_offset": 256,
+   "color_enc": 2,
+   "color_h": 8,
+   "color_len": 662,
+   "color_w": 8,
+   "fg_permille": 500,
+   "flags": 0,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 8,
+   "mask_len": 64,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 726,
+   "people": 1,
+   "seq": 3000,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_jpeg_02.bin": {
+   "accepted": true,
+   "chunk_count": 3,
+   "chunk_index": 2,
+   "chunk_len": 214,
+   "chunk_offset": 512,
+   "color_enc": 2,
+   "color_h": 8,
+   "color_len": 662,
+   "color_w": 8,
+   "fg_permille": 500,
+   "flags": 0,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 8,
+   "mask_len": 64,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 726,
+   "people": 1,
+   "seq": 3000,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_maskonly_00.bin": {
+   "accepted": true,
+   "chunk_count": 1,
+   "chunk_index": 0,
+   "chunk_len": 26,
+   "chunk_offset": 0,
+   "color_enc": 0,
+   "color_h": 0,
+   "color_len": 0,
+   "color_w": 0,
+   "fg_permille": 250,
+   "flags": 2,
+   "header_len": 72,
+   "mask_enc": 2,
+   "mask_h": 24,
+   "mask_len": 26,
+   "mask_w": 32,
+   "model_id": 2,
+   "payload_len": 26,
+   "people": 1,
+   "seq": 2000,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_next_00.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 0,
+   "chunk_len": 256,
+   "chunk_offset": 0,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1043,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_next_01.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 1,
+   "chunk_len": 256,
+   "chunk_offset": 256,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1043,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_next_02.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 2,
+   "chunk_len": 256,
+   "chunk_offset": 512,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1043,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_next_03.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 3,
+   "chunk_len": 48,
+   "chunk_offset": 768,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1043,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_other_00.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 0,
+   "chunk_len": 256,
+   "chunk_offset": 0,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 5,
+   "session": 195948557,
+   "stream": "cutout"
+  },
+  "cutout_other_01.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 1,
+   "chunk_len": 256,
+   "chunk_offset": 256,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 5,
+   "session": 195948557,
+   "stream": "cutout"
+  },
+  "cutout_other_02.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 2,
+   "chunk_len": 256,
+   "chunk_offset": 512,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 5,
+   "session": 195948557,
+   "stream": "cutout"
+  },
+  "cutout_other_03.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 3,
+   "chunk_len": 48,
+   "chunk_offset": 768,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 5,
+   "session": 195948557,
+   "stream": "cutout"
+  },
+  "cutout_rgba_00.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 0,
+   "chunk_len": 256,
+   "chunk_offset": 0,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1042,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_rgba_01.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 1,
+   "chunk_len": 256,
+   "chunk_offset": 256,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1042,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_rgba_02.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 2,
+   "chunk_len": 256,
+   "chunk_offset": 512,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1042,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_rgba_03.bin": {
+   "accepted": true,
+   "chunk_count": 4,
+   "chunk_index": 3,
+   "chunk_len": 48,
+   "chunk_offset": 768,
+   "color_enc": 1,
+   "color_h": 12,
+   "color_len": 768,
+   "color_w": 16,
+   "fg_permille": 321,
+   "flags": 3,
+   "header_len": 72,
+   "mask_enc": 1,
+   "mask_h": 6,
+   "mask_len": 48,
+   "mask_w": 8,
+   "model_id": 1,
+   "payload_len": 816,
+   "people": 2,
+   "seq": 1042,
+   "session": 2712847316,
+   "stream": "cutout"
+  },
+  "cutout_truncated.bin": {
+   "accepted": false,
+   "reason": "short",
+   "stream": "cutout"
+  },
+  "face_empty.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [],
+   "has_pos": [],
+   "ids": [],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [],
+   "lm_count": [],
+   "mir": 0,
+   "n": 0,
+   "pose": [],
+   "src": "camera",
+   "states": [],
+   "stream": "face",
+   "why": [],
+   "yaw": []
+  },
+  "face_exponent.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    true
+   ],
+   "has_pos": [
+    true
+   ],
+   "ids": [
+    1
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [
+    0.7
+   ],
+   "lm_count": [
+    478
+   ],
+   "mir": 0,
+   "n": 1,
+   "pose": [
+    1
+   ],
+   "src": "camera",
+   "states": [
+    0
+   ],
+   "stream": "face",
+   "why": [
+    ""
+   ],
+   "yaw": [
+    -0.0
+   ]
+  },
+  "face_full.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    true
+   ],
+   "has_pos": [
+    true
+   ],
+   "ids": [
+    1
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [
+    0.7
+   ],
+   "lm_count": [
+    478
+   ],
+   "mir": 0,
+   "n": 1,
+   "pose": [
+    1
+   ],
+   "src": "camera",
+   "states": [
+    0
+   ],
+   "stream": "face",
+   "why": [
+    ""
+   ],
+   "yaw": [
+    30.94
+   ]
+  },
+  "face_mesh_only.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    true
+   ],
+   "has_pos": [
+    true
+   ],
+   "ids": [
+    1
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [
+    0.7
+   ],
+   "lm_count": [
+    468
+   ],
+   "mir": 0,
+   "n": 1,
+   "pose": [
+    1
+   ],
+   "src": "camera",
+   "states": [
+    0
+   ],
+   "stream": "face",
+   "why": [
+    ""
+   ],
+   "yaw": [
+    -0.0
+   ]
+  },
+  "face_no_blendshapes.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    false
+   ],
+   "has_pos": [
+    true
+   ],
+   "ids": [
+    1
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [
+    null
+   ],
+   "lm_count": [
+    478
+   ],
+   "mir": 0,
+   "n": 1,
+   "pose": [
+    1
+   ],
+   "src": "camera",
+   "states": [
+    0
+   ],
+   "stream": "face",
+   "why": [
+    ""
+   ],
+   "yaw": [
+    -0.0
+   ]
+  },
+  "face_no_landmarks.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    true
+   ],
+   "has_pos": [
+    true
+   ],
+   "ids": [
+    1
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [
+    0.7
+   ],
+   "lm_count": [
+    0
+   ],
+   "mir": 0,
+   "n": 1,
+   "pose": [
+    1
+   ],
+   "src": "camera",
+   "states": [
+    0
+   ],
+   "stream": "face",
+   "why": [
+    ""
+   ],
+   "yaw": [
+    -18.56
+   ]
+  },
+  "face_refused.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    true
+   ],
+   "has_pos": [
+    false
+   ],
+   "ids": [
+    2
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [
+    0.7
+   ],
+   "lm_count": [
+    478
+   ],
+   "mir": 0,
+   "n": 1,
+   "pose": [
+    1
+   ],
+   "src": "camera",
+   "states": [
+    0
+   ],
+   "stream": "face",
+   "why": [
+    "range"
+   ],
+   "yaw": [
+    -0.0
+   ]
+  },
+  "face_two.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    true,
+    true
+   ],
+   "has_pos": [
+    true,
+    true
+   ],
+   "ids": [
+    1,
+    5
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "jaw_open": [
+    0.7,
+    0.2
+   ],
+   "lm_count": [
+    468,
+    468
+   ],
+   "mir": 0,
+   "n": 2,
+   "pose": [
+    1,
+    1
+   ],
+   "src": "camera",
+   "states": [
+    0,
+    1
+   ],
+   "stream": "face",
+   "why": [
+    "",
+    ""
+   ],
+   "yaw": [
+    10.0,
+    -10.0
+   ]
+  },
+  "hands_empty.json": {
+   "accepted": true,
+   "gestures": [],
+   "has_pos": [],
+   "ids": [],
+   "img": [
+    1280,
+    720
+   ],
+   "lm_count": [],
+   "mir": 0,
+   "n": 0,
+   "pinch": [],
+   "sides": [],
+   "src": "camera",
+   "states": [],
+   "stream": "hands",
+   "why": []
+  },
+  "hands_four_gestures.json": {
+   "accepted": true,
+   "gestures": [
+    "ROCK",
+    "VICTORY",
+    "THUMBS_UP",
+    "OK"
+   ],
+   "has_pos": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "ids": [
+    11,
+    12,
+    13,
+    14
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "lm_count": [
+    21,
+    21,
+    21,
+    21
+   ],
+   "mir": 0,
+   "n": 4,
+   "pinch": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "sides": [
+    "R",
+    "L",
+    "R",
+    "L"
+   ],
+   "src": "camera",
+   "states": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "stream": "hands",
+   "why": [
+    "",
+    "",
+    "",
+    ""
+   ]
+  },
+  "hands_held_refused.json": {
+   "accepted": true,
+   "gestures": [
+    "POINT",
+    "VICTORY"
+   ],
+   "has_pos": [
+    true,
+    false
+   ],
+   "ids": [
+    7,
+    8
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "lm_count": [
+    21,
+    21
+   ],
+   "mir": 0,
+   "n": 2,
+   "pinch": [
+    0.0,
+    0.0
+   ],
+   "sides": [
+    "L",
+    "R"
+   ],
+   "src": "camera",
+   "states": [
+    1,
+    0
+   ],
+   "stream": "hands",
+   "why": [
+    "",
+    "residual"
+   ]
+  },
+  "hands_pretty_reordered_extra.json": {
+   "accepted": true,
+   "gestures": [
+    "OPEN",
+    "FIST"
+   ],
+   "has_pos": [
+    true,
+    true
+   ],
+   "ids": [
+    3,
+    4
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "lm_count": [
+    21,
+    21
+   ],
+   "mir": 0,
+   "n": 2,
+   "pinch": [
+    0.0,
+    0.0
+   ],
+   "sides": [
+    "R",
+    "L"
+   ],
+   "src": "camera",
+   "states": [
+    0,
+    0
+   ],
+   "stream": "hands",
+   "why": [
+    "",
+    ""
+   ]
+  },
+  "hands_two.json": {
+   "accepted": true,
+   "gestures": [
+    "OPEN",
+    "FIST"
+   ],
+   "has_pos": [
+    true,
+    true
+   ],
+   "ids": [
+    3,
+    4
+   ],
+   "img": [
+    1280,
+    720
+   ],
+   "lm_count": [
+    21,
+    21
+   ],
+   "mir": 0,
+   "n": 2,
+   "pinch": [
+    0.0,
+    0.0
+   ],
+   "sides": [
+    "R",
+    "L"
+   ],
+   "src": "camera",
+   "states": [
+    0,
+    0
+   ],
+   "stream": "hands",
+   "why": [
+    "",
+    ""
+   ]
+  },
+  "real_face.json": {
+   "accepted": true,
+   "bsv": 1,
+   "has_bs": [
+    true
+   ],
+   "has_pos": [
+    true
+   ],
+   "ids": [
+    1
+   ],
+   "img": [
+    500,
+    500
+   ],
+   "jaw_open": [
+    0.038
+   ],
+   "lm_count": [
+    478
+   ],
+   "mir": 0,
+   "n": 1,
+   "pose": [
+    1
+   ],
+   "src": "file",
+   "states": [
+    0
+   ],
+   "stream": "face",
+   "why": [
+    ""
+   ],
+   "yaw": [
+    -0.43
+   ]
+  },
+  "real_hands.json": {
+   "accepted": true,
+   "gestures": [
+    "OPEN",
+    "NONE"
+   ],
+   "has_pos": [
+    true,
+    true
+   ],
+   "ids": [
+    1,
+    3
+   ],
+   "img": [
+    1008,
+    980
+   ],
+   "lm_count": [
+    21,
+    21
+   ],
+   "mir": 0,
+   "n": 2,
+   "pinch": [
+    0.0,
+    0.879
+   ],
+   "sides": [
+    "L",
+    "L"
+   ],
+   "src": "file",
+   "states": [
+    0,
+    1
+   ],
+   "stream": "hands",
+   "why": [
+    "",
+    ""
+   ]
+  }
+ },
+ "wire_spec_version": "1.0"
+}

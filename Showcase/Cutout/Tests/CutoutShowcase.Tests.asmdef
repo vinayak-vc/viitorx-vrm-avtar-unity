@@ -7,7 +7,8 @@
         "CutoutShowcase",
         "HandsFaceShowcase",
         "VirtualMirror.App",
-        "VirtualMirror.Vision"
+        "VirtualMirror.Vision",
+        "VirtualMirror.Cutout"
     ],
     "includePlatforms": [
         "Editor"

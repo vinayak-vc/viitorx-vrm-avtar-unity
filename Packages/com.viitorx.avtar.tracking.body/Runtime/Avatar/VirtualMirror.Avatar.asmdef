@@ -1,0 +1,26 @@
+{
+    "name": "VirtualMirror.Avatar",
+    "rootNamespace": "VirtualMirror.Avatar",
+    "references": [
+        "VirtualMirror.Core",
+        "VRM10",
+        "UniGLTF"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "VIITORX_UNIVRM"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.vrmc.vrm",
+            "expression": "0.0.1",
+            "define": "VIITORX_UNIVRM"
+        }
+    ],
+    "noEngineReferences": false
+}

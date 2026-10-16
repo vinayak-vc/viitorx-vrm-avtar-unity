@@ -1,0 +1,23 @@
+{
+  "name": "com.viitorx.avtar.tracking.core",
+  "version": "0.1.0",
+  "displayName": "Viitorx Tracking Core",
+  "description": "The data and contracts of Viitorx tracking: pose, hand, face and crowd frames, the provider interfaces, the humanizer and the avatar and camera interfaces. No Unity package dependencies. Part of the Viitorx tracking packages (com.viitorx.avtar.tracking).",
+  "unity": "6000.3",
+  "documentationUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/Packages/com.viitorx.avtar.tracking.core/README.md",
+  "changelogUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/Packages/com.viitorx.avtar.tracking.core/CHANGELOG.md",
+  "licensesUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/Packages/com.viitorx.avtar.tracking.core/LICENSE.md",
+  "keywords": [
+    "viitorx",
+    "tracking",
+    "pose",
+    "hands",
+    "face",
+    "vrm"
+  ],
+  "author": {
+    "name": "ViitorCloud",
+    "url": "https://viitor.cloud"
+  },
+  "dependencies": {}
+}

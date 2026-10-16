@@ -7,7 +7,9 @@
         "VirtualMirror.SkeletonShow",
         "VirtualMirror.Tracking",
         "VirtualMirror.Vision",
-        "HandsFaceShowcase"
+        "HandsFaceShowcase",
+        "VirtualMirror.Sidecar",
+        "VirtualMirror.Cutout"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

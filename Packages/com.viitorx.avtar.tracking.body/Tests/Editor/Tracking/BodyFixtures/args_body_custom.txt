@@ -1,0 +1,1 @@
+--video "http://192.168.1.5:3000/viewer?room=room-abc" --host 127.0.0.1 --port 9001 --loop 1 --hfov 75 --subject-height 1.8 --depth-range 2 5.5 --rotate 90 --no-partial-body --flip --camera-size 640 480 --assume-measured

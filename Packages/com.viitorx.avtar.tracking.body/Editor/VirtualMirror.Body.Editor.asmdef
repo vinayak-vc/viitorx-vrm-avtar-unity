@@ -1,0 +1,22 @@
+{
+    "name": "VirtualMirror.Body.Editor",
+    "rootNamespace": "VirtualMirror.Body.Editor",
+    "references": [],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.vrmc.vrm",
+            "expression": "0.0.1",
+            "define": "VIITORX_UNIVRM"
+        }
+    ],
+    "noEngineReferences": false
+}

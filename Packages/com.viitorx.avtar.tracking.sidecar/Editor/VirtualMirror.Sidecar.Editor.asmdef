@@ -1,0 +1,19 @@
+{
+    "name": "VirtualMirror.Sidecar.Editor",
+    "rootNamespace": "VirtualMirror.Tracking.OakD.Editor",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.Sidecar"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

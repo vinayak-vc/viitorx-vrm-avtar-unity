@@ -1,0 +1,36 @@
+{
+  "name": "com.viitorx.avtar.tracking.body",
+  "version": "0.1.0",
+  "displayName": "Viitorx Tracking Body",
+  "description": "Whole-body tracking from the Viitorx tracking engine in Unity: the body wire receiver (UDP 8899), the stream health and failsafe, the joint filter, the Kalidokit retargeting that drives a VRM avatar's normalized control rig (body, hands, wrist, face expressions), the VRM loader and an optional Animation Rigging IK driver. Needs UniVRM (not on Unity's registry: see the README).",
+  "unity": "6000.3",
+  "documentationUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/Packages/com.viitorx.avtar.tracking.body/README.md",
+  "changelogUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/Packages/com.viitorx.avtar.tracking.body/CHANGELOG.md",
+  "licensesUrl": "https://github.com/vinayak-vc/viitorx-vrm-avtar-unity/blob/main/Packages/com.viitorx.avtar.tracking.body/LICENSE.md",
+  "keywords": [
+    "viitorx",
+    "tracking",
+    "body",
+    "vrm",
+    "avatar",
+    "retargeting",
+    "motion-capture"
+  ],
+  "author": {
+    "name": "ViitorCloud",
+    "url": "https://viitor.cloud"
+  },
+  "dependencies": {
+    "com.viitorx.avtar.tracking.core": "0.1.0",
+    "com.viitorx.avtar.tracking.sidecar": "0.1.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.2",
+    "com.unity.animation.rigging": "1.4.1"
+  },
+  "samples": [
+    {
+      "displayName": "Body Avatar",
+      "description": "A BodyBootstrap, a camera and a plain humanoid VRM: the person in front of the camera drives the avatar, with a status box. Needs UniVRM, the tracking engine and its body model (see the package README).",
+      "path": "Samples~/BodyAvatar"
+    }
+  ]
+}

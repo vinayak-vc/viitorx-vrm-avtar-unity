@@ -1,0 +1,1 @@
+--video "http://192.168.1.5:3000/viewer?room=room-abc" --host 127.0.0.1 --port 9002 --provider cpu --hfov 75 --hfov-axis long --rotate 90 --no-flip --no-smooth --camera-size 640 480 --camera-fps 15 --no-loop --show --max-faces 2 --det-conf 0.3 --conf 0.7 --keep-conf 0.35 --face-scale 1.1 --no-blendshapes --landmarks mesh

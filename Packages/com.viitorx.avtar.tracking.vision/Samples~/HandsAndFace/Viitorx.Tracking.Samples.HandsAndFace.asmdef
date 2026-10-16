@@ -1,0 +1,17 @@
+{
+    "name": "Viitorx.Tracking.Samples.HandsAndFace",
+    "rootNamespace": "Viitorx.Tracking.Samples",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.Vision"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

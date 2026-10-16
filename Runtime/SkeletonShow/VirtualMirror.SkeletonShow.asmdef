@@ -5,7 +5,8 @@
         "VirtualMirror.Core",
         "VirtualMirror.Tracking",
         "Unity.RenderPipelines.Core.Runtime",
-        "Unity.RenderPipelines.Universal.Runtime"
+        "Unity.RenderPipelines.Universal.Runtime",
+        "VirtualMirror.Sidecar"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

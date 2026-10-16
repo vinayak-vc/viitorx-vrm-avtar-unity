@@ -1,0 +1,18 @@
+{
+    "name": "Viitorx.Tracking.Samples.Cutout",
+    "rootNamespace": "Viitorx.Tracking.Samples",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.Vision",
+        "VirtualMirror.Cutout"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

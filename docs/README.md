@@ -28,10 +28,10 @@ the debug skeleton is being built into the product. These are the current report
 |-----|--------|
 | [HE01_HUMAN_ECHO_2026-10-14.md](HE01_HUMAN_ECHO_2026-10-14.md) | **Human Echo**: the S-01 cutout turned into FluXY smoke, echo copies, a neon outline and GPU particles with a floor pile, three switchable looks (`Showcase/HumanEcho`, ADR-104). 99 + 608 + 11 tests pass; seen working on two video files; NOT tested on a person in front of a webcam |
 | [S01_CUTOUT_2026-10-13.md](S01_CUTOUT_2026-10-13.md) | **Real-time human cutout**: the person in a camera picture isolated by the sidecar (MediaPipe selfie network, a crop per person) and drawn by Unity from the picture + a soft mask on a new wire (UDP 8903): Original / Person / Silhouette, glow, backdrops (`Showcase/Cutout`, `CutoutStreamBinder`). Tested; seen working on two video files; NOT tested on a person in front of a webcam |
-| `python-sidecar~/docs/WIRE.md` | **The wire specification** (body, hands, face, cutout), canonical in the engine repo: fields, versioning rules, conformance checklist; `Tests/EditMode/VisionFixtures/conformance.json` is the expected result of every golden datagram |
+| `python-sidecar~/docs/WIRE.md` | **The wire specification** (body, hands, face, cutout), canonical in the engine repo: fields, versioning rules, conformance checklist; `Packages/com.viitorx.avtar.tracking.vision/Tests/Editor/VisionFixtures/conformance.json` is the expected result of every golden datagram |
 | [PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md](PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md) | **Plan only**: a compiled Viitorx Tracking Engine (exe folder + Inno Setup installer) and `com.viitorx.avtar.tracking.*` Unity packages; repo reuse analysis |
 | [H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md](H04_VISION_BOOTSTRAP_AND_SHOWCASE_2026-10-13.md) | **Hands and Face in AppBootstrap**: one settings section, a host that runs the senders, an F6 control panel, two sample scenes (`Showcase/HandsFace`). Tested headless; not run in Play mode |
-| [H03_UNITY_RECEIVERS_2026-10-13.md](H03_UNITY_RECEIVERS_2026-10-13.md) | **Unity receivers for the hands and face wires** (`Runtime/Vision`): allocation-free parser, providers, demo rig, 52-blendshape driver. Tested headless; not run in the Editor or on a live camera |
+| [H03_UNITY_RECEIVERS_2026-10-13.md](H03_UNITY_RECEIVERS_2026-10-13.md) | **Unity receivers for the hands and face wires** (now the package `Packages/com.viitorx.avtar.tracking.vision`): allocation-free parser, providers, demo rig, 52-blendshape driver. Tested headless; not run in the Editor or on a live camera |
 | [H02_FACE_ONLY_2026-10-13.md](H02_FACE_ONLY_2026-10-13.md) | **Face only, no body**: 52 blendshapes, head pose, position, a sibling sender and wire (port 8902). Not run on a live camera yet |
 | [H01_HANDS_ONLY_2026-10-13.md](H01_HANDS_ONLY_2026-10-13.md) | **Hands only, no body**: a separate sender and wire (port 8901), 3D position, finger poses, gestures. Not run on a live camera yet |
 | [F36_SIDECAR_BOOT_2026-09-17.md](F36_SIDECAR_BOOT_2026-09-17.md) | One boot scene that starts the multi-person sidecar and opens the launcher |
@@ -99,3 +99,20 @@ Measurements behind them: `evidence/f29/` and `evidence/f30/`.
 - **Draft** — direction agreed, details may change
 - **Active** — implement against this version
 - **Frozen** — change only via ADR
+
+## Where code moved (October 2026)
+
+The dated reports and the decision log keep the paths of the day they were written. Since the packages were extracted (plan section 15) the code is here:
+
+| Old path | Now |
+|---|---|
+| `Runtime/Core/**` | `Packages/com.viitorx.avtar.tracking.core/Runtime/` |
+| `Runtime/Vision/**` (without cutout) | `Packages/com.viitorx.avtar.tracking.vision/Runtime/` |
+| `Runtime/Bootstrap/VisionHost.cs`, `VisionControlPanel.cs` | `Packages/com.viitorx.avtar.tracking.vision/Runtime/Host/` |
+| cutout wire, receiver, textures, `CutoutView`, the two shaders | `Packages/com.viitorx.avtar.tracking.cutout/Runtime/` |
+| `Runtime/Tracking/OakD/Sidecar*.cs`, `VideoSourceSpec.cs`, `Modules.Utility.NativeProcess` | `Packages/com.viitorx.avtar.tracking.sidecar/Runtime/` |
+| `Runtime/Tracking/OakD/OakDUdpPoseProvider.cs`, `TrackingStreamHealth.cs`, `Runtime/Tracking/Filtering/`, `Runtime/Retargeting/`, `Runtime/Avatar/`, `Runtime/IK/` | `Packages/com.viitorx.avtar.tracking.body/Runtime/` |
+| `Runtime/Tracking/MediaPipe/`, `Runtime/Tracking/Sentis/` | `Runtime/Inference/` (application only, assembly `VirtualMirror.Tracking.Inference`) |
+| `Tests/EditMode/VisionFixtures/` and the tests of those folders | `Tests/Editor/` of the package that holds the code |
+
+Assembly names did not change (`VirtualMirror.Core`, `.Vision`, `.Tracking`, ...), and neither did any GUID, so a scene or prefab that referred to these scripts still does.

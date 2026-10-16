@@ -1,0 +1,22 @@
+{
+    "name": "VirtualMirror.Vision.PlayTests",
+    "rootNamespace": "VirtualMirror.Tests",
+    "references": [
+        "UnityEngine.TestRunner",
+        "VirtualMirror.Core",
+        "VirtualMirror.Vision"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,1 @@
+--video "camera:0" --host 127.0.0.1 --port 8901 --provider auto --hfov 60 --flip --smooth --camera-size 1280 720 --camera-fps 30 --loop --max-hands 2 --palm-conf 0.5 --conf 0.6 --keep-conf 0.4 --hand-scale 1 --sides auto

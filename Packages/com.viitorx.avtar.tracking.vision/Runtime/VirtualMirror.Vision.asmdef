@@ -1,0 +1,17 @@
+{
+    "name": "VirtualMirror.Vision",
+    "rootNamespace": "VirtualMirror.Vision",
+    "references": [
+        "VirtualMirror.Core",
+        "VirtualMirror.Sidecar"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

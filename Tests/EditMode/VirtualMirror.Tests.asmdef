@@ -11,7 +11,10 @@
         "VirtualMirror.Diagnostics",
         "VirtualMirror.SkeletonShow",
         "VirtualMirror.Experiences",
-        "VirtualMirror.Vision"
+        "VirtualMirror.Vision",
+        "VirtualMirror.Sidecar",
+        "VirtualMirror.Cutout",
+        "VirtualMirror.Vision.Tests"
     ],
     "includePlatforms": [
         "Editor"
