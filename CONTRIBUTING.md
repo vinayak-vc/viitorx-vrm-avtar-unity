@@ -8,7 +8,7 @@ a little orientation saves a lot of time.
 | | Repository | Contains |
 |---|---|---|
 | Unity | [`viitorx-vrm-avtar-unity`](https://github.com/vinayak-vc/viitorx-vrm-avtar-unity) | The UPM package: `Runtime/`, `Editor/`, `Tests/`, `Scenes/` |
-| Sidecar | [`viitorx-vrm-model-python`](https://github.com/vinayak-vc/viitorx-vrm-model-python) | Python tracking sidecar, a submodule at `python-sidecar~` |
+| Sidecar | [`viitorx-tracking-engine`](https://github.com/vinayak-vc/viitorx-tracking-engine) | Python tracking sidecar / engine, a submodule at `python-sidecar~` |
 
 The `~` suffix is deliberate: it stops Unity importing 80-odd `.py` files and generating a `.meta`
 for each. Do not rename it.

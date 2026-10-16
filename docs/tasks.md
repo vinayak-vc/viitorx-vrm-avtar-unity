@@ -37,8 +37,8 @@ Report: [`S01_CUTOUT_2026-10-13.md`](S01_CUTOUT_2026-10-13.md). Decision: **ADR-
 
 Plan: [`PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md`](PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md). **Nothing implemented.** Sidecar repo: `docs/tasks.md` P-01.
 
-- [x] Phase 0 (2026-10-16), local only: reuse of both repos confirmed (same account); annotated tag `pre-packaging` and branch `package-v1` created in BOTH repos (not pushed). `gh` was already logged in as `vinayak-vc`, so the pasted token is not needed; no token is in either repo (searched). **Still the user's to do: revoke the pasted token** (github.com/settings/tokens).
-- [ ] Phase 0 remaining: rename the Python repo on GitHub to `viitorx-tracking-engine` and push the tag and branch (outward-facing: wait for the user's go).
+- [x] Phase 0 (2026-10-16): reuse of both repos confirmed (same account); annotated tag `pre-packaging` and branch `package-v1` created in BOTH repos. Python repo renamed on GitHub to `viitorx-tracking-engine` by the user; local submodule remote and `.gitmodules` updated.
+- [ ] Phase 0 remaining: push `pre-packaging` tag and `package-v1` branch to origin (outward-facing: wait for user's go); user to revoke any old pasted tokens on github.com/settings/tokens.
 - [ ] Phase 1: Nuitka compile spike (go / no-go) for the hands and face senders.
 - [ ] Phases 2-7: wire spec, engine repo, compiled build + Inno Setup installer (admin, Program Files), Unity packages `com.viitorx.avtar.tracking.*`, dogfood, release.
 
