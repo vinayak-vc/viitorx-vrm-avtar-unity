@@ -4,8 +4,7 @@ Windows, Unity 6000.3. Three things are installed, in this order: the **packages
 **engine** (the program that reads the camera). The packages do nothing until the engine is there.
 
 > **Status of this guide.** Installing the packages from their git URLs (branch `package-v1` of this repository, 2026-10-17) was run in a fresh Unity 6000.3 project: all five packages resolved
-> from GitHub, and the edit-mode suites (565 tests), the play-mode suites (47, with the real engine) and the samples (5) passed from those git-installed packages. A `#v0.1.0` tag works the same way
-> but no tag exists yet, so that form is untested. Installing from a registry has not been run (none is published). The engine's `.exe` installer was built, never run.
+> from GitHub, and the edit-mode suites (565 tests), the play-mode suites (47, with the real engine) and the samples (5) passed from those git-installed packages. The tag `v0.1.0` was installed the same way (2026-10-17: commit `aa9084d`, same results). Installing from a registry has not been run (none is published). The engine's `.exe` installer was built, never run.
 
 ## 1. The packages
 

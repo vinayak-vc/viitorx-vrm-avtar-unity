@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.1 (2026-10-17)
+- Bump package version to 0.1.1.
+
+## 0.1.0 (2026-10-17)
 - `UnityDebugLogService` moved to the core package (namespace `VirtualMirror.Core`).
 - `VisionBootstrap` (settings, host, tick, F6 panel in one component), `VisionHostRegistry` (AppBootstrap registers its host too), `VisionHostClient` (a component that asks the host for streams and lets go of them), `UnityDebugLogService`. Sample: Hands and Face. The F6 key is compiled only with the legacy Input Manager.
 - `VisionHost` starts the compiled engine (`EnginePath`, `UsePythonProject`, `PythonProjectPath` in `VisionSettings`), ONE `run` process for several streams (`VisionSenderArguments.Run`), `EngineDescription` in the F6 panel. The single-stream command lines are byte-identical to before.

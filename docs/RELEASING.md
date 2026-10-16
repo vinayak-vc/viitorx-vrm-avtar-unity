@@ -28,7 +28,7 @@ It changes nothing. The tests that decide whether the *code* is releasable are t
 1. `python tools/release/bump_version.py bump 0.2.0` (only when the version changes: moves every `package.json` and every dependency between the six, and opens a `## 0.2.0 (unreleased)` section in every changelog). Fill the changelogs in.
 2. Run the Unity suites and the gate.
 3. `python tools/release/bump_version.py finalize 2026-10-17` replaces `(unreleased)` by the date in the current version's headings. Run `release_check.py --release`: it must be silent.
-4. Commit; tag `v0.2.0`; push (the person who owns the repository does this: nothing here pushes).
+4. Commit; tag `v0.2.0`; push (the person who owns the repository does this: nothing here pushes). Tag only after `release_check.py --release` is silent: `v0.1.0` was tagged with the changelogs still saying unreleased.
 5. In a **fresh** Unity project, install from the tag (see `docs/INSTALL.md`), import a sample, press Play. Run for the branch `package-v1` on 2026-10-17 (565 edit-mode, 47 play-mode, 5 samples, from the git-installed packages); not yet for a tag. `python tools/release/git_install_block.py <tag> --apply <manifest.json>` writes the manifest lines (its output was installed and tested the same way).
 
 ## Cutting the engine's release
@@ -37,7 +37,7 @@ It changes nothing. The tests that decide whether the *code* is releasable are t
 2. Build: `build/build_engine.py all --out <dir> --jobs 6 --base-url https://github.com/<owner>/<engine-repo>/releases/download/engine-v0.2.0` (the base URL is where the zip WILL be; it is written into the `.release.json`).
    Verify the real folder: `tests/verify_build.py <dir>/viitorx-tracking --clip <video>` (needs a GPU and the models).
 3. Tag `engine-v0.2.0` and push: `.github/workflows/engine-release.yml` builds on a clean runner, checks that the tag names the version, and attaches the zip, its `.sha256`, the `.release.json` and the installer to the release.
-   **That workflow has never run on GitHub.** The first run is expected to need adjustments. Until it works, attach the four files from a local build by hand.
+   **The workflow's first run (2026-10-17) failed in the tests step** (the clean runner has no `depthai`; fixed in `tests/test_engine.py`, the later steps have still never run). Before tagging, reproduce the runner's conditions locally: the depthai-free build environment with `VT_SKIP_REAL=1` (`buildenv\Scripts\python tests	est_build.py`, `tests	est_engine.py`), then the smoke commands of the workflow. Until the workflow passes, attach the four files from a local build by hand.
 4. The `.release.json` is what the Unity side trusts: publish it where people get it from, and tell them to keep a copy in their project (`docs/INSTALL.md`).
 5. The installer and the exe are **not code-signed**; SmartScreen shows "unknown publisher". Signing needs a certificate: a release decision.
 

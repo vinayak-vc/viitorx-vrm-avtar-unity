@@ -1,6 +1,6 @@
 {
   "name": "com.viitorx.avtar.tracking.cutout",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Viitorx Tracking Cutout",
   "description": "Draws the cutout stream (the person cut out of the camera picture) in Unity: CutoutView with its look, mirror and fit options, and two URP shaders (the person and a backdrop). Requires the Universal Render Pipeline.",
   "unity": "6000.3",
@@ -19,8 +19,8 @@
     "url": "https://viitor.cloud"
   },
   "dependencies": {
-    "com.viitorx.avtar.tracking.core": "0.1.0",
-    "com.viitorx.avtar.tracking.vision": "0.1.0",
+    "com.viitorx.avtar.tracking.core": "0.1.1",
+    "com.viitorx.avtar.tracking.vision": "0.1.1",
     "com.unity.render-pipelines.universal": "17.3.0"
   },
   "samples": [
