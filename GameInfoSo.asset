@@ -74,6 +74,8 @@ MonoBehaviour:
       scene: {fileID: 102900000, guid: ecc6ad4d270a4230a6125c381f5fdd1e, type: 3}
     - active: 1
       scene: {fileID: 102900000, guid: 25a49c5ec0304f98b2f7b71196782445, type: 3}
+    - active: 1
+      scene: {fileID: 102900000, guid: 102c7222ca7d05343965d6d82322cbc3, type: 3}
     photonID: 
     agoraID: 
     projectSettings:
@@ -122,16 +124,16 @@ MonoBehaviour:
       title: ViitorX VRM Avatar
       companyName: ViitorCloud
       bundleId: com.viitorx.avatar
-      version: 1.0.0
-      versionCode: 0
-      icon: {fileID: 0}
+      version: 1.0.1
+      versionCode: 1
+      icon: {fileID: 2800000, guid: d4f5ffc80364c404ea32df1e3534321b, type: 3}
       splashScreenLogo: {fileID: 0}
       splashScreenLogoBg: {fileID: 0}
       splashBgBlur: 1
-      portrait: 1
-      portraitUpsideDown: 1
-      landscapeLeft: 0
-      landscapeRight: 0
+      portrait: 0
+      portraitUpsideDown: 0
+      landscapeLeft: 1
+      landscapeRight: 1
       hostForSchemes: vxvrm
       urlSchemes: []
     packages:

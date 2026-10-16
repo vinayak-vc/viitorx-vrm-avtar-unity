@@ -437,7 +437,7 @@ MonoBehaviour:
   poseFlipY: 1
   poseFlipZ: 0
   cameraTiltDegrees: 0
-  useOakUdpTracking: 0
+  useOakUdpTracking: 1
   oakUdpPort: 8899
   autoStartSidecar: 1
   sidecarLockPort: 8897
@@ -455,26 +455,27 @@ MonoBehaviour:
   useVideoSource: 0
   useMediaPipeTracking: 0
   trackFromVideo: 1
-  videoSource: Assets/Games/video/
-  lanCameraPin: 
-  videoLoop: 1
   videoAutoOrient: 1
   videoPartialBody: 1
   videoRotateDegrees: 0
   videoFlipHorizontal: 0
-  videoCameraSize: {x: 1280, y: 720}
   videoAssumeMeasuredDepth: 0
   videoSubjectHeightMetres: 1.7
   videoHorizontalFovDegrees: 60
   videoClampDepth: 1
   videoDepthRangeMetres: {x: 1.6, y: 4}
   videoMaxPeople: 1
+  legacyVideoSource: Assets/Games/video/
+  legacyLanCameraPin: 
+  legacyVideoLoop: 1
+  legacyVideoCameraSize: {x: 1280, y: 720}
+  inputSettingsVersion: 1
   vision:
     autoStartSenders: 1
-    showPanelOnStart: 1
+    showPanelOnStart: 0
     panelKey: 287
-    source: Assets/Games/video/
-    lanCameraPin: 
+    source: http://localhost:7777/viewer?room=123
+    lanCameraPin: 123456
     flip: 1
     rotateDegrees: 0
     horizontalFovDegrees: 60
