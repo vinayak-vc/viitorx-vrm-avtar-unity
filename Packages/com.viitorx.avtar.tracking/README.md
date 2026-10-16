@@ -17,9 +17,8 @@ Windows only. Unity 6000.3.
 
 ## Installing
 
-1. **The packages.** From a registry that hosts the family, add `com.viitorx.avtar.tracking` and the rest follows. From git, add each package to `Packages/manifest.json` by its own URL
-   (`https://github.com/vinayak-vc/viitorx-vrm-avtar-unity.git?path=/Packages/com.viitorx.avtar.tracking.core#<tag>`, and the same for sidecar, vision, cutout and body); to my knowledge Unity does not follow a git URL written inside
-   a package's own dependencies, so this package then only pins the version, it does not install the others (not tested here). A `file:` reference to the folders works the same way.
+1. **The packages.** From a registry that hosts the family, add `com.viitorx.avtar.tracking` and the rest follows. **From git do not add this umbrella: Unity then stops with "Package [com.viitorx.avtar.tracking.core@0.1.0] cannot be found" (measured).** From git, add each package to `Packages/manifest.json` by its own URL
+   (`https://github.com/vinayak-vc/viitorx-vrm-avtar-unity.git?path=/Packages/com.viitorx.avtar.tracking.core#<tag>`, and the same for sidecar, vision, cutout and body). Unity does not follow a git URL written inside a package's own dependencies, so the umbrella cannot install the others from git. A `file:` reference to the folders works the same way.
 2. **UniVRM** (only for the body package; the others do not need it). It is not on Unity's registry, so add the OpenUPM scoped registry and the package to the manifest:
 
    ```json

@@ -29,7 +29,7 @@ It changes nothing. The tests that decide whether the *code* is releasable are t
 2. Run the Unity suites and the gate.
 3. `python tools/release/bump_version.py finalize 2026-10-17` replaces `(unreleased)` by the date in the current version's headings. Run `release_check.py --release`: it must be silent.
 4. Commit; tag `v0.2.0`; push (the person who owns the repository does this: nothing here pushes).
-5. In a **fresh** Unity project, install from the tag (see `docs/INSTALL.md`), import a sample, press Play. This step has never been run: it is the first thing to do after the first push.
+5. In a **fresh** Unity project, install from the tag (see `docs/INSTALL.md`), import a sample, press Play. Run for the branch `package-v1` on 2026-10-17 (565 edit-mode, 47 play-mode, 5 samples, from the git-installed packages); not yet for a tag. `python tools/release/git_install_block.py <tag> --apply <manifest.json>` writes the manifest lines (its output was installed and tested the same way).
 
 ## Cutting the engine's release
 
@@ -45,7 +45,7 @@ It changes nothing. The tests that decide whether the *code* is releasable are t
 
 | Option | What it takes | What the user types | Honest status |
 |---|---|---|---|
-| **A. git URLs** | push + tag; nothing else | one `Packages/manifest.json` line **per package**, with `?path=/Packages/<name>#v0.2.0` | works with the layout as it is; not tested (nothing is pushed). The umbrella then only pins versions |
+| **A. git URLs** | push + tag; nothing else | one `Packages/manifest.json` line **per package**, with `?path=/Packages/<name>#v0.2.0` | **tested 2026-10-17** from branch `package-v1`: the five packages resolve from GitHub and every suite passes from them. The umbrella cannot be installed this way (measured: its siblings are "cannot be found") |
 | **B. OpenUPM** | a public repository, a pull request to openupm.com with the package names | add the OpenUPM scoped registry once, then one name | needs the repository to be public; the packages' layout (one repo, `Packages/<name>`) is the kind OpenUPM builds from |
 | **C. your own registry** (Verdaccio, a Unity-compatible registry) | host it, publish six tarballs (`npm pack` of each package folder) | add the registry once, then one name (`com.viitorx.avtar.tracking`) | what makes the umbrella do its job; the hosting and its access are yours to run |
 

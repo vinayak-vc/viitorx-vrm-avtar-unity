@@ -3,9 +3,9 @@
 Windows, Unity 6000.3. Three things are installed, in this order: the **packages** (C#), **UniVRM** (only if you want the body to drive a VRM avatar), and the
 **engine** (the program that reads the camera). The packages do nothing until the engine is there.
 
-> **Status of this guide.** Every step below that touches Unity and the engine was run in a fresh project with the packages as `file:` references. Installing from a
-> git URL or a registry has **not** been run (nothing is pushed or published yet): the URLs are the ones Unity documents, with this repository's address, and are untested.
-> The installer of the engine was built, never run.
+> **Status of this guide.** Installing the packages from their git URLs (branch `package-v1` of this repository, 2026-10-17) was run in a fresh Unity 6000.3 project: all five packages resolved
+> from GitHub, and the edit-mode suites (565 tests), the play-mode suites (47, with the real engine) and the samples (5) passed from those git-installed packages. A `#v0.1.0` tag works the same way
+> but no tag exists yet, so that form is untested. Installing from a registry has not been run (none is published). The engine's `.exe` installer was built, never run.
 
 ## 1. The packages
 
@@ -21,7 +21,7 @@ Which ones do you need?
 
 ### From git (works without any registry)
 
-Open `Packages/manifest.json` of your project and add every package you need **by its own URL**, with the tag of the release:
+Open `Packages/manifest.json` of your project and add every package you need **by its own URL**, with the tag of the release (until a tag exists, the branch name works the same way: `#package-v1`):
 
 ```json
 "dependencies": {
@@ -31,8 +31,8 @@ Open `Packages/manifest.json` of your project and add every package you need **b
 }
 ```
 
-Add `cutout` and `body` the same way when you want them. List the dependencies yourself: to my knowledge Unity does not follow a git URL written inside a package's own
-`dependencies`, so installing `...vision` alone does not install `...core` and `...sidecar` for you, and the umbrella from git only pins the versions (this is not tested).
+Add `cutout` and `body` the same way when you want them. `python tools/release/git_install_block.py v0.1.0 vision cutout` prints these lines for the packages you name, with the packages they need added (or `--apply <manifest.json>` merges them into your manifest); it never includes the umbrella. List the dependencies yourself: Unity does not follow a git URL written inside a package's own `dependencies`, so installing `...vision` alone does not install `...core` and `...sidecar` for you.
+**Measured:** a manifest with only the umbrella (`com.viitorx.avtar.tracking`) by git URL fails to resolve: *Package [com.viitorx.avtar.tracking.core@0.1.0] cannot be found*, and the same for each sibling. From git, do not install the umbrella; name the packages.
 
 ### From a registry
 
