@@ -39,8 +39,10 @@ Plan: [`PLAN_TRACKING_ENGINE_AND_PACKAGES_2026-10-13.md`](PLAN_TRACKING_ENGINE_A
 
 - [x] Phase 0 (2026-10-16): reuse of both repos confirmed (same account); annotated tag `pre-packaging` and branch `package-v1` created in BOTH repos. Python repo renamed on GitHub to `viitorx-tracking-engine` by the user; local submodule remote and `.gitmodules` updated.
 - [ ] Phase 0 remaining: push `pre-packaging` tag and `package-v1` branch to origin (outward-facing: wait for user's go); user to revoke any old pasted tokens on github.com/settings/tokens.
-- [ ] Phase 1: Nuitka compile spike (go / no-go) for the hands and face senders.
-- [ ] Phases 2-7: wire spec, engine repo, compiled build + Inno Setup installer (admin, Program Files), Unity packages `com.viitorx.avtar.tracking.*`, dogfood, release.
+- [x] Phase 1 (2026-10-16): **GO**. Nuitka standalone works: 0 `.py` shipped, 330 MB, starts in under a second, DirectML works frozen, no Python needed, outputs match the source version (plan section 10). Open from it: real WebRTC session, clean-machine test, face cost on a real face, size trimming.
+- [x] Phase 2 (2026-10-16): wire spec `python-sidecar~/docs/WIRE.md` v1.0 (four wires, versioning rules, conformance checklist), `conformance.json` for all 48 golden files, `tests/test_wire_spec.py` 64/64, 11/11 mutants caught (plan section 11).
+- [x] Phase 3 (2026-10-16): engine package `python-sidecar~/viitorx_tracking/` (CLI, `run --streams` one-camera mode, model registry + `fetch-models`, `manifest.json` check, `--parent-pid`, `VTSTATUS` lines, exit codes), `docs/ENGINE.md`, `tests/test_engine.py` 113/113, 40 of 41 mutants caught (plan section 12). Built as a layer over the unchanged modules, not a physical move.
+- [ ] Phases 4-7: compiled build + Inno Setup installer (admin, Program Files; also stage the senders' helper modules flat, pip layout), Unity packages `com.viitorx.avtar.tracking.*`, dogfood, release.
 
 ---
 
