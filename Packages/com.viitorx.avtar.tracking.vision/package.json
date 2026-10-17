@@ -1,6 +1,6 @@
 {
   "name": "com.viitorx.avtar.tracking.vision",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Viitorx Tracking Vision",
   "description": "Hands, face and cutout streams from the Viitorx tracking engine in Unity: the wire parsers and receivers (UDP 8901 / 8902 / 8903), the host that starts the engine and hands over messages on the main thread, the F6 control panel, hand and face views, an ARKit blendshape driver. No model, camera or native plugin runs in Unity.",
   "unity": "6000.3",
@@ -20,8 +20,8 @@
     "url": "https://viitor.cloud"
   },
   "dependencies": {
-    "com.viitorx.avtar.tracking.core": "0.1.2",
-    "com.viitorx.avtar.tracking.sidecar": "0.1.2"
+    "com.viitorx.avtar.tracking.core": "0.1.3",
+    "com.viitorx.avtar.tracking.sidecar": "0.1.3"
   },
   "samples": [
     {

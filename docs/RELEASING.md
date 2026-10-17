@@ -53,9 +53,9 @@ None is chosen. A is enough to start. UniVRM must be installed from OpenUPM by t
 
 ## Not done
 
-- **A release has never been made.** No tag, no GitHub release, no registry entry exists; no install from git or a registry has been run.
+- **Releases exist (0.1.0 to 0.1.2 as tags; the engine release `engine-v0.1.2` has the zip, the installer, the descriptor and the checksums), installed from git URLs; no registry entry exists** (OpenUPM and an own registry are not set up; the umbrella package alone cannot be installed from git).
 - **Engine and packages are matched by wire spec major only.** A change inside one major (a new optional field) is not checked; the engine's own version is shown in the status, not compared.
 - **The CI workflow for the packages**: none. The Unity suites need a licensed Unity and a GPU for some tests; there is no runner for them. The gate (`release_check.py`) needs only Python and could run on any runner.
 - **Code signing** of the exe and the installer.
-- **The installer has never been run** (it needs administrator rights), and the engine's `fetch-models` was never run in the frozen exe over the network.
+- **The installer has been run (by the owner, elevated; plan section 25) and its uninstall verified; `fetch-models` has run in the frozen exe over the network.** Not yet tested: the installer's models task, and an upgrade over an older version (planned for 0.1.3, plan section 26).
 - **Unreal**: no plugin. The wire is specified (`docs/WIRE.md`) and the engine is a separate program, so nothing in the engine blocks it.

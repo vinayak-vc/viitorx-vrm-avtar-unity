@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.3 (2026-10-17)
+- Bump package version to 0.1.3. No code changes.
+
 ## 0.1.2 (2026-10-17)
 - Bump package version to 0.1.2.
 

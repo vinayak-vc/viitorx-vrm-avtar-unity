@@ -4786,4 +4786,24 @@ cannot be read by two programs). Reusing the launcher kept the orphan-process pr
 
 **Do not.** Describe the SHA-256 as protection against a compromised release host (the descriptor and the zip may both be replaced: keep the descriptor in the project or get it from a trusted place); fetch the descriptor from the host that serves the zip and call it verified; start an engine before the compatibility answer; tag a release without `release_check.py --release`; assume the umbrella installs its siblings from git URLs.
 
-**Known.** No release exists: the installer has only met a loopback server, https was not exercised, the descriptor's `url` has never pointed at a real server; nothing is pushed, tagged or published; the engine workflow has never run on GitHub; engine and packages are matched by wire spec major only; no signing. Full record: plan section 19.
+**Known.** (Written 2026-10-16 when no release existed; updated 2026-10-17.) Release 0.1.2 now exists: the installer has met a real https release (32 s, plan section 25), the descriptor's `url` points at the real release, the engine workflow has run on GitHub (tag run passed every step); engine and packages are matched by wire spec major only; the releases are not signed (ADR-108). Full record: plan sections 19 and 25.
+
+## ADR-108 - The engine and its installer stay unsigned for now, and the release checks use videos, not a live webcam
+
+**Decision.** (1) No code-signing certificate exists and none is planned for the 0.1.x releases: the installer `viitorx-tracking-setup-<version>.exe` and `viitorx-tracking.exe` are published unsigned (owner's decision, 2026-10-17); Windows SmartScreen shows "unknown publisher" and the engine's `build/README.md` says so (`docs/INSTALL.md` does not yet: a line for it is open). (2) The release checks do not include a live webcam run: videos stand in for the camera (`tests/verify_build.py` runs the compiled exe on a clip; a person in front of a webcam is not part of the checks until the owner asks for it).
+
+**Why.** (1) A certificate costs money and an identity check, and is a business decision; the SHA-256 of the descriptor and the zip protects against corruption, not against a swapped publisher (ADR-107). (2) A live person cannot be repeated, so a webcam run is no evidence another run can reproduce; a clip is, so two runs can be compared.
+
+**Do not.** Call the installer or the exe "trusted" or "verified publisher"; describe a video run as a webcam run; treat the absence of a webcam run as a defect of a release; claim that face tracking on a real face works: none of the clips in `Assets/Games/video` has a face in frame (plan section 25), so that stays NOT TESTED until a clip with a face is supplied.
+
+**Known.** Users on managed machines may be blocked from running an unsigned installer; the Unity `EngineInstaller` unpacks the zip itself and starts the exe only after the SHA-256 check, which avoids the installer exe but not the unsigned engine exe.
+
+## ADR-109 - No engine monitor program: release 0.1.3 is a plain version release
+
+**Decision.** The separate monitor program specified in `python-sidecar~/docs/UI_SPEC_0.1.3.md` (running engines, bound receivers, models, logs, a guide) is **dropped** (owner, 2026-10-17). Release 0.1.3 changes no code: the engine's `__version__` and `pyproject.toml` and the six packages' versions move from 0.1.2 to 0.1.3, the changelogs say "No code changes".
+
+**Why.** The owner's condition was that nothing may cost the engine or the network performance, and the feature was not important: it was proposed only because the version was going to be bumped anyway. Measured in isolation (spec section 11.1): the monitor sends no network traffic; one status-file write per 2 s heartbeat costs about 0.8 ms (worst 8 ms), a log append 0.005 ms, the monitor's poll 0.08 ms. Those numbers are small, but the cost inside the engine's real frame loop under load was never measured (acceptance A1 would have been the kill test), and the feature would have added three engine changes, a second program to build, publish, support and explain the unsigned warning for, and eight unanswered design questions, for something the release does not need. A version bump has a purpose of its own: it gives the installer's upgrade path (0.1.2 to 0.1.3) something to be tested against.
+
+**Do not.** Build the engine-side pieces (run file, log file, `models --json`) "in case" the monitor comes back; describe the monitor's costs as measured inside the engine (they were not); claim the idea was rejected for performance (it was dropped because it is not needed; the measured costs were small); bring it back without the owner answering the questions of the spec's section 13, and without A1.
+
+**Known.** The spec file is kept with a DROPPED banner. The finding about `os.replace` (it fails on Windows while another process has the target open, 795 of 2000 attempts in the probe) applies to any future status file written that way.
