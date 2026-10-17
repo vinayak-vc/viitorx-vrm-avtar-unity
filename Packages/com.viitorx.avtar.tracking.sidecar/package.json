@@ -1,6 +1,6 @@
 {
   "name": "com.viitorx.avtar.tracking.sidecar",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Viitorx Tracking Sidecar",
   "description": "Finds, starts, watches and stops the Viitorx tracking engine (the out-of-process program that reads a camera and sends hands, face, cutout and body tracking over UDP): process launcher with a Windows job object, single-instance guard, status model, video source description.",
   "unity": "6000.3",
@@ -18,7 +18,7 @@
     "url": "https://viitor.cloud"
   },
   "dependencies": {
-    "com.viitorx.avtar.tracking.core": "0.1.1",
+    "com.viitorx.avtar.tracking.core": "0.1.2",
     "com.unity.nuget.newtonsoft-json": "3.2.2"
   }
 }

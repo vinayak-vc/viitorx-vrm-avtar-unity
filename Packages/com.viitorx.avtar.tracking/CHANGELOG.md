@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.2 (2026-10-17)
+- Bump package family to 0.1.2; pins core, sidecar, vision, cutout and body at 0.1.2.
+
 ## 0.1.1 (2026-10-17)
 - Bump package family to 0.1.1; pins core, sidecar, vision, cutout and body at 0.1.1.
 

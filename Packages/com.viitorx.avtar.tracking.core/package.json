@@ -1,6 +1,6 @@
 {
   "name": "com.viitorx.avtar.tracking.core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Viitorx Tracking Core",
   "description": "The data and contracts of Viitorx tracking: pose, hand, face and crowd frames, the provider interfaces, the humanizer and the avatar and camera interfaces. No Unity package dependencies. Part of the Viitorx tracking packages (com.viitorx.avtar.tracking).",
   "unity": "6000.3",
